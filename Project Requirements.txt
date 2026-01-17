@@ -1,0 +1,207 @@
+﻿Web-Based Facial Recognition Attendance System (Offline-First PWA)
+1. Project Overview
+
+The Web-Based Facial Recognition Attendance System is a Progressive Web Application (PWA) designed to automate student attendance through facial recognition technology. The system operates in both online and offline environments and implements role-based access control, ensuring that users can only access features relevant to their role.
+
+All professor accounts are created and managed by the administrator, and each professor is automatically linked to their assigned subjects, sections, schedules, and rooms, which are displayed upon login.
+
+2. System Objectives (Updated)
+
+In addition to previously defined objectives, the system specifically aims to:
+
+Centralize control of professor accounts under the administrator
+
+Automatically bind professors to their designated sections, subjects, and rooms
+
+Eliminate manual setup by professors, ensuring consistent schedule enforcement
+
+Improve attendance accuracy through strict section–room–schedule validation
+
+3. User Roles and Functional Responsibilities (Revised)
+3.1 Administrator (Registrar / Admin Portal)
+
+Primary Role: System control, academic structure management, and analytics.
+
+Functions:
+
+Create, update, activate, and deactivate professor accounts
+
+Create and manage:
+
+Sections
+
+Subjects
+
+Classrooms / Rooms
+
+Academic schedules (day, time, shift)
+
+Assign:
+
+Professors to specific subjects
+
+Subjects to sections
+
+Sections to rooms and schedules
+
+Automatically link assigned data to professor accounts
+
+Manage student records and section enrollment
+
+View system-wide analytics:
+
+Attendance per professor
+
+Attendance per section and room
+
+Student count per section
+
+Generate and export attendance reports
+
+Manage system configuration, data synchronization, backup, and restore
+
+Enforce data privacy, access control, and security policies
+
+3.2 Professor / Adviser Portal (Auto-Provisioned)
+
+Primary Role: Attendance session execution and monitoring.
+
+Login Behavior:
+
+Professor accounts are created by the administrator
+
+Upon login, the system automatically displays:
+
+Assigned subjects
+
+Assigned sections
+
+Assigned rooms
+
+Assigned schedules / shifts
+
+Functions:
+
+Select an assigned:
+
+Subject
+
+Section
+
+Room
+
+Schedule / Shift
+
+Open an attendance session (required before scanning)
+
+Activate facial recognition attendance capture
+
+View real-time attendance during sessions
+
+View attendance analytics for assigned sections:
+
+Present and absent students
+
+Attendance trends (daily, weekly, monthly)
+
+Individual student attendance records
+
+Generate and download attendance reports
+
+No permission to modify sections, schedules, or assignments
+
+3.3 Student Portal (View-Only Attendance)
+
+Primary Role: Attendance transparency.
+
+Functions:
+
+Register facial data for recognition
+
+Mark attendance using facial recognition during an active session
+
+View:
+
+Daily attendance status
+
+Attendance history per subject and section
+
+Track personal attendance performance
+
+No editing or administrative access
+
+4. Functional Flow (Professor Login Scenario)
+
+Administrator creates a professor account
+
+Administrator assigns:
+
+Subject(s)
+
+Section(s)
+
+Room(s)
+
+Schedule(s)
+
+Professor logs in
+
+System automatically loads assigned:
+
+Sections
+
+Rooms
+
+Subjects
+
+Schedules
+
+Professor selects a valid combination
+
+Professor opens an attendance session
+
+Students scan faces to record attendance
+
+5. Key System Features (Reinforced)
+
+Role-Based Access Control (RBAC)
+
+Admin-controlled account provisioning
+
+Automatic schedule and room validation
+
+Duplicate attendance prevention per session
+
+Offline-first attendance storage with IndexedDB
+
+Secure facial embedding storage
+
+Encrypted data transmission and authentication
+
+Attendance analytics per professor, section, and room
+
+6. Technical Architecture (Unchanged)
+
+PWA: React.js + TypeScript
+
+Facial Recognition: FaceNet (face-api.js / TensorFlow.js)
+
+Offline Storage: IndexedDB
+
+Backend: FastAPI or Node.js
+
+Database: PostgreSQL
+
+Authentication: JWT + Role-based access
+
+7. Success Indicators (Updated)
+
+Professors see assigned sections and rooms immediately upon login
+
+Attendance cannot be recorded outside assigned schedules
+
+Accurate attendance data linked to correct professor, section, and room
+
+Reduced configuration errors and administrative overhead
+
+High user acceptance and system reliability

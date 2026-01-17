@@ -1,0 +1,19 @@
+🎉 Test Users Created
+Admin Portal
+Email: admin@university.edu
+Password: Admin@123456
+Portal: http://localhost:3000/admin/login
+
+Professor/Faculty Portal
+Email: professor@university.edu (Professor John Doe)
+Password: Prof@123456
+Portal: http://localhost:3000/professor/login
+
+Email: adviser@university.edu (Adviser Jane Smith)
+Password: Adviser@123456
+Portal: http://localhost:3000/professor/login
+
+Student Portal
+Email: student@university.edu
+Password: Student@123456
+Portal: http://localhost:3000/student/login

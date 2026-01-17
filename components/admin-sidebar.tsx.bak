@@ -1,0 +1,36 @@
+import Link from "next/link";
+import { Users, LayoutDashboard, FileText, Settings, LogOut } from "lucide-react";
+
+export function AdminSidebar() {
+  return (
+    <div className="w-64 bg-slate-900 text-slate-50 min-h-screen flex flex-col">
+      <div className="p-6">
+        <h2 className="text-xl font-bold">Admin Panel</h2>
+      </div>
+      <nav className="flex-1 px-4 space-y-2">
+        <Link href="/admin" className="flex items-center gap-3 px-4 py-3 rounded-md hover:bg-slate-800 transition-colors">
+          <LayoutDashboard className="w-5 h-5" />
+          <span>Dashboard</span>
+        </Link>
+        <Link href="/admin/students" className="flex items-center gap-3 px-4 py-3 rounded-md hover:bg-slate-800 transition-colors">
+          <Users className="w-5 h-5" />
+          <span>Students</span>
+        </Link>
+        <Link href="/admin/reports" className="flex items-center gap-3 px-4 py-3 rounded-md hover:bg-slate-800 transition-colors">
+          <FileText className="w-5 h-5" />
+          <span>Reports</span>
+        </Link>
+        <Link href="/admin/settings" className="flex items-center gap-3 px-4 py-3 rounded-md hover:bg-slate-800 transition-colors">
+          <Settings className="w-5 h-5" />
+          <span>Settings</span>
+        </Link>
+      </nav>
+      <div className="p-4 border-t border-slate-800">
+        <Link href="/" className="flex items-center gap-3 px-4 py-3 rounded-md hover:bg-slate-800 transition-colors text-red-400">
+          <LogOut className="w-5 h-5" />
+          <span>Logout</span>
+        </Link>
+      </div>
+    </div>
+  );
+}
