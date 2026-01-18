@@ -96,22 +96,55 @@ export default function StudentAttendancePage() {
         audio: false
       })
 
+      // Store stream reference BEFORE showing camera
       streamRef.current = stream
-      setShowCamera(true)
       setStatus('detecting')
       setErrorMessage('')
-
-      setTimeout(() => {
-        if (videoRef.current && streamRef.current) {
-          videoRef.current.srcObject = streamRef.current
-          startFaceDetection()
-        }
-      }, 100)
+      
+      // Use requestAnimationFrame to ensure video element is mounted before showing
+      requestAnimationFrame(() => {
+        setShowCamera(true)
+      })
     } catch (error: any) {
       console.error('Error accessing camera:', error)
       setErrorMessage(`Unable to access camera: ${error.message}. Please check permissions and try again.`)
     }
   }
+
+  // Handle stream attachment when camera is shown
+  useEffect(() => {
+    if (!showCamera || !streamRef.current || !videoRef.current) return
+
+    // Assign stream to video element
+    videoRef.current.srcObject = streamRef.current
+    
+    // Try to play the video
+    const playPromise = videoRef.current.play()
+    if (playPromise !== undefined) {
+      playPromise.catch(err => {
+        console.error('Autoplay failed, retrying...', err)
+        // Retry with a small delay
+        setTimeout(() => {
+          if (videoRef.current && streamRef.current) {
+            videoRef.current.play().catch(e => console.error('Retry failed:', e))
+          }
+        }, 100)
+      })
+    }
+
+    // Start face detection
+    startFaceDetection()
+
+    // Cleanup function
+    return () => {
+      if (detectionIntervalRef.current) {
+        clearInterval(detectionIntervalRef.current)
+      }
+      if (captureTimeoutRef.current) {
+        clearTimeout(captureTimeoutRef.current)
+      }
+    }
+  }, [showCamera])
 
   const stopCamera = () => {
     if (streamRef.current) {

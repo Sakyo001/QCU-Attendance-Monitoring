@@ -50,6 +50,8 @@ export default function AttendancePage() {
   const [showStudentRegModal, setShowStudentRegModal] = useState(false)
   const [showFaceRecognitionModal, setShowFaceRecognitionModal] = useState(false)
   const [attendanceRecords, setAttendanceRecords] = useState<any[]>([])
+  const [registeredStudents, setRegisteredStudents] = useState<any[]>([])
+  const [mergedAttendanceData, setMergedAttendanceData] = useState<any[]>([])
 
   useEffect(() => {
     if (!loading && (!user || (user.role !== 'professor' && user.role !== 'adviser'))) {
@@ -60,6 +62,7 @@ export default function AttendancePage() {
     if (!loading && user) {
       checkFaceRegistration()
       fetchAttendanceSession()
+      fetchRegisteredStudents()
     }
   }, [user, loading, router])
 
@@ -99,10 +102,13 @@ export default function AttendancePage() {
       const response = await fetch(`/api/professor/attendance/session?classSessionId=${scheduleId}`)
       const data = await response.json()
 
-      if (data.success) {
+      if (data.success && data.session) {
         setAttendanceSession(data.session)
         // Fetch attendance records for this session
         await fetchAttendanceRecords(data.session.id)
+      } else if (data.success) {
+        // Session doesn't exist yet
+        setAttendanceSession(null)
       }
     } catch (error) {
       console.error('Error fetching attendance session:', error)
@@ -111,21 +117,90 @@ export default function AttendancePage() {
     }
   }
 
-  const fetchAttendanceRecords = async (sessionId: string) => {
+  const fetchRegisteredStudents = async () => {
+    try {
+      const response = await fetch(`/api/professor/attendance/registered-students?sectionId=${sectionId}`)
+      const data = await response.json()
+      
+      if (data.success) {
+        setRegisteredStudents(data.students || [])
+      }
+    } catch (error) {
+      console.error('Error fetching registered students:', error)
+    }
+  }
+
+  const fetchAttendanceRecords = async (sessionId: string | undefined) => {
+    if (!sessionId) return
     try {
       const response = await fetch(`/api/professor/attendance/records?sessionId=${sessionId}`)
       const data = await response.json()
       
       if (data.success) {
-        setAttendanceRecords(data.records || [])
+        const records = data.records || []
+        setAttendanceRecords(records)
+        // Merge registered students with attendance records
+        mergeAttendanceData(records)
       }
     } catch (error) {
       console.error('Error fetching attendance records:', error)
     }
   }
 
+  const mergeAttendanceData = (records: any[]) => {
+    console.log('📊 Merging attendance data:', {
+      registeredStudents: registeredStudents.length,
+      attendanceRecords: records.length,
+      sampleRecord: records[0]
+    })
+
+    // Create a map of attended students for quick lookup using student_registration_id
+    const attendedStudentsMap = new Map()
+    records.forEach(record => {
+      console.log('📝 Adding to map:', {
+        studentRegistrationId: record.student_registration_id,
+        status: record.status,
+        checkedInAt: record.checked_in_at
+      })
+      attendedStudentsMap.set(record.student_registration_id, record)
+    })
+
+    // Merge: all registered students + mark attendance status
+    const merged = registeredStudents.map(student => {
+      const attendance = attendedStudentsMap.get(student.id)
+      console.log('🔍 Matching student:', {
+        studentId: student.id,
+        studentName: `${student.first_name} ${student.last_name}`,
+        found: !!attendance,
+        status: attendance?.status || 'absent'
+      })
+      return {
+        ...student,
+        checked_in_at: attendance?.checked_in_at || null,
+        status: attendance?.status || 'absent'
+      }
+    })
+
+    // Sort by status (present/late first, then absent)
+    const sorted = merged.sort((a, b) => {
+      const statusOrder = { present: 0, late: 1, absent: 2 }
+      return (statusOrder[a.status as keyof typeof statusOrder] || 999) - (statusOrder[b.status as keyof typeof statusOrder] || 999)
+    })
+
+    console.log('✅ Merged data:', sorted)
+    setMergedAttendanceData(sorted)
+  }
+
+  // Update merged data when either attendance records or registered students change
+  useEffect(() => {
+    if (registeredStudents.length > 0 || attendanceRecords.length > 0) {
+      mergeAttendanceData(attendanceRecords)
+    }
+  }, [attendanceRecords, registeredStudents])
+
   const handleOpenShift = async () => {
     try {
+      console.log('Opening shift with scheduleId:', scheduleId, 'professorId:', user?.id)
       const response = await fetch('/api/professor/attendance/session/open', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -135,19 +210,32 @@ export default function AttendancePage() {
         })
       })
 
+      console.log('Shift open response status:', response.status)
+      
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('Shift open HTTP error:', response.status, errorText)
+        alert(`Failed to open shift: ${response.status} ${response.statusText}`)
+        return
+      }
+      
       const data = await response.json()
+      console.log('Shift open response data:', data)
 
-      if (data.success) {
+      if (data.success && data.session) {
         setAttendanceSession(data.session)
         await logShiftEvent(data.session.id, 'shift_open')
+        // Fetch initial attendance records
+        await fetchAttendanceRecords(data.session.id)
         // Show facial recognition for attendance
         setShowFaceRecognitionModal(true)
       } else {
-        alert(data.error || 'Failed to open shift')
+        console.error('Open shift error:', data)
+        alert(data.error || 'Failed to open shift - no session returned')
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error opening shift:', error)
-      alert('Failed to open shift')
+      alert('Failed to open shift: ' + error.message)
     }
   }
 
@@ -155,6 +243,7 @@ export default function AttendancePage() {
     if (!attendanceSession) return
 
     try {
+      console.log('🔓 Closing shift:', attendanceSession.id)
       const response = await fetch('/api/professor/attendance/session/close', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -163,17 +252,29 @@ export default function AttendancePage() {
         })
       })
 
-      const data = await response.json()
+      console.log('Close shift response status:', response.status)
 
-      if (data.success) {
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('Close shift HTTP error:', response.status, errorText)
+        alert(`Failed to close shift: ${response.status}`)
+        return
+      }
+
+      const data = await response.json()
+      console.log('Close shift response data:', data)
+
+      if (data.success && data.session) {
         setAttendanceSession(data.session)
         await logShiftEvent(attendanceSession.id, 'shift_close')
+        alert('Shift closed successfully!')
       } else {
+        console.error('Close shift error:', data)
         alert(data.error || 'Failed to close shift')
       }
-    } catch (error) {
-      console.error('Error closing shift:', error)
-      alert('Failed to close shift')
+    } catch (error: any) {
+      console.error('❌ Error closing shift:', error)
+      alert('Failed to close shift: ' + error.message)
     }
   }
 
@@ -298,9 +399,11 @@ export default function AttendancePage() {
                <Users className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">0</div>
+              <div className="text-2xl font-bold">
+                {mergedAttendanceData.filter(s => s.status !== 'absent').length} / {mergedAttendanceData.length}
+              </div>
                <p className="text-xs text-muted-foreground mt-1">
-                Students present
+                Students present or late
               </p>
             </CardContent>
           </Card>
@@ -309,7 +412,12 @@ export default function AttendancePage() {
         {/* Attendance List */}
         <div className="space-y-4">
           <div className="flex items-center justify-between px-1">
-             <h2 className="text-lg font-semibold tracking-tight">Attendance Log</h2>
+             <div>
+               <h2 className="text-lg font-semibold tracking-tight">Attendance Log</h2>
+               <p className="text-xs text-muted-foreground mt-1">
+                 {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+               </p>
+             </div>
              {isShiftActive && (
                <div className="flex items-center gap-2 text-xs text-emerald-600 font-medium animate-pulse">
                  <div className="w-2 h-2 rounded-full bg-emerald-600" />
@@ -322,40 +430,38 @@ export default function AttendancePage() {
              <Table>
                 <TableHeader>
                   <TableRow className="bg-muted/50 hover:bg-muted/50">
-                    <TableHead className="w-20">Photo</TableHead>
                     <TableHead>Name</TableHead>
                     <TableHead>Student ID</TableHead>
-                    <TableHead>Time In</TableHead>
+                    <TableHead>Check-in Time</TableHead>
                     <TableHead className="text-right">Status</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                   {attendanceRecords.length === 0 ? (
+                   {mergedAttendanceData.length === 0 ? (
                      <TableRow>
-                       <TableCell colSpan={5} className="h-32 text-center">
+                       <TableCell colSpan={4} className="h-32 text-center">
                           <div className="flex flex-col items-center justify-center text-muted-foreground">
                             <Users className="h-8 w-8 mb-2 opacity-20" />
-                            <p>No attendance records yet.</p>
+                            <p>No students registered.</p>
                           </div>
                        </TableCell>
                      </TableRow>
                    ) : (
-                     attendanceRecords.map((record: any) => (
-                       <TableRow key={record.id}>
-                         <TableCell>
-                           <Avatar className="h-10 w-10">
-                             <AvatarImage src={record.profile_picture_url} />
-                             <AvatarFallback>{record.first_name?.[0]}{record.last_name?.[0]}</AvatarFallback>
-                           </Avatar>
-                         </TableCell>
+                     mergedAttendanceData.map((record: any) => (
+                       <TableRow key={record.id} className={record.status === 'absent' ? 'bg-muted/30' : ''}>
                          <TableCell className="font-medium">{record.first_name} {record.last_name}</TableCell>
-                         <TableCell>{record.student_id}</TableCell>
+                         <TableCell>{record.student_number}</TableCell>
                          <TableCell>
-                           {record.time_in ? new Date(record.time_in).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--'}
+                           {record.checked_in_at ? new Date(record.checked_in_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--:--:--'}
                          </TableCell>
                          <TableCell className="text-right">
-                           <Badge className={record.status === 'present' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-gray-500 hover:bg-gray-600'}>
-                             {record.status}
+                           <Badge className={
+                             record.status === 'present' ? 'bg-emerald-600 hover:bg-emerald-700' :
+                             record.status === 'late' ? 'bg-yellow-600 hover:bg-yellow-700' :
+                             record.status === 'absent' ? 'bg-red-600 hover:bg-red-700' :
+                             'bg-gray-500 hover:bg-gray-600'
+                           }>
+                             {record.status ? record.status.charAt(0).toUpperCase() + record.status.slice(1) : 'None'}
                            </Badge>
                          </TableCell>
                        </TableRow>
@@ -370,17 +476,19 @@ export default function AttendancePage() {
       {/* Student Registration Modal */}
       {showStudentRegModal && (
         <StudentRegistrationModal
+          sectionId={sectionId}
           onClose={() => setShowStudentRegModal(false)}
         />
       )}
 
       {/* Attendance Recognition Modal */}
-      {showFaceRecognitionModal && (
+      {showFaceRecognitionModal && attendanceSession && (
         <AttendanceRecognitionModal
-          sessionId={attendanceSession?.id}
+          sessionId={attendanceSession.id}
+          sectionId={sectionId}
           isOpen={showFaceRecognitionModal}
           onClose={() => setShowFaceRecognitionModal(false)}
-          onStudentMarked={() => fetchAttendanceRecords(attendanceSession?.id)}
+          onStudentMarked={() => fetchAttendanceRecords(attendanceSession.id)}
         />
       )}
     </div>
@@ -390,6 +498,7 @@ export default function AttendancePage() {
 // --- Student Registration Modal ---
 
 interface StudentRegistrationModalProps {
+  sectionId: string
   onClose: () => void
 }
 
@@ -409,7 +518,7 @@ interface StudentLivenessProgress {
   up: boolean
 }
 
-function StudentRegistrationModal({ onClose }: StudentRegistrationModalProps) {
+function StudentRegistrationModal({ sectionId, onClose }: StudentRegistrationModalProps) {
   const [formData, setFormData] = useState({
     firstName: '',
     lastName: '',
@@ -464,15 +573,34 @@ function StudentRegistrationModal({ onClose }: StudentRegistrationModalProps) {
   }, [])
 
   useEffect(() => {
-    if (showCamera && streamRef.current && videoRef.current) {
-      videoRef.current.srcObject = streamRef.current
-      startFaceDetection()
+    if (!showCamera || !streamRef.current || !videoRef.current) return
+
+    // Assign stream to video element
+    videoRef.current.srcObject = streamRef.current
+    
+    // Try to play the video
+    const playPromise = videoRef.current.play()
+    if (playPromise !== undefined) {
+      playPromise.catch(err => {
+        console.error('Autoplay failed, retrying...', err)
+        // Retry with a small delay
+        setTimeout(() => {
+          if (videoRef.current && streamRef.current) {
+            videoRef.current.play().catch(e => console.error('Retry failed:', e))
+          }
+        }, 100)
+      })
     }
+
+    // Start face detection
+    startFaceDetection()
+
+    // Cleanup function
     return () => {
       if (captureTimeoutRef.current) clearTimeout(captureTimeoutRef.current)
       if (detectionIntervalRef.current) clearInterval(detectionIntervalRef.current)
     }
-  }, [showCamera, modelsLoaded])
+  }, [showCamera])
 
   useEffect(() => {
     currentStepRef.current = currentStep
@@ -611,8 +739,14 @@ function StudentRegistrationModal({ onClose }: StudentRegistrationModalProps) {
         video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: false
       })
+      
+      // Store stream reference BEFORE showing camera
       streamRef.current = stream
-      setShowCamera(true)
+      
+      // Small delay to ensure video element is mounted
+      requestAnimationFrame(() => {
+        setShowCamera(true)
+      })
     } catch (error: any) {
       alert(`Camera error: ${error.message}`)
     }
@@ -660,6 +794,17 @@ function StudentRegistrationModal({ onClose }: StudentRegistrationModalProps) {
 
     setIsSubmitting(true)
     try {
+      const descriptorArray = faceDescriptor ? Array.from(faceDescriptor) : null
+      console.log('Submitting student registration with descriptor:', {
+        firstName: formData.firstName,
+        lastName: formData.lastName,
+        studentId: formData.studentId,
+        email: formData.email,
+        hasFaceData: !!capturedImage,
+        descriptorLength: descriptorArray ? descriptorArray.length : 0,
+        descriptorSample: descriptorArray ? descriptorArray.slice(0, 5) : null
+      })
+
       const response = await fetch('/api/student/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -669,18 +814,21 @@ function StudentRegistrationModal({ onClose }: StudentRegistrationModalProps) {
           middleInitial: formData.middleInitial,
           studentId: formData.studentId,
           email: formData.email,
+          sectionId: sectionId,
           faceData: capturedImage,
-          faceDescriptor: faceDescriptor ? Array.from(faceDescriptor) : null
+          faceDescriptor: descriptorArray
         })
       })
 
       const data = await response.json()
+      console.log('Registration response:', data)
       if (data.success && data.credentials) {
         setCredentials(data.credentials)
       } else {
         alert(data.error || 'Failed to create student account')
       }
     } catch (error) {
+      console.error('Registration error:', error)
       alert('Failed to register student')
     } finally {
       setIsSubmitting(false)
@@ -930,12 +1078,13 @@ function StudentRegistrationModal({ onClose }: StudentRegistrationModalProps) {
 
 interface AttendanceRecognitionModalProps {
   sessionId: string | undefined
+  sectionId: string
   isOpen: boolean
   onClose: () => void
   onStudentMarked: () => void
 }
 
-function AttendanceRecognitionModal({ sessionId, isOpen, onClose, onStudentMarked }: AttendanceRecognitionModalProps) {
+function AttendanceRecognitionModal({ sessionId, sectionId, isOpen, onClose, onStudentMarked }: AttendanceRecognitionModalProps) {
   const [showCamera, setShowCamera] = useState(false)
   const [modelsLoaded, setModelsLoaded] = useState(false)
   const [faceDetected, setFaceDetected] = useState(false)
@@ -965,30 +1114,62 @@ function AttendanceRecognitionModal({ sessionId, isOpen, onClose, onStudentMarke
     loadModels()
   }, [])
 
-  useEffect(() => {
-    if (isOpen && showCamera && modelsLoaded) {
-      startCamera()
-    }
-    return () => {
-      stopCamera()
-    }
-  }, [isOpen, showCamera, modelsLoaded])
-
   const startCamera = async () => {
+    if (!modelsLoaded) {
+      setRecognitionError('Facial recognition models are still loading...')
+      return
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: false
       })
+      
+      // Store stream reference BEFORE showing camera
       streamRef.current = stream
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream
-        startFaceDetection()
-      }
+      setRecognitionError(null)
+      
+      // Use requestAnimationFrame to ensure video element is mounted
+      requestAnimationFrame(() => {
+        setShowCamera(true)
+      })
     } catch (error: any) {
       setRecognitionError(`Camera error: ${error.message}`)
     }
   }
+
+  // Handle stream attachment when camera is shown
+  useEffect(() => {
+    if (!showCamera || !streamRef.current || !videoRef.current) return
+
+    // Assign stream to video element
+    videoRef.current.srcObject = streamRef.current
+    
+    // Try to play the video
+    const playPromise = videoRef.current.play()
+    if (playPromise !== undefined) {
+      playPromise.catch(err => {
+        console.error('Autoplay failed, retrying...', err)
+        // Retry with a small delay
+        setTimeout(() => {
+          if (videoRef.current && streamRef.current) {
+            videoRef.current.play().catch(e => console.error('Retry failed:', e))
+          }
+        }, 100)
+      })
+    }
+
+    // Start face detection
+    startFaceDetection()
+
+    // Cleanup function
+    return () => {
+      if (detectionIntervalRef.current) {
+        clearInterval(detectionIntervalRef.current)
+      }
+    }
+  }, [showCamera])
 
   const stopCamera = () => {
     if (streamRef.current) {
@@ -1032,7 +1213,7 @@ function AttendanceRecognitionModal({ sessionId, isOpen, onClose, onStudentMarke
   }
 
   const matchAndMarkAttendance = async (descriptor: Float32Array) => {
-    if (isProcessing || recognizingStudent) return
+    if (isProcessing || recognizingStudent || !sessionId) return
     setIsProcessing(true)
 
     try {
@@ -1062,7 +1243,9 @@ function AttendanceRecognitionModal({ sessionId, isOpen, onClose, onStudentMarke
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           sessionId: sessionId,
-          studentId: student.id
+          sectionId: sectionId,
+          studentId: student.id,
+          faceMatchConfidence: matchData.confidence
         })
       })
 
@@ -1106,7 +1289,7 @@ function AttendanceRecognitionModal({ sessionId, isOpen, onClose, onStudentMarke
         <CardContent className="space-y-4">
           {!showCamera ? (
             <div className="text-center py-8">
-              <Button onClick={() => setShowCamera(true)} disabled={!modelsLoaded} className="gap-2">
+              <Button onClick={startCamera} disabled={!modelsLoaded} className="gap-2">
                 <Camera className="h-4 w-4" />
                 {modelsLoaded ? 'Start Camera' : 'Loading Models...'}
               </Button>
@@ -1118,6 +1301,7 @@ function AttendanceRecognitionModal({ sessionId, isOpen, onClose, onStudentMarke
                   ref={videoRef}
                   autoPlay
                   playsInline
+                  muted
                   className="absolute inset-0 w-full h-full object-cover scale-x-[-1]"
                 />
                 
@@ -1149,12 +1333,7 @@ function AttendanceRecognitionModal({ sessionId, isOpen, onClose, onStudentMarke
               </div>
 
               <div className="flex gap-2 justify-center">
-                <Button variant="outline" onClick={() => {
-                  setShowCamera(false)
-                  setRecognizingStudent(null)
-                  setRecognitionError(null)
-                  setIsProcessing(false)
-                }}>
+                <Button variant="outline" onClick={stopCamera}>
                   Stop Camera
                 </Button>
               </div>
@@ -1237,23 +1416,34 @@ function FaceRegistrationModal({ professorId, professorName, onComplete, onSkip 
   }, [])
 
   useEffect(() => {
-    if (showCamera && streamRef.current && videoRef.current) {
-      videoRef.current.srcObject = streamRef.current
-      startFaceDetection()
+    if (!showCamera || !streamRef.current || !videoRef.current) return
+
+    // Assign stream to video element
+    videoRef.current.srcObject = streamRef.current
+    
+    // Try to play the video
+    const playPromise = videoRef.current.play()
+    if (playPromise !== undefined) {
+      playPromise.catch(err => {
+        console.error('Autoplay failed, retrying...', err)
+        // Retry with a small delay
+        setTimeout(() => {
+          if (videoRef.current && streamRef.current) {
+            videoRef.current.play().catch(e => console.error('Retry failed:', e))
+          }
+        }, 100)
+      })
     }
+
+    // Start face detection
+    startFaceDetection()
+
+    // Cleanup function
     return () => {
       if (captureTimeoutRef.current) clearTimeout(captureTimeoutRef.current)
       if (detectionIntervalRef.current) clearInterval(detectionIntervalRef.current)
     }
-  }, [showCamera, modelsLoaded])
-
-  useEffect(() => {
-    currentStepRef.current = currentStep
-    holdCounterRef.current = 0
-    setHoldProgress(0)
-    setIsInValidPosition(false)
-    isInValidPositionRef.current = false
-  }, [currentStep])
+  }, [showCamera])
 
   const calculateHeadPose = (landmarks: faceapi.FaceLandmarks68) => {
     const points = landmarks.positions
@@ -1395,8 +1585,14 @@ function FaceRegistrationModal({ professorId, professorName, onComplete, onSkip 
         video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: false
       })
+      
+      // Store stream reference BEFORE showing camera
       streamRef.current = stream
-      setShowCamera(true)
+      
+      // Small delay to ensure video element is mounted
+      requestAnimationFrame(() => {
+        setShowCamera(true)
+      })
     } catch (error: any) {
       alert(`Camera error: ${error.message}`)
     }

@@ -7,6 +7,9 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey)
 
 // Euclidean distance calculation
 function euclideanDistance(a: number[], b: number[]): number {
+  if (!a || !b || a.length !== b.length) {
+    return Infinity
+  }
   let sum = 0
   for (let i = 0; i < a.length; i++) {
     const diff = a[i] - b[i]
@@ -15,33 +18,69 @@ function euclideanDistance(a: number[], b: number[]): number {
   return Math.sqrt(sum)
 }
 
+// Cosine similarity
+function cosineSimilarity(a: number[], b: number[]): number {
+  if (!a || !b || a.length !== b.length) {
+    return 0
+  }
+  let dotProduct = 0
+  let magnitudeA = 0
+  let magnitudeB = 0
+  
+  for (let i = 0; i < a.length; i++) {
+    dotProduct += a[i] * b[i]
+    magnitudeA += a[i] * a[i]
+    magnitudeB += b[i] * b[i]
+  }
+  
+  magnitudeA = Math.sqrt(magnitudeA)
+  magnitudeB = Math.sqrt(magnitudeB)
+  
+  if (magnitudeA === 0 || magnitudeB === 0) {
+    return 0
+  }
+  
+  return dotProduct / (magnitudeA * magnitudeB)
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { faceDescriptor, sessionId } = body
+    const { faceDescriptor } = body
 
-    if (!faceDescriptor || !sessionId) {
+    console.log('🔍 Face matching request received:', {
+      hasFaceDescriptor: !!faceDescriptor,
+      descriptorType: typeof faceDescriptor,
+      descriptorIsArray: Array.isArray(faceDescriptor),
+      descriptorLength: Array.isArray(faceDescriptor) ? faceDescriptor.length : 'N/A'
+    })
+
+    if (!faceDescriptor) {
       return NextResponse.json({ 
-        error: 'Face descriptor and session ID are required' 
+        error: 'Face descriptor is required',
+        matched: false
       }, { status: 400 })
     }
 
-    // Get all students with face descriptors
-    const { data: facialData, error: fetchError } = await supabase
-      .from('facial_recognition_data')
-      .select('user_id, face_encoding, is_active')
+    // Get all students with face descriptors from student_face_registrations
+    const { data: students, error: fetchError } = await supabase
+      .from('student_face_registrations')
+      .select('id, student_number, first_name, last_name, face_descriptor, is_active')
       .eq('is_active', true)
 
     if (fetchError) {
-      console.error('Error fetching face data:', fetchError)
+      console.error('❌ Error fetching student face data:', fetchError)
       return NextResponse.json({ 
-        error: 'Failed to fetch face data' 
+        error: 'Failed to fetch student face data',
+        matched: false
       }, { status: 400 })
     }
 
-    if (!facialData || facialData.length === 0) {
+    console.log('📊 Found', students?.length || 0, 'registered students with face descriptors')
+
+    if (!students || students.length === 0) {
       return NextResponse.json({ 
-        error: 'No registered faces found',
+        error: 'No registered student faces found',
         matched: false
       }, { status: 404 })
     }
@@ -51,64 +90,80 @@ export async function POST(request: NextRequest) {
       ? faceDescriptor 
       : Object.values(faceDescriptor as Record<string, number>)
 
-    // Find best matching face
+    console.log('📍 Input descriptor length:', inputDescriptor.length)
+
+    // Find best matching face using cosine similarity
     let bestMatch = null
-    let bestDistance = Infinity
-    const DISTANCE_THRESHOLD = 0.6
+    let bestSimilarity = -1
+    const SIMILARITY_THRESHOLD = 0.6 // Cosine similarity threshold
 
-    for (const faceRecord of facialData) {
+    for (const student of students) {
       try {
-        // Parse the stored face encoding
-        const storedDescriptor = JSON.parse(Buffer.from(faceRecord.face_encoding, 'base64').toString('utf-8'))
-        const distance = euclideanDistance(inputDescriptor, storedDescriptor)
+        // Handle face_descriptor as JSONB (could be object or array)
+        let storedDescriptor = student.face_descriptor
+        
+        if (!storedDescriptor) {
+          console.warn(`⚠️ Student ${student.student_number} has no face descriptor`)
+          continue
+        }
 
-        if (distance < bestDistance) {
-          bestDistance = distance
-          bestMatch = faceRecord
+        // Convert to array if it's an object
+        if (typeof storedDescriptor === 'object' && !Array.isArray(storedDescriptor)) {
+          storedDescriptor = Object.values(storedDescriptor as Record<string, number>)
+        }
+
+        const storedArray = Array.isArray(storedDescriptor) 
+          ? storedDescriptor 
+          : Object.values(storedDescriptor)
+
+        // Calculate similarity
+        const similarity = cosineSimilarity(inputDescriptor, storedArray)
+        
+        console.log(`👤 ${student.first_name} ${student.last_name}: similarity = ${similarity.toFixed(4)}`)
+
+        if (similarity > bestSimilarity) {
+          bestSimilarity = similarity
+          bestMatch = student
         }
       } catch (e) {
-        console.error('Error parsing face encoding:', e)
+        console.error(`⚠️ Error processing descriptor for student ${student.student_number}:`, e)
         continue
       }
     }
 
     // Check if match is good enough
-    if (bestMatch && bestDistance < DISTANCE_THRESHOLD) {
-      // Get student info
-      const { data: student, error: studentError } = await supabase
-        .from('users')
-        .select('id, first_name, last_name, student_id')
-        .eq('id', bestMatch.user_id)
-        .single()
-
-      if (studentError || !student) {
-        return NextResponse.json({ 
-          error: 'Student not found' 
-        }, { status: 404 })
-      }
-
+    if (bestMatch && bestSimilarity >= SIMILARITY_THRESHOLD) {
+      console.log(`✅ Match found: ${bestMatch.first_name} ${bestMatch.last_name} (similarity: ${bestSimilarity.toFixed(4)})`)
+      
       return NextResponse.json({
         success: true,
         matched: true,
         student: {
-          id: student.id,
-          firstName: student.first_name,
-          lastName: student.last_name,
-          studentId: student.student_id
+          id: bestMatch.id,
+          firstName: bestMatch.first_name,
+          lastName: bestMatch.last_name,
+          studentNumber: bestMatch.student_number
         },
-        confidence: 1 - (bestDistance / DISTANCE_THRESHOLD)
+        confidence: bestSimilarity
       })
     }
 
+    console.log(`❌ No match found. Best similarity: ${bestSimilarity.toFixed(4)}, threshold: ${SIMILARITY_THRESHOLD}`)
+    
     return NextResponse.json({
-      success: false,
+      success: true,
       matched: false,
       error: 'Face not recognized',
-      distance: bestDistance
-    }, { status: 404 })
-
+      debug: {
+        bestSimilarity: bestSimilarity.toFixed(4),
+        threshold: SIMILARITY_THRESHOLD
+      }
+    })
   } catch (error) {
-    console.error('Face match error:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    console.error('❌ Face matching error:', error)
+    return NextResponse.json({ 
+      error: 'Internal server error',
+      matched: false
+    }, { status: 500 })
   }
 }

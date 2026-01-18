@@ -8,7 +8,9 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey)
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { sessionId, studentId, status = 'present' } = body
+    const { sessionId, sectionId, studentId, faceMatchConfidence } = body
+
+    console.log('📝 Mark attendance request:', { sessionId, sectionId, studentId, faceMatchConfidence })
 
     if (!sessionId || !studentId) {
       return NextResponse.json({ 
@@ -16,59 +18,99 @@ export async function POST(request: NextRequest) {
       }, { status: 400 })
     }
 
-    // Check if attendance record already exists
-    const { data: existing } = await supabase
-      .from('attendance_records')
-      .select('id')
-      .eq('session_id', sessionId)
-      .eq('user_id', studentId)
+    // Get student details to find student_number
+    const { data: student, error: studentError } = await supabase
+      .from('student_face_registrations')
+      .select('id, student_number')
+      .eq('id', studentId)
       .single()
 
-    if (existing) {
-      // Update existing record
-      const { error: updateError } = await supabase
-        .from('attendance_records')
-        .update({
-          status,
-          time_in: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', existing.id)
+    if (studentError || !student) {
+      console.error('❌ Student not found:', studentError)
+      return NextResponse.json({ 
+        error: 'Student not found' 
+      }, { status: 404 })
+    }
 
-      if (updateError) {
-        console.error('Update error:', updateError)
-        return NextResponse.json({ 
-          error: 'Failed to update attendance' 
-        }, { status: 400 })
-      }
-    } else {
-      // Create new attendance record
-      const { error: insertError } = await supabase
-        .from('attendance_records')
-        .insert([
-          {
-            session_id: sessionId,
-            user_id: studentId,
-            status,
-            time_in: new Date().toISOString(),
-            created_at: new Date().toISOString()
-          }
-        ])
+    // Fetch section code if sectionId is provided
+    let sectionCode = null
+    if (sectionId) {
+      try {
+        const { data: sectionData, error: sectionError } = await supabase
+          .from('sections')
+          .select('section_code')
+          .eq('id', sectionId)
+          .single()
 
-      if (insertError) {
-        console.error('Insert error:', insertError)
-        return NextResponse.json({ 
-          error: 'Failed to mark attendance' 
-        }, { status: 400 })
+        if (sectionError) {
+          console.warn('⚠️ Could not fetch section code:', sectionError)
+        } else if (sectionData) {
+          sectionCode = sectionData.section_code
+          console.log('✅ Found section code:', sectionCode)
+        }
+      } catch (sectionFetchError) {
+        console.warn('⚠️ Error fetching section:', sectionFetchError)
       }
     }
 
+    // Check if attendance record already exists for this student in this session
+    const { data: existing } = await supabase
+      .from('attendance_records')
+      .select('id, checked_in_at')
+      .eq('attendance_session_id', sessionId)
+      .eq('student_number', student.student_number)
+      .single()
+
+    if (existing) {
+      console.log('⏸️ Student already marked attendance at:', existing.checked_in_at)
+      return NextResponse.json({
+        success: true,
+        message: 'Student already marked for this session'
+      })
+    }
+
+    // Create new attendance record
+    const { data: insertedRecord, error: insertError } = await supabase
+      .from('attendance_records')
+      .insert([
+        {
+          attendance_session_id: sessionId,
+          student_registration_id: studentId,
+          student_number: student.student_number,
+          section_id: sectionCode || null,
+          checked_in_at: new Date().toISOString(),
+          status: 'present',
+          face_match_confidence: faceMatchConfidence || null
+        }
+      ])
+      .select()
+
+    if (insertError) {
+      console.error('❌ Insert error:', insertError)
+      console.error('Error details:', {
+        code: insertError.code,
+        message: insertError.message,
+        details: insertError.details
+      })
+      return NextResponse.json({ 
+        error: 'Failed to mark attendance',
+        details: insertError.message
+      }, { status: 400 })
+    }
+
+    console.log('✅ Attendance marked successfully for:', {
+      studentNumber: student.student_number,
+      sessionId,
+      timestamp: new Date().toISOString()
+    })
+
     return NextResponse.json({
       success: true,
-      message: 'Attendance marked successfully'
+      message: 'Attendance marked successfully',
+      record: insertedRecord?.[0]
     })
   } catch (error) {
-    console.error('Attendance error:', error)
+    console.error('❌ Attendance error:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
