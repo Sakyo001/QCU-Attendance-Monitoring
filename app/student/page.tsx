@@ -2,20 +2,47 @@
 
 import { useAuth } from '@/contexts/AuthContext'
 import { useRouter } from 'next/navigation'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Calendar, BookOpen, CheckCircle, XCircle, Clock, LogOut } from 'lucide-react'
 
 export default function StudentDashboard() {
   const { user, loading, signOut } = useAuth()
   const router = useRouter()
+  const [isRegistered, setIsRegistered] = useState(false)
+  const [checkingRegistration, setCheckingRegistration] = useState(true)
 
   useEffect(() => {
     if (!loading && (!user || user.role !== 'student')) {
       router.push('/student/login')
+      return
+    }
+
+    if (!loading && user) {
+      checkFaceRegistration()
     }
   }, [user, loading, router])
 
-  if (loading) {
+  const checkFaceRegistration = async () => {
+    try {
+      setCheckingRegistration(true)
+      const response = await fetch(`/api/student/face-registration/check?studentId=${user?.id}`)
+      const data = await response.json()
+
+      if (data.success) {
+        setIsRegistered(data.isRegistered)
+        if (!data.isRegistered) {
+          // Redirect to face registration if not registered
+          router.push('/student/face-registration')
+        }
+      }
+    } catch (error) {
+      console.error('Error checking face registration:', error)
+    } finally {
+      setCheckingRegistration(false)
+    }
+  }
+
+  if (loading || checkingRegistration) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="text-center">

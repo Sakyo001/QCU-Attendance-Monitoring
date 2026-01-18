@@ -20,6 +20,10 @@
 # production
 /build
 
+# Face registration images (stored locally)
+/public/face-registrations/*
+!/public/face-registrations/.gitkeep
+
 # misc
 .DS_Store
 *.pem

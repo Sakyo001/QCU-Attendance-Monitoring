@@ -21,9 +21,6 @@ export default function AddFacultyPage() {
 
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState('')
-  const [sections, setSections] = useState<Section[]>([])
-  const [selectedSections, setSelectedSections] = useState<string[]>([])
-  const [loading, setLoading] = useState(true)
 
   const [formData, setFormData] = useState({
     firstName: '',
@@ -36,42 +33,14 @@ export default function AddFacultyPage() {
   })
 
   useEffect(() => {
-    fetchSections()
-  }, [])
-
-  const fetchSections = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('sections')
-        .select('id, section_code, semester, academic_year, max_students')
-        .order('section_code')
-
-      if (error) {
-        console.error('Error fetching sections:', error)
-        return
-      }
-
-      if (data) {
-        setSections(data)
-      }
-    } catch (err) {
-      console.error('Exception fetching sections:', err)
-    } finally {
-      setLoading(false)
+    if (!user || user.role !== 'admin') {
+      router.push('/admin/login')
     }
-  }
+  }, [user, router])
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target
     setFormData(prev => ({ ...prev, [name]: value }))
-  }
-
-  const handleSectionToggle = (sectionId: string) => {
-    setSelectedSections(prev =>
-      prev.includes(sectionId)
-        ? prev.filter(id => id !== sectionId)
-        : [...prev, sectionId]
-    )
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -94,7 +63,6 @@ export default function AddFacultyPage() {
           employeeId: formData.employeeId,
           role: formData.role,
           contactNumber: formData.contactNumber,
-          selectedSections: selectedSections,
         }),
       })
 
@@ -277,51 +245,6 @@ export default function AddFacultyPage() {
                 />
               </div>
             </div>
-          </div>
-
-          {/* Section Assignments */}
-          <div className="bg-white rounded-lg shadow p-6">
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">Section Assignments</h2>
-            <p className="text-sm text-gray-600 mb-4">
-              Select the sections this faculty member will teach
-            </p>
-            {loading ? (
-              <div className="text-center py-8 text-gray-500">Loading sections...</div>
-            ) : sections.length === 0 ? (
-              <div className="text-center py-8">
-                <p className="text-gray-500 mb-2">No sections available</p>
-                <p className="text-sm text-gray-400">Create sections first before adding faculty</p>
-              </div>
-            ) : (
-              <>
-                <div className="space-y-2 max-h-64 overflow-y-auto border border-gray-200 rounded-lg p-4">
-                  {sections.map(section => (
-                    <label
-                      key={section.id}
-                      className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-lg cursor-pointer"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={selectedSections.includes(section.id)}
-                        onChange={() => handleSectionToggle(section.id)}
-                        className="w-4 h-4 text-violet-600 border-gray-300 rounded focus:ring-violet-500"
-                      />
-                      <div className="flex-1">
-                        <div className="font-medium text-gray-900">
-                          BSIT {section.section_code}
-                        </div>
-                        <div className="text-sm text-gray-600">
-                          {section.semester} • {section.academic_year} • Max: {section.max_students} students
-                        </div>
-                      </div>
-                    </label>
-                  ))}
-                </div>
-                <p className="text-sm text-gray-500 mt-2">
-                  {selectedSections.length} section(s) selected
-                </p>
-              </>
-            )}
           </div>
 
           {/* Action Buttons */}

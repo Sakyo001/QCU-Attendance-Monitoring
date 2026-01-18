@@ -49,33 +49,16 @@ export default function FacultyPage() {
   }, [user])
 
   const fetchDepartments = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('departments')
-        .select('id, name')
-        .order('name')
-
-      if (!error && data) setDepartments(data)
-    } catch (error) {
-      console.error('Error fetching departments:', error)
-    }
+    setDepartments([
+      { id: '1', name: 'IT Department' }
+    ])
   }
 
   const fetchFaculty = async () => {
     try {
       const { data, error } = await supabase
         .from('users')
-        .select(`
-          id,
-          first_name,
-          last_name,
-          email,
-          employee_id,
-          phone,
-          is_active,
-          department_id,
-          departments (name)
-        `)
+        .select('id, first_name, last_name, email, employee_id, is_active')
         .eq('role', 'professor')
         .order('last_name', { ascending: true })
 
@@ -87,9 +70,9 @@ export default function FacultyPage() {
         last_name: f.last_name,
         email: f.email,
         employee_id: f.employee_id,
-        phone: f.phone,
+        phone: null,
         is_active: f.is_active,
-        department_name: f.departments?.name || null,
+        department_name: 'IT Department',
       })) || []
 
       setFaculty(formattedData)

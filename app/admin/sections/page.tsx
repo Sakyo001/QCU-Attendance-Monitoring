@@ -9,13 +9,9 @@ import { createClient } from '@/utils/supabase/client'
 interface Section {
   id: string
   section_code: string
-  section_name: string
-  course_name: string
-  course_code: string
-  professor_name: string
-  term: string
-  room: string
-  enrolled_students: number
+  semester: string
+  academic_year: string
+  max_students: number
 }
 
 interface Course {
@@ -60,16 +56,9 @@ export default function SectionsPage() {
   }, [user])
 
   const fetchCourses = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('courses')
-        .select('id, course_code, course_name')
-        .order('course_code')
-
-      if (!error && data) setCourses(data)
-    } catch (error) {
-      console.error('Error fetching courses:', error)
-    }
+    setCourses([
+      { id: '1', course_code: 'BSIT', course_name: 'Bachelor of Science in Information Technology' }
+    ])
   }
 
   const fetchProfessors = async () => {
@@ -89,8 +78,8 @@ export default function SectionsPage() {
   const fetchSections = async () => {
     try {
       const { data, error } = await supabase
-        .from('professor_sections_view')
-        .select('*')
+        .from('sections')
+        .select('id, section_code, semester, academic_year, max_students')
         .order('section_code', { ascending: true })
 
       if (error) throw error
@@ -152,16 +141,16 @@ export default function SectionsPage() {
             <div className="text-3xl font-bold text-gray-900 mt-2">{sections.length}</div>
           </div>
           <div className="bg-white rounded-lg shadow p-6">
-            <div className="text-sm font-medium text-gray-600">Total Students</div>
+            <div className="text-sm font-medium text-gray-600">Total Capacity</div>
             <div className="text-3xl font-bold text-gray-900 mt-2">
-              {sections.reduce((sum, s) => sum + (s.enrolled_students || 0), 0)}
+              {sections.reduce((sum, s) => sum + (s.max_students || 0), 0)}
             </div>
           </div>
           <div className="bg-white rounded-lg shadow p-6">
-            <div className="text-sm font-medium text-gray-600">Avg Students/Section</div>
+            <div className="text-sm font-medium text-gray-600">Avg Capacity/Section</div>
             <div className="text-3xl font-bold text-gray-900 mt-2">
               {sections.length > 0
-                ? Math.round(sections.reduce((sum, s) => sum + (s.enrolled_students || 0), 0) / sections.length)
+                ? Math.round(sections.reduce((sum, s) => sum + (s.max_students || 0), 0) / sections.length)
                 : 0}
             </div>
           </div>
@@ -261,16 +250,13 @@ export default function SectionsPage() {
                       Course
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Professor
+                      Semester
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Term
+                      Academic Year
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Room
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Students
+                      Max Students
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Actions
@@ -280,29 +266,24 @@ export default function SectionsPage() {
                 <tbody className="bg-white divide-y divide-gray-200">
                   {sections.map((section) => (
                     <tr key={section.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm font-medium text-gray-900">{section.section_code}</div>
-                        <div className="text-sm text-gray-500">{section.section_name}</div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900">{section.course_code}</div>
-                        <div className="text-sm text-gray-500">{section.course_name}</div>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                        {section.section_code}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {section.professor_name || 'Not assigned'}
+                        BSIT
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <span className="px-2 py-1 text-xs font-medium rounded-full bg-purple-100 text-purple-800">
-                          {section.term}
+                        <span className="px-2 py-1 text-xs font-medium rounded-full bg-blue-100 text-blue-800">
+                          {section.semester}
                         </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {section.room || 'TBA'}
+                        {section.academic_year}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center gap-2">
                           <Users className="w-4 h-4 text-gray-400" />
-                          <span className="text-sm text-gray-900">{section.enrolled_students || 0}</span>
+                          <span className="text-sm text-gray-900">{section.max_students}</span>
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
