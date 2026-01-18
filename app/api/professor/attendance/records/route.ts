@@ -35,7 +35,7 @@ export async function GET(request: NextRequest) {
     // Fetch attendance records using the correct column name
     const { data: recordsData, error: recordsError } = await supabase
       .from('attendance_records')
-      .select('id, attendance_session_id, student_number, checked_in_at, status, face_match_confidence, created_at')
+      .select('id, attendance_session_id, student_registration_id, student_number, checked_in_at, status, face_match_confidence, created_at')
       .eq('attendance_session_id', sessionId)
       .order('checked_in_at', { ascending: true })
 
@@ -89,8 +89,17 @@ export async function GET(request: NextRequest) {
         computedStatus = 'late'
       }
 
+      console.log('📊 Processing record:', {
+        recordId: record.id,
+        studentRegistrationId: record.student_registration_id,
+        studentNumber: record.student_number,
+        studentName: `${student?.first_name} ${student?.last_name}`,
+        status: computedStatus
+      })
+
       return {
         id: record.id,
+        student_registration_id: record.student_registration_id,
         attendance_session_id: record.attendance_session_id,
         student_number: record.student_number,
         checked_in_at: record.checked_in_at,

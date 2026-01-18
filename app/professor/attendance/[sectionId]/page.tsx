@@ -71,25 +71,19 @@ export default function AttendancePage() {
       setCheckingRegistration(true)
       
       if (!user?.id) {
-        console.warn('No user ID available for face registration check')
         setCheckingRegistration(false)
         return
       }
 
-      console.log('Checking face registration for professor:', user.id)
       const response = await fetch(`/api/professor/face-registration/check?professorId=${user.id}`)
       const data = await response.json()
-
-      console.log('Face registration check response:', data)
 
       if (data.success) {
         setIsRegistered(data.isRegistered)
       } else {
-        console.error('Check failed:', data.error)
         setIsRegistered(false)
       }
     } catch (error) {
-      console.error('Error checking face registration:', error)
       setIsRegistered(false)
     } finally {
       setCheckingRegistration(false)
@@ -111,7 +105,7 @@ export default function AttendancePage() {
         setAttendanceSession(null)
       }
     } catch (error) {
-      console.error('Error fetching attendance session:', error)
+      // Error fetching session
     } finally {
       setLoadingSession(false)
     }
@@ -126,7 +120,7 @@ export default function AttendancePage() {
         setRegisteredStudents(data.students || [])
       }
     } catch (error) {
-      console.error('Error fetching registered students:', error)
+      // Error fetching students
     }
   }
 
@@ -143,41 +137,27 @@ export default function AttendancePage() {
         mergeAttendanceData(records)
       }
     } catch (error) {
-      console.error('Error fetching attendance records:', error)
+      // Error fetching records
     }
   }
 
   const mergeAttendanceData = (records: any[]) => {
-    console.log('📊 Merging attendance data:', {
-      registeredStudents: registeredStudents.length,
-      attendanceRecords: records.length,
-      sampleRecord: records[0]
-    })
-
-    // Create a map of attended students for quick lookup using student_registration_id
+    // Create a map of attended students for quick lookup using student_number
     const attendedStudentsMap = new Map()
     records.forEach(record => {
-      console.log('📝 Adding to map:', {
-        studentRegistrationId: record.student_registration_id,
-        status: record.status,
-        checkedInAt: record.checked_in_at
-      })
-      attendedStudentsMap.set(record.student_registration_id, record)
+      attendedStudentsMap.set(record.student_number, record)
     })
 
     // Merge: all registered students + mark attendance status
     const merged = registeredStudents.map(student => {
-      const attendance = attendedStudentsMap.get(student.id)
-      console.log('🔍 Matching student:', {
-        studentId: student.id,
-        studentName: `${student.first_name} ${student.last_name}`,
-        found: !!attendance,
-        status: attendance?.status || 'absent'
-      })
+      const attendance = attendedStudentsMap.get(student.student_number)
+      const displayStatus = attendance?.status || 'absent'
+      
       return {
         ...student,
         checked_in_at: attendance?.checked_in_at || null,
-        status: attendance?.status || 'absent'
+        // Use the actual status from attendance_records if it exists, otherwise 'absent'
+        status: displayStatus
       }
     })
 
@@ -187,7 +167,6 @@ export default function AttendancePage() {
       return (statusOrder[a.status as keyof typeof statusOrder] || 999) - (statusOrder[b.status as keyof typeof statusOrder] || 999)
     })
 
-    console.log('✅ Merged data:', sorted)
     setMergedAttendanceData(sorted)
   }
 
@@ -200,7 +179,6 @@ export default function AttendancePage() {
 
   const handleOpenShift = async () => {
     try {
-      console.log('Opening shift with scheduleId:', scheduleId, 'professorId:', user?.id)
       const response = await fetch('/api/professor/attendance/session/open', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -209,18 +187,13 @@ export default function AttendancePage() {
           professorId: user?.id
         })
       })
-
-      console.log('Shift open response status:', response.status)
       
       if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Shift open HTTP error:', response.status, errorText)
         alert(`Failed to open shift: ${response.status} ${response.statusText}`)
         return
       }
       
       const data = await response.json()
-      console.log('Shift open response data:', data)
 
       if (data.success && data.session) {
         setAttendanceSession(data.session)
@@ -230,11 +203,9 @@ export default function AttendancePage() {
         // Show facial recognition for attendance
         setShowFaceRecognitionModal(true)
       } else {
-        console.error('Open shift error:', data)
         alert(data.error || 'Failed to open shift - no session returned')
       }
     } catch (error: any) {
-      console.error('Error opening shift:', error)
       alert('Failed to open shift: ' + error.message)
     }
   }
@@ -243,7 +214,6 @@ export default function AttendancePage() {
     if (!attendanceSession) return
 
     try {
-      console.log('🔓 Closing shift:', attendanceSession.id)
       const response = await fetch('/api/professor/attendance/session/close', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -252,28 +222,21 @@ export default function AttendancePage() {
         })
       })
 
-      console.log('Close shift response status:', response.status)
-
       if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Close shift HTTP error:', response.status, errorText)
         alert(`Failed to close shift: ${response.status}`)
         return
       }
 
       const data = await response.json()
-      console.log('Close shift response data:', data)
 
       if (data.success && data.session) {
         setAttendanceSession(data.session)
         await logShiftEvent(attendanceSession.id, 'shift_close')
         alert('Shift closed successfully!')
       } else {
-        console.error('Close shift error:', data)
         alert(data.error || 'Failed to close shift')
       }
     } catch (error: any) {
-      console.error('❌ Error closing shift:', error)
       alert('Failed to close shift: ' + error.message)
     }
   }
@@ -290,7 +253,7 @@ export default function AttendancePage() {
         })
       })
     } catch (error) {
-      console.error('Error logging shift event:', error)
+      // Error logging event
     }
   }
 
@@ -723,7 +686,7 @@ function StudentRegistrationModal({ sectionId, onClose }: StudentRegistrationMod
           setFaceDescriptor(null)
         }
       } catch (error) {
-        console.error('Face detection error:', error)
+        // Face detection error
       }
     }, 300)
   }
@@ -795,15 +758,6 @@ function StudentRegistrationModal({ sectionId, onClose }: StudentRegistrationMod
     setIsSubmitting(true)
     try {
       const descriptorArray = faceDescriptor ? Array.from(faceDescriptor) : null
-      console.log('Submitting student registration with descriptor:', {
-        firstName: formData.firstName,
-        lastName: formData.lastName,
-        studentId: formData.studentId,
-        email: formData.email,
-        hasFaceData: !!capturedImage,
-        descriptorLength: descriptorArray ? descriptorArray.length : 0,
-        descriptorSample: descriptorArray ? descriptorArray.slice(0, 5) : null
-      })
 
       const response = await fetch('/api/student/register', {
         method: 'POST',
@@ -821,14 +775,12 @@ function StudentRegistrationModal({ sectionId, onClose }: StudentRegistrationMod
       })
 
       const data = await response.json()
-      console.log('Registration response:', data)
       if (data.success && data.credentials) {
         setCredentials(data.credentials)
       } else {
         alert(data.error || 'Failed to create student account')
       }
     } catch (error) {
-      console.error('Registration error:', error)
       alert('Failed to register student')
     } finally {
       setIsSubmitting(false)
@@ -1207,7 +1159,7 @@ function AttendanceRecognitionModal({ sessionId, sectionId, isOpen, onClose, onS
           setRecognitionError(null)
         }
       } catch (error) {
-        console.error('Face detection error:', error)
+        // Face detection error
       }
     }, 500)
   }
@@ -1569,7 +1521,7 @@ function FaceRegistrationModal({ professorId, professorName, onComplete, onSkip 
           }
         }
       } catch (error) {
-        console.error('Face detection error:', error)
+        // Face detection error
       }
     }, 300)
   }
