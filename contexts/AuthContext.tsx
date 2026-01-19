@@ -198,9 +198,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   const signOut = async () => {
+    console.log('AuthContext signOut: Starting logout')
     await authSignOut()
     setUser(null)
-    router.push('/')
+    localStorage.removeItem('authUser')
+    console.log('AuthContext signOut: Cleared user and cache, redirecting')
+    // Use window.location for hard redirect to prevent any cached state
+    window.location.href = '/'
   }
 
   const refreshUser = async () => {

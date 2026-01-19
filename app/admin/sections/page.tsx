@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { Plus, Edit, Trash2, Users, ArrowLeft } from 'lucide-react'
 import { createClient } from '@/utils/supabase/client'
+import Swal from 'sweetalert2'
 
 interface Section {
   id: string
@@ -31,13 +32,12 @@ export default function SectionsPage() {
   const router = useRouter()
   const [sections, setSections] = useState<Section[]>([])
   const [loadingSections, setLoadingSections] = useState(true)
-  const [showModal, setShowModal] = useState(false)
   const [courses, setCourses] = useState<Course[]>([])
   const [professors, setProfessors] = useState<Professor[]>([])
   const [filters, setFilters] = useState({
     courseId: '',
     professorId: '',
-    term: '',
+    semester: '',
   })
   const supabase = createClient()
 
@@ -63,15 +63,29 @@ export default function SectionsPage() {
 
   const fetchProfessors = async () => {
     try {
-      const { data, error } = await supabase
-        .from('users')
-        .select('id, first_name, last_name')
-        .eq('role', 'professor')
-        .order('last_name')
+      console.log('Starting to fetch professors via API...')
+      
+      // Use server endpoint to bypass RLS
+      const response = await fetch('/api/admin/professors')
+      
+      if (!response.ok) {
+        const errorData = await response.json()
+        console.error('Error fetching professors:', errorData)
+        return
+      }
 
-      if (!error && data) setProfessors(data)
+      const data = await response.json()
+      console.log('Professors fetched from API:', data)
+      console.log('Data length:', data?.length)
+      
+      if (data && data.length > 0) {
+        setProfessors(data)
+        console.log('Professors set to state:', data)
+      } else {
+        console.warn('No professors found in database')
+      }
     } catch (error) {
-      console.error('Error fetching professors:', error)
+      console.error('Exception in fetchProfessors:', error)
     }
   }
 
@@ -89,6 +103,171 @@ export default function SectionsPage() {
       console.error('Error fetching sections:', error)
     } finally {
       setLoadingSections(false)
+    }
+  }
+
+  const getFilteredSections = () => {
+    return sections.filter(section => {
+      if (filters.semester && section.semester !== filters.semester) {
+        return false
+      }
+      return true
+    })
+  }
+
+  const handleEdit = async (section: Section) => {
+    const { value: formValues } = await Swal.fire({
+      title: 'Edit Section',
+      html: `
+        <style>
+          .edit-input-group { text-align: left; margin-bottom: 12px; }
+          .edit-input-group label { display: block; font-size: 12px; color: #666; margin-bottom: 4px; font-weight: 500; }
+          .edit-input-group input,
+          .edit-input-group select { 
+            width: 100%; 
+            padding: 8px 10px; 
+            border: 1px solid #ddd; 
+            border-radius: 4px; 
+            font-size: 14px;
+            box-sizing: border-box;
+          }
+          .edit-input-group input:focus,
+          .edit-input-group select:focus { 
+            outline: none; 
+            border-color: #7c3aed; 
+            box-shadow: 0 0 0 2px rgba(124, 58, 237, 0.1);
+          }
+        </style>
+        <div class="edit-input-group">
+          <label>Section Code</label>
+          <input id="section_code" type="text" value="${section.section_code}" />
+        </div>
+        <div class="edit-input-group">
+          <label>Semester</label>
+          <select id="semester">
+            <option value="1st" ${section.semester === '1st' ? 'selected' : ''}>1st Semester</option>
+            <option value="2nd" ${section.semester === '2nd' ? 'selected' : ''}>2nd Semester</option>
+          </select>
+        </div>
+        <div class="edit-input-group">
+          <label>Academic Year</label>
+          <input id="academic_year" type="text" value="${section.academic_year}" placeholder="2024-2025" />
+        </div>
+        <div class="edit-input-group">
+          <label>Max Students</label>
+          <input id="max_students" type="number" value="${section.max_students}" min="1" />
+        </div>
+      `,
+      showCancelButton: true,
+      confirmButtonText: 'Save',
+      confirmButtonColor: '#7c3aed',
+      cancelButtonText: 'Cancel',
+      allowOutsideClick: false,
+      didOpen: () => {
+        const input = document.getElementById('section_code') as HTMLInputElement
+        if (input) input.focus()
+      }
+    })
+
+    if (formValues) {
+      const sectionCodeInput = document.getElementById('section_code') as HTMLInputElement
+      const semesterInput = document.getElementById('semester') as HTMLSelectElement
+      const academicYearInput = document.getElementById('academic_year') as HTMLInputElement
+      const maxStudentsInput = document.getElementById('max_students') as HTMLInputElement
+
+      await handleUpdateSection(
+        section.id,
+        sectionCodeInput.value,
+        semesterInput.value,
+        academicYearInput.value,
+        parseInt(maxStudentsInput.value)
+      )
+    }
+  }
+
+  const handleDelete = async (section: Section) => {
+    const result = await Swal.fire({
+      title: 'Delete Section',
+      html: `Are you sure you want to delete section <strong>${section.section_code}</strong>? This action cannot be undone.`,
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: 'Delete Section',
+      confirmButtonColor: '#dc2626',
+      cancelButtonText: 'Cancel',
+      reverseButtons: true
+    })
+
+    if (result.isConfirmed) {
+      await handleDeleteSection(section.id)
+    }
+  }
+
+  const handleUpdateSection = async (
+    sectionId: string,
+    sectionCode: string,
+    semester: string,
+    academicYear: string,
+    maxStudents: number
+  ) => {
+    try {
+      const { error } = await supabase
+        .from('sections')
+        .update({
+          section_code: sectionCode,
+          semester: semester,
+          academic_year: academicYear,
+          max_students: maxStudents
+        })
+        .eq('id', sectionId)
+
+      if (error) throw error
+
+      await Swal.fire({
+        title: 'Success!',
+        text: 'Section updated successfully',
+        icon: 'success',
+        confirmButtonColor: '#7c3aed'
+      })
+
+      // Refresh sections
+      await fetchSections()
+    } catch (error) {
+      console.error('Error updating section:', error)
+      await Swal.fire({
+        title: 'Error!',
+        text: 'Failed to update section',
+        icon: 'error',
+        confirmButtonColor: '#7c3aed'
+      })
+    }
+  }
+
+  const handleDeleteSection = async (sectionId: string) => {
+    try {
+      const { error } = await supabase
+        .from('sections')
+        .delete()
+        .eq('id', sectionId)
+
+      if (error) throw error
+
+      await Swal.fire({
+        title: 'Deleted!',
+        text: 'Section deleted successfully',
+        icon: 'success',
+        confirmButtonColor: '#7c3aed'
+      })
+
+      // Refresh sections
+      await fetchSections()
+    } catch (error) {
+      console.error('Error deleting section:', error)
+      await Swal.fire({
+        title: 'Error!',
+        text: 'Failed to delete section',
+        icon: 'error',
+        confirmButtonColor: '#7c3aed'
+      })
     }
   }
 
@@ -138,19 +317,19 @@ export default function SectionsPage() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
           <div className="bg-white rounded-lg shadow p-6">
             <div className="text-sm font-medium text-gray-600">Total Sections</div>
-            <div className="text-3xl font-bold text-gray-900 mt-2">{sections.length}</div>
+            <div className="text-3xl font-bold text-gray-900 mt-2">{getFilteredSections().length}</div>
           </div>
           <div className="bg-white rounded-lg shadow p-6">
             <div className="text-sm font-medium text-gray-600">Total Capacity</div>
             <div className="text-3xl font-bold text-gray-900 mt-2">
-              {sections.reduce((sum, s) => sum + (s.max_students || 0), 0)}
+              {getFilteredSections().reduce((sum, s) => sum + (s.max_students || 0), 0)}
             </div>
           </div>
           <div className="bg-white rounded-lg shadow p-6">
             <div className="text-sm font-medium text-gray-600">Avg Capacity/Section</div>
             <div className="text-3xl font-bold text-gray-900 mt-2">
-              {sections.length > 0
-                ? Math.round(sections.reduce((sum, s) => sum + (s.max_students || 0), 0) / sections.length)
+              {getFilteredSections().length > 0
+                ? Math.round(getFilteredSections().reduce((sum, s) => sum + (s.max_students || 0), 0) / getFilteredSections().length)
                 : 0}
             </div>
           </div>
@@ -199,19 +378,18 @@ export default function SectionsPage() {
             </div>
 
             <div>
-              <label htmlFor="termFilter" className="block text-sm font-medium text-gray-700 mb-2">
-                Term
+              <label htmlFor="semesterFilter" className="block text-sm font-medium text-gray-700 mb-2">
+                Semester
               </label>
               <select
-                id="termFilter"
-                value={filters.term}
-                onChange={(e) => setFilters(prev => ({ ...prev, term: e.target.value }))}
+                id="semesterFilter"
+                value={filters.semester}
+                onChange={(e) => setFilters(prev => ({ ...prev, semester: e.target.value }))}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500"
               >
-                <option value="">All Terms</option>
-                <option value="fall">Fall</option>
-                <option value="spring">Spring</option>
-                <option value="summer">Summer</option>
+                <option value="">All Semesters</option>
+                <option value="1st">1st Semester</option>
+                <option value="2nd">2nd Semester</option>
               </select>
             </div>
           </div>
@@ -232,11 +410,15 @@ export default function SectionsPage() {
             <div className="p-8 text-center">
               <p className="text-gray-600">No sections created yet</p>
               <button
-                onClick={() => setShowModal(true)}
+                onClick={() => router.push('/admin/sections/add')}
                 className="mt-4 text-violet-600 hover:text-violet-700 font-medium"
               >
                 Create your first section
               </button>
+            </div>
+          ) : getFilteredSections().length === 0 ? (
+            <div className="p-8 text-center">
+              <p className="text-gray-600">No sections match the selected filters</p>
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -264,7 +446,7 @@ export default function SectionsPage() {
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {sections.map((section) => (
+                  {getFilteredSections().map((section) => (
                     <tr key={section.id} className="hover:bg-gray-50">
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                         {section.section_code}
@@ -288,10 +470,18 @@ export default function SectionsPage() {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                         <div className="flex items-center gap-2">
-                          <button className="text-violet-600 hover:text-violet-900">
+                          <button 
+                            onClick={() => handleEdit(section)}
+                            className="text-violet-600 hover:text-violet-900 transition-colors"
+                            title="Edit section"
+                          >
                             <Edit className="w-4 h-4" />
                           </button>
-                          <button className="text-red-600 hover:text-red-900">
+                          <button 
+                            onClick={() => handleDelete(section)}
+                            className="text-red-600 hover:text-red-900 transition-colors"
+                            title="Delete section"
+                          >
                             <Trash2 className="w-4 h-4" />
                           </button>
                         </div>
@@ -304,22 +494,6 @@ export default function SectionsPage() {
           )}
         </div>
       </main>
-
-      {/* Create Section Modal - placeholder */}
-      {showModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg max-w-2xl w-full p-6">
-            <h2 className="text-xl font-bold text-gray-900 mb-4">Create New Section</h2>
-            <p className="text-gray-600 mb-4">Section creation form coming soon...</p>
-            <button
-              onClick={() => setShowModal(false)}
-              className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

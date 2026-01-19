@@ -133,8 +133,7 @@ export default function AttendancePage() {
       if (data.success) {
         const records = data.records || []
         setAttendanceRecords(records)
-        // Merge registered students with attendance records
-        mergeAttendanceData(records)
+        // Note: merge will happen automatically via useEffect when both registeredStudents and attendanceRecords are ready
       }
     } catch (error) {
       // Error fetching records
@@ -172,7 +171,8 @@ export default function AttendancePage() {
 
   // Update merged data when either attendance records or registered students change
   useEffect(() => {
-    if (registeredStudents.length > 0 || attendanceRecords.length > 0) {
+    // Always merge when we have registered students (even if no attendance records yet)
+    if (registeredStudents.length > 0) {
       mergeAttendanceData(attendanceRecords)
     }
   }, [attendanceRecords, registeredStudents])
@@ -382,9 +382,18 @@ export default function AttendancePage() {
                </p>
              </div>
              {isShiftActive && (
-               <div className="flex items-center gap-2 text-xs text-emerald-600 font-medium animate-pulse">
-                 <div className="w-2 h-2 rounded-full bg-emerald-600" />
-                 Live Updates
+               <div className="flex items-center gap-2">
+                 <Button 
+                   onClick={() => setShowFaceRecognitionModal(true)}
+                   className="gap-2 bg-emerald-600 hover:bg-emerald-700"
+                 >
+                   <Camera className="h-4 w-4" />
+                   Mark Attendance
+                 </Button>
+                 <div className="flex items-center gap-2 text-xs text-emerald-600 font-medium animate-pulse">
+                   <div className="w-2 h-2 rounded-full bg-emerald-600" />
+                   Live
+                 </div>
                </div>
              )}
           </div>

@@ -2,18 +2,50 @@
 
 import { useAuth } from '@/contexts/AuthContext'
 import { useRouter } from 'next/navigation'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Users, GraduationCap, BookOpen, BarChart3, Settings, LogOut } from 'lucide-react'
 
 export default function AdminDashboard() {
   const { user, loading, signOut } = useAuth()
   const router = useRouter()
+  const [stats, setStats] = useState({
+    totalStudents: 0,
+    totalProfessors: 0,
+    totalSections: 0,
+    attendanceRate: 0,
+  })
+  const [loadingStats, setLoadingStats] = useState(true)
 
   useEffect(() => {
     if (!loading && (!user || user.role !== 'admin')) {
       router.push('/admin/login')
     }
   }, [user, loading, router])
+
+  useEffect(() => {
+    if (user) {
+      fetchStats()
+    }
+  }, [user])
+
+  const fetchStats = async () => {
+    try {
+      const response = await fetch('/api/admin/dashboard/stats')
+      if (!response.ok) {
+        console.error('Stats fetch error')
+        setLoadingStats(false)
+        return
+      }
+
+      const data = await response.json()
+      setStats(data)
+      console.log('Dashboard stats fetched:', data)
+    } catch (error) {
+      console.error('Exception in fetchStats:', error)
+    } finally {
+      setLoadingStats(false)
+    }
+  }
 
   if (loading) {
     return (
@@ -35,11 +67,10 @@ export default function AdminDashboard() {
     router.push('/admin/login')
   }
 
-  const stats = [
-    { label: 'Total Students', value: '0', icon: Users, color: 'bg-blue-500' },
-    { label: 'Total Professors', value: '0', icon: GraduationCap, color: 'bg-green-500' },
-    { label: 'Active Sections', value: '0', icon: BookOpen, color: 'bg-purple-500' },
-    { label: 'Attendance Rate', value: '0%', icon: BarChart3, color: 'bg-orange-500' },
+  const statCards = [
+    { label: 'Total Students', value: stats.totalStudents, icon: Users, color: 'bg-blue-500' },
+    { label: 'Total Professors', value: stats.totalProfessors, icon: GraduationCap, color: 'bg-green-500' },
+    { label: 'Active Sections', value: stats.totalSections, icon: BookOpen, color: 'bg-purple-500' },
   ]
 
   return (
@@ -68,8 +99,8 @@ export default function AdminDashboard() {
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-          {stats.map((stat) => {
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+          {statCards.map((stat) => {
             const Icon = stat.icon
             return (
               <div key={stat.label} className="bg-white rounded-lg shadow p-6">

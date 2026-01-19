@@ -72,8 +72,13 @@ export async function signUpWithEmail(data: SignUpData) {
 
 // Client-side: Sign out
 export async function signOut() {
-  const supabase = createClient()
-  // Just clear local storage since we're not using Supabase Auth
+  try {
+    // Clear localStorage
+    localStorage.removeItem('authUser')
+    console.log('Sign out: Cleared localStorage')
+  } catch (error) {
+    console.error('Error during sign out:', error)
+  }
 }
 
 // Check if user has role

@@ -3,8 +3,9 @@
 import { useAuth } from '@/contexts/AuthContext'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { Plus, Edit, Trash2, Mail, Phone, ArrowLeft } from 'lucide-react'
+import { Plus, Edit, Trash2, ArrowLeft } from 'lucide-react'
 import { createClient } from '@/utils/supabase/client'
+import Swal from 'sweetalert2'
 
 interface Faculty {
   id: string
@@ -12,8 +13,6 @@ interface Faculty {
   last_name: string
   email: string
   employee_id: string
-  phone: string | null
-  department_name: string | null
   is_active: boolean
 }
 
@@ -27,7 +26,6 @@ export default function FacultyPage() {
   const router = useRouter()
   const [faculty, setFaculty] = useState<Faculty[]>([])
   const [loadingFaculty, setLoadingFaculty] = useState(true)
-  const [showModal, setShowModal] = useState(false)
   const [departments, setDepartments] = useState<Department[]>([])
   const [filters, setFilters] = useState({
     departmentId: '',
@@ -49,6 +47,7 @@ export default function FacultyPage() {
   }, [user])
 
   const fetchDepartments = async () => {
+    // Set static departments - no table exists
     setDepartments([
       { id: '1', name: 'IT Department' }
     ])
@@ -56,30 +55,195 @@ export default function FacultyPage() {
 
   const fetchFaculty = async () => {
     try {
-      const { data, error } = await supabase
+      const response = await fetch('/api/admin/faculty')
+      if (!response.ok) {
+        const error = await response.json()
+        console.error('Faculty fetch error:', error)
+        setLoadingFaculty(false)
+        return
+      }
+
+      const data = await response.json()
+      setFaculty(data || [])
+      console.log('Faculty fetched:', data?.length || 0)
+    } catch (error) {
+      console.error('Exception in fetchFaculty:', error)
+    } finally {
+      setLoadingFaculty(false)
+    }
+  }
+
+  const getFilteredFaculty = () => {
+    return faculty.filter(member => {
+      if (filters.status === 'active' && !member.is_active) {
+        return false
+      }
+      if (filters.status === 'inactive' && member.is_active) {
+        return false
+      }
+      return true
+    })
+  }
+
+  const handleEdit = async (member: Faculty) => {
+    const { value: formValues } = await Swal.fire({
+      title: 'Edit Faculty',
+      html: `
+        <style>
+          .edit-input-group { text-align: left; margin-bottom: 12px; }
+          .edit-input-group label { display: block; font-size: 12px; color: #666; margin-bottom: 4px; font-weight: 500; }
+          .edit-input-group input,
+          .edit-input-group select { 
+            width: 100%; 
+            padding: 8px 10px; 
+            border: 1px solid #ddd; 
+            border-radius: 4px; 
+            font-size: 14px;
+            box-sizing: border-box;
+          }
+          .edit-input-group input:focus,
+          .edit-input-group select:focus { 
+            outline: none; 
+            border-color: #7c3aed; 
+            box-shadow: 0 0 0 2px rgba(124, 58, 237, 0.1);
+          }
+        </style>
+        <div class="edit-input-group">
+          <label>First Name</label>
+          <input id="first_name" type="text" value="${member.first_name}" />
+        </div>
+        <div class="edit-input-group">
+          <label>Last Name</label>
+          <input id="last_name" type="text" value="${member.last_name}" />
+        </div>
+        <div class="edit-input-group">
+          <label>Email</label>
+          <input id="email" type="email" value="${member.email}" />
+        </div>
+        <div class="edit-input-group">
+          <label>Employee ID</label>
+          <input id="employee_id" type="text" value="${member.employee_id}" />
+        </div>
+        <div class="edit-input-group">
+          <label>Status</label>
+          <select id="is_active">
+            <option value="true" ${member.is_active ? 'selected' : ''}>Active</option>
+            <option value="false" ${!member.is_active ? 'selected' : ''}>Inactive</option>
+          </select>
+        </div>
+      `,
+      showCancelButton: true,
+      confirmButtonText: 'Save',
+      confirmButtonColor: '#7c3aed',
+      cancelButtonText: 'Cancel',
+      allowOutsideClick: false,
+      didOpen: () => {
+        const input = document.getElementById('first_name') as HTMLInputElement
+        if (input) input.focus()
+      }
+    })
+
+    if (formValues) {
+      const firstNameInput = document.getElementById('first_name') as HTMLInputElement
+      const lastNameInput = document.getElementById('last_name') as HTMLInputElement
+      const emailInput = document.getElementById('email') as HTMLInputElement
+      const employeeIdInput = document.getElementById('employee_id') as HTMLInputElement
+      const isActiveInput = document.getElementById('is_active') as HTMLSelectElement
+
+      await handleUpdateFaculty(
+        member.id,
+        firstNameInput.value,
+        lastNameInput.value,
+        emailInput.value,
+        employeeIdInput.value,
+        isActiveInput.value === 'true'
+      )
+    }
+  }
+
+  const handleDelete = async (member: Faculty) => {
+    const result = await Swal.fire({
+      title: 'Delete Faculty',
+      html: `Are you sure you want to delete <strong>${member.first_name} ${member.last_name}</strong>? This action cannot be undone.`,
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: 'Delete',
+      confirmButtonColor: '#dc2626',
+      cancelButtonText: 'Cancel',
+      reverseButtons: true
+    })
+
+    if (result.isConfirmed) {
+      await handleDeleteFaculty(member.id)
+    }
+  }
+
+  const handleUpdateFaculty = async (
+    facultyId: string,
+    firstName: string,
+    lastName: string,
+    email: string,
+    employeeId: string,
+    isActive: boolean
+  ) => {
+    try {
+      const { error } = await supabase
         .from('users')
-        .select('id, first_name, last_name, email, employee_id, is_active')
-        .eq('role', 'professor')
-        .order('last_name', { ascending: true })
+        .update({
+          first_name: firstName,
+          last_name: lastName,
+          email: email,
+          employee_id: employeeId,
+          is_active: isActive
+        })
+        .eq('id', facultyId)
 
       if (error) throw error
 
-      const formattedData = data?.map((f: any) => ({
-        id: f.id,
-        first_name: f.first_name,
-        last_name: f.last_name,
-        email: f.email,
-        employee_id: f.employee_id,
-        phone: null,
-        is_active: f.is_active,
-        department_name: 'IT Department',
-      })) || []
+      await Swal.fire({
+        title: 'Success!',
+        text: 'Faculty member updated successfully',
+        icon: 'success',
+        confirmButtonColor: '#7c3aed'
+      })
 
-      setFaculty(formattedData)
+      await fetchFaculty()
     } catch (error) {
-      console.error('Error fetching faculty:', error)
-    } finally {
-      setLoadingFaculty(false)
+      console.error('Error updating faculty:', error)
+      await Swal.fire({
+        title: 'Error!',
+        text: 'Failed to update faculty member',
+        icon: 'error',
+        confirmButtonColor: '#7c3aed'
+      })
+    }
+  }
+
+  const handleDeleteFaculty = async (facultyId: string) => {
+    try {
+      const { error } = await supabase
+        .from('users')
+        .delete()
+        .eq('id', facultyId)
+
+      if (error) throw error
+
+      await Swal.fire({
+        title: 'Deleted!',
+        text: 'Faculty member deleted successfully',
+        icon: 'success',
+        confirmButtonColor: '#7c3aed'
+      })
+
+      await fetchFaculty()
+    } catch (error) {
+      console.error('Error deleting faculty:', error)
+      await Swal.fire({
+        title: 'Error!',
+        text: 'Failed to delete faculty member',
+        icon: 'error',
+        confirmButtonColor: '#7c3aed'
+      })
     }
   }
 
@@ -151,26 +315,7 @@ export default function FacultyPage() {
             <h2 className="text-lg font-semibold text-gray-900 mb-4">All Faculty Members</h2>
             
             {/* Filters */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label htmlFor="departmentFilter" className="block text-sm font-medium text-gray-700 mb-2">
-                  Department
-                </label>
-                <select
-                  id="departmentFilter"
-                  value={filters.departmentId}
-                  onChange={(e) => setFilters(prev => ({ ...prev, departmentId: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500"
-                >
-                  <option value="">All Departments</option>
-                  {departments.map(dept => (
-                    <option key={dept.id} value={dept.id}>
-                      {dept.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
+            <div className="grid grid-cols-1 md:grid-cols-1 gap-4">
               <div>
                 <label htmlFor="statusFilter" className="block text-sm font-medium text-gray-700 mb-2">
                   Status
@@ -194,15 +339,9 @@ export default function FacultyPage() {
               <div className="w-8 h-8 border-4 border-violet-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
               <p className="mt-2 text-gray-600">Loading faculty...</p>
             </div>
-          ) : faculty.length === 0 ? (
+          ) : getFilteredFaculty().length === 0 ? (
             <div className="p-8 text-center">
-              <p className="text-gray-600">No faculty members added yet</p>
-              <button
-                onClick={() => setShowModal(true)}
-                className="mt-4 text-violet-600 hover:text-violet-700 font-medium"
-              >
-                Add your first faculty member
-              </button>
+              <p className="text-gray-600">No faculty members match the selected filters</p>
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -216,7 +355,7 @@ export default function FacultyPage() {
                       Employee ID
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Contact
+                      Email
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Department
@@ -230,7 +369,7 @@ export default function FacultyPage() {
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {faculty.map((member) => (
+                  {getFilteredFaculty().map((member) => (
                     <tr key={member.id} className="hover:bg-gray-50">
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm font-medium text-gray-900">
@@ -240,22 +379,11 @@ export default function FacultyPage() {
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                         {member.employee_id}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex flex-col gap-1">
-                          <div className="flex items-center gap-2 text-sm text-gray-900">
-                            <Mail className="w-3 h-3 text-gray-400" />
-                            {member.email}
-                          </div>
-                          {member.phone && (
-                            <div className="flex items-center gap-2 text-sm text-gray-500">
-                              <Phone className="w-3 h-3 text-gray-400" />
-                              {member.phone}
-                            </div>
-                          )}
-                        </div>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {member.email}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {member.department_name || 'Not assigned'}
+                        IT Department
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <span
@@ -270,10 +398,18 @@ export default function FacultyPage() {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                         <div className="flex items-center gap-2">
-                          <button className="text-violet-600 hover:text-violet-900">
+                          <button 
+                            onClick={() => handleEdit(member)}
+                            className="text-violet-600 hover:text-violet-900 transition-colors"
+                            title="Edit faculty"
+                          >
                             <Edit className="w-4 h-4" />
                           </button>
-                          <button className="text-red-600 hover:text-red-900">
+                          <button 
+                            onClick={() => handleDelete(member)}
+                            className="text-red-600 hover:text-red-900 transition-colors"
+                            title="Delete faculty"
+                          >
                             <Trash2 className="w-4 h-4" />
                           </button>
                         </div>
@@ -286,22 +422,6 @@ export default function FacultyPage() {
           )}
         </div>
       </main>
-
-      {/* Add Faculty Modal - placeholder */}
-      {showModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg max-w-2xl w-full p-6">
-            <h2 className="text-xl font-bold text-gray-900 mb-4">Add Faculty Member</h2>
-            <p className="text-gray-600 mb-4">Faculty creation form coming soon...</p>
-            <button
-              onClick={() => setShowModal(false)}
-              className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { ShieldCheck, Mail, Lock, AlertCircle } from 'lucide-react'
@@ -8,11 +8,30 @@ import { useAuth } from '@/contexts/AuthContext'
 
 export default function AdminLoginPage() {
   const router = useRouter()
-  const { signIn } = useAuth()
+  const { user, loading, signIn } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+
+  // Redirect already authenticated admins
+  useEffect(() => {
+    if (!loading && user && user.role === 'admin') {
+      router.push('/admin')
+    }
+  }, [user, loading, router])
+
+  // Show loading while checking auth
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-violet-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
+          <p className="mt-4 text-gray-600">Loading...</p>
+        </div>
+      </div>
+    )
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()

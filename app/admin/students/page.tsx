@@ -12,10 +12,7 @@ interface Student {
   last_name: string
   email: string
   student_id: string
-  phone: string | null
-  department_name: string | null
   is_active: boolean
-  enrolled_sections: number
 }
 
 export default function StudentsPage() {
@@ -40,41 +37,19 @@ export default function StudentsPage() {
 
   const fetchStudents = async () => {
     try {
-      // Fetch students with their enrollment count
-      const { data, error } = await supabase
-        .from('users')
-        .select(`
-          id,
-          first_name,
-          last_name,
-          email,
-          student_id,
-          phone,
-          is_active,
-          department_id,
-          departments (name),
-          enrollments:enrollments(count)
-        `)
-        .eq('role', 'student')
-        .order('last_name', { ascending: true })
+      const response = await fetch('/api/admin/students')
+      if (!response.ok) {
+        const error = await response.json()
+        console.error('Students fetch error:', error)
+        setLoadingStudents(false)
+        return
+      }
 
-      if (error) throw error
-
-      const formattedData = data?.map((s: any) => ({
-        id: s.id,
-        first_name: s.first_name,
-        last_name: s.last_name,
-        email: s.email,
-        student_id: s.student_id,
-        phone: s.phone,
-        is_active: s.is_active,
-        department_name: s.departments?.name || null,
-        enrolled_sections: s.enrollments?.[0]?.count || 0,
-      })) || []
-
-      setStudents(formattedData)
+      const data = await response.json()
+      setStudents(data || [])
+      console.log('Students fetched:', data?.length || 0)
     } catch (error) {
-      console.error('Error fetching students:', error)
+      console.error('Exception in fetchStudents:', error)
     } finally {
       setLoadingStudents(false)
     }
@@ -109,13 +84,13 @@ export default function StudentsPage() {
                 <p className="text-sm text-gray-600 mt-1">Manage student records and enrollments</p>
               </div>
             </div>
-            <button
+            {/* <button
               onClick={() => setShowModal(true)}
               className="flex items-center gap-2 px-4 py-2 bg-violet-600 text-white rounded-lg hover:bg-violet-700 transition-colors"
             >
               <Plus className="w-4 h-4" />
               Add Student
-            </button>
+            </button> */}
           </div>
         </div>
       </header>
@@ -123,7 +98,7 @@ export default function StudentsPage() {
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
           <div className="bg-white rounded-lg shadow p-6">
             <div className="text-sm font-medium text-gray-600">Total Students</div>
             <div className="text-3xl font-bold text-gray-900 mt-2">{students.length}</div>
@@ -135,15 +110,9 @@ export default function StudentsPage() {
             </div>
           </div>
           <div className="bg-white rounded-lg shadow p-6">
-            <div className="text-sm font-medium text-gray-600">Enrolled</div>
+            <div className="text-sm font-medium text-gray-600">Face Registered</div>
             <div className="text-3xl font-bold text-blue-600 mt-2">
-              {students.filter((s) => s.enrolled_sections > 0).length}
-            </div>
-          </div>
-          <div className="bg-white rounded-lg shadow p-6">
-            <div className="text-sm font-medium text-gray-600">Not Enrolled</div>
-            <div className="text-3xl font-bold text-orange-600 mt-2">
-              {students.filter((s) => s.enrolled_sections === 0).length}
+              {students.length}
             </div>
           </div>
         </div>
@@ -184,12 +153,6 @@ export default function StudentsPage() {
                       Email
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Department
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Sections
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Status
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -214,15 +177,6 @@ export default function StudentsPage() {
                           {student.email}
                         </div>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {student.department_name || 'Not assigned'}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex items-center gap-2">
-                          <UserCheck className="w-4 h-4 text-gray-400" />
-                          <span className="text-sm text-gray-900">{student.enrolled_sections}</span>
-                        </div>
-                      </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <span
                           className={`px-2 py-1 text-xs font-medium rounded-full ${
@@ -231,7 +185,7 @@ export default function StudentsPage() {
                               : 'bg-red-100 text-red-800'
                           }`}
                         >
-                          {student.is_active ? 'Active' : 'Inactive'}
+                          {student.is_active ? 'Face Registered' : 'Not Registered'}
                         </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
