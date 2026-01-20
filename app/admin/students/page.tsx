@@ -84,13 +84,7 @@ export default function StudentsPage() {
                 <p className="text-sm text-gray-600 mt-1">Manage student records and enrollments</p>
               </div>
             </div>
-            {/* <button
-              onClick={() => setShowModal(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-violet-600 text-white rounded-lg hover:bg-violet-700 transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              Add Student
-            </button> */}
+            
           </div>
         </div>
       </header>
