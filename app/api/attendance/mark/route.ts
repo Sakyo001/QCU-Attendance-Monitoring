@@ -1,86 +1,78 @@
 import { createClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
+import { v5 as uuidv5, NIL as NAMESPACE_NIL } from 'uuid'
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
+const subaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
-const supabase = createClient(supabaseUrl, supabaseServiceKey)
+const supabase = createClient(subaseUrl, supabaseServiceKey)
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { sessionId, sectionId, studentId, faceMatchConfidence } = body
+    const { sectionId, studentId, faceMatchConfidence } = body
 
-    console.log('📝 Mark attendance request:', { sessionId, sectionId, studentId, faceMatchConfidence })
+    console.log('📝 Mark attendance request:', { sectionId, studentId, faceMatchConfidence })
 
-    if (!sessionId || !studentId) {
+    if (!sectionId || !studentId) {
       return NextResponse.json({ 
-        error: 'Session ID and student ID are required' 
+        error: 'Section ID and student ID are required' 
       }, { status: 400 })
     }
 
-    // Get student details to find student_number
-    const { data: student, error: studentError } = await supabase
+    // Get today's date
+    const todayDate = new Date().toISOString().split('T')[0]
+
+    // Generate a deterministic session ID based on section + date
+    // This ensures the same session ID for the same section on the same day
+    const sessionKey = `attendance-${sectionId}-${todayDate}`
+    const sessionId = uuidv5(sessionKey, NAMESPACE_NIL)
+    
+    console.log('📅 Generated session ID for:', sessionKey, '→', sessionId)
+
+    // First, get the student registration by ID (coming from face match)
+    const { data: registration, error: registrationError } = await supabase
       .from('student_face_registrations')
-      .select('id, student_number')
+      .select('id, first_name, last_name, student_number')
       .eq('id', studentId)
       .single()
 
-    if (studentError || !student) {
-      console.error('❌ Student not found:', studentError)
+    if (registrationError || !registration) {
+      console.error('❌ Student registration not found:', registrationError)
       return NextResponse.json({ 
-        error: 'Student not found' 
+        error: 'Student registration not found' 
       }, { status: 404 })
     }
 
-    // Fetch section code if sectionId is provided
-    let sectionCode = null
-    if (sectionId) {
-      try {
-        const { data: sectionData, error: sectionError } = await supabase
-          .from('sections')
-          .select('section_code')
-          .eq('id', sectionId)
-          .single()
+    console.log('✅ Found registration:', registration.first_name, registration.last_name)
 
-        if (sectionError) {
-          console.warn('⚠️ Could not fetch section code:', sectionError)
-        } else if (sectionData) {
-          sectionCode = sectionData.section_code
-          console.log('✅ Found section code:', sectionCode)
-        }
-      } catch (sectionFetchError) {
-        console.warn('⚠️ Error fetching section:', sectionFetchError)
-      }
-    }
-
-    // Check if attendance record already exists for this student in this session
+    // Check if attendance record already exists for today
     const { data: existing } = await supabase
       .from('attendance_records')
       .select('id, checked_in_at')
       .eq('attendance_session_id', sessionId)
-      .eq('student_number', student.student_number)
+      .eq('student_number', registration.student_number)
       .single()
 
     if (existing) {
       console.log('⏸️ Student already marked attendance at:', existing.checked_in_at)
       return NextResponse.json({
         success: true,
-        message: 'Student already marked for this session'
+        message: 'Student already marked for today'
       })
     }
 
-    // Create new attendance record
+    // Create new attendance record using actual schema columns
     const { data: insertedRecord, error: insertError } = await supabase
       .from('attendance_records')
       .insert([
         {
           attendance_session_id: sessionId,
-          student_registration_id: studentId,
-          student_number: student.student_number,
-          section_id: sectionCode || null,
+          student_registration_id: registration.id,
+          student_number: registration.student_number,
           checked_in_at: new Date().toISOString(),
+          face_match_confidence: faceMatchConfidence || null,
           status: 'present',
-          face_match_confidence: faceMatchConfidence || null
+          section_id: sectionId
         }
       ])
       .select()
@@ -99,8 +91,11 @@ export async function POST(request: NextRequest) {
     }
 
     console.log('✅ Attendance marked successfully for:', {
-      studentNumber: student.student_number,
+      studentName: `${registration.first_name} ${registration.last_name}`,
+      studentNumber: registration.student_number,
+      sectionId,
       sessionId,
+      recordId: insertedRecord?.[0]?.id,
       timestamp: new Date().toISOString()
     })
 

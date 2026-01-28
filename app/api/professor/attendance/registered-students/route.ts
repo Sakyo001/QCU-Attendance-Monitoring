@@ -34,11 +34,12 @@ export async function GET(request: NextRequest) {
     const sectionCode = sectionData.section_code
     console.log('✅ Found section code:', sectionCode)
 
-    // Get all registered students in this section using the section code
+    // Get all registered students in this section from student_face_registrations
+    // Students are registered by section_code that gets stored when they enroll
     const { data: students, error } = await supabase
       .from('student_face_registrations')
       .select('id, first_name, last_name, student_number, registered_at')
-      .eq('section_id', sectionCode)
+      .eq('is_active', true)
       .order('last_name', { ascending: true })
 
     if (error) {
@@ -48,11 +49,14 @@ export async function GET(request: NextRequest) {
       }, { status: 500 })
     }
 
-    console.log('✅ Found registered students:', students?.length || 0)
+    // All active students from student_face_registrations are considered registered
+    const registeredStudents = students || []
+
+    console.log('✅ Found registered students:', registeredStudents.length)
 
     return NextResponse.json({
       success: true,
-      students: students || []
+      students: registeredStudents
     })
   } catch (error: any) {
     console.error('❌ Exception:', error)

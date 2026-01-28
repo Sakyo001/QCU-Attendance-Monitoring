@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { Plus, Edit, Trash2, Mail, ArrowLeft, UserCheck } from 'lucide-react'
 import { createClient } from '@/utils/supabase/client'
+import Swal from 'sweetalert2'
 
 interface Student {
   id: string
@@ -37,6 +38,7 @@ export default function StudentsPage() {
 
   const fetchStudents = async () => {
     try {
+      setLoadingStudents(true)
       const response = await fetch('/api/admin/students')
       if (!response.ok) {
         const error = await response.json()
@@ -46,12 +48,197 @@ export default function StudentsPage() {
       }
 
       const data = await response.json()
+      console.log('Students fetched:', data?.length || 0, 'members')
       setStudents(data || [])
-      console.log('Students fetched:', data?.length || 0)
     } catch (error) {
       console.error('Exception in fetchStudents:', error)
     } finally {
       setLoadingStudents(false)
+    }
+  }
+
+  const handleEdit = async (student: Student) => {
+    const { value: formValues } = await Swal.fire({
+      title: 'Edit Student',
+      html: `
+        <style>
+          .edit-input-group { text-align: left; margin-bottom: 12px; }
+          .edit-input-group label { display: block; font-size: 12px; color: #666; margin-bottom: 4px; font-weight: 500; }
+          .edit-input-group input,
+          .edit-input-group select { 
+            width: 100%; 
+            padding: 8px 10px; 
+            border: 1px solid #ddd; 
+            border-radius: 4px; 
+            font-size: 14px;
+            box-sizing: border-box;
+          }
+          .edit-input-group input:focus,
+          .edit-input-group select:focus { 
+            outline: none; 
+            border-color: #7c3aed; 
+            box-shadow: 0 0 0 2px rgba(124, 58, 237, 0.1);
+          }
+        </style>
+        <div class="edit-input-group">
+          <label>First Name</label>
+          <input id="first_name" type="text" value="${student.first_name}" />
+        </div>
+        <div class="edit-input-group">
+          <label>Last Name</label>
+          <input id="last_name" type="text" value="${student.last_name}" />
+        </div>
+        <div class="edit-input-group">
+          <label>Email</label>
+          <input id="email" type="email" value="${student.email}" />
+        </div>
+        <div class="edit-input-group">
+          <label>Student ID</label>
+          <input id="student_id" type="text" value="${student.student_id}" />
+        </div>
+        <div class="edit-input-group">
+          <label>Status</label>
+          <select id="is_active">
+            <option value="true" ${student.is_active ? 'selected' : ''}>Active</option>
+            <option value="false" ${!student.is_active ? 'selected' : ''}>Inactive</option>
+          </select>
+        </div>
+      `,
+      showCancelButton: true,
+      confirmButtonText: 'Save',
+      confirmButtonColor: '#7c3aed',
+      cancelButtonText: 'Cancel',
+      allowOutsideClick: false,
+      didOpen: () => {
+        const input = document.getElementById('first_name') as HTMLInputElement
+        if (input) input.focus()
+      }
+    })
+
+    if (formValues) {
+      const firstNameInput = document.getElementById('first_name') as HTMLInputElement
+      const lastNameInput = document.getElementById('last_name') as HTMLInputElement
+      const emailInput = document.getElementById('email') as HTMLInputElement
+      const studentIdInput = document.getElementById('student_id') as HTMLInputElement
+      const isActiveInput = document.getElementById('is_active') as HTMLSelectElement
+
+      await handleUpdateStudent(
+        student.id,
+        firstNameInput.value,
+        lastNameInput.value,
+        emailInput.value,
+        studentIdInput.value,
+        isActiveInput.value === 'true'
+      )
+    }
+  }
+
+  const handleDelete = async (student: Student) => {
+    const result = await Swal.fire({
+      title: 'Delete Student',
+      html: `Are you sure you want to delete <strong>${student.first_name} ${student.last_name}</strong>? This action cannot be undone.`,
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: 'Delete',
+      confirmButtonColor: '#dc2626',
+      cancelButtonText: 'Cancel',
+      reverseButtons: true
+    })
+
+    if (result.isConfirmed) {
+      await handleDeleteStudent(student.id)
+    }
+  }
+
+  const handleUpdateStudent = async (
+    studentId: string,
+    firstName: string,
+    lastName: string,
+    email: string,
+    studentNumber: string,
+    isActive: boolean
+  ) => {
+    try {
+      console.log('🔄 Updating student:', studentId)
+      
+      const response = await fetch('/api/admin/students/update', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          studentId,
+          firstName,
+          lastName,
+          email,
+          studentNumber,
+          isActive
+        })
+      })
+
+      const result = await response.json()
+
+      if (!response.ok) {
+        console.error('❌ Update error:', result)
+        throw new Error(result.error || 'Failed to update student')
+      }
+
+      console.log('✅ Student updated successfully')
+
+      await Swal.fire({
+        title: 'Success!',
+        text: 'Student updated successfully',
+        icon: 'success',
+        confirmButtonColor: '#7c3aed'
+      })
+
+      await fetchStudents()
+    } catch (error: any) {
+      console.error('Error updating student:', error)
+      await Swal.fire({
+        title: 'Error!',
+        text: error.message || 'Failed to update student',
+        icon: 'error',
+        confirmButtonColor: '#7c3aed'
+      })
+    }
+  }
+
+  const handleDeleteStudent = async (studentId: string) => {
+    try {
+      console.log('🗑️ Deleting student:', studentId)
+      
+      const response = await fetch('/api/admin/students/delete', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId })
+      })
+
+      const result = await response.json()
+
+      if (!response.ok) {
+        console.error('❌ Delete error:', result)
+        throw new Error(result.error || 'Failed to delete student')
+      }
+
+      console.log('✅ Student deleted successfully from both database and auth')
+      
+      setStudents(prevStudents => prevStudents.filter(s => s.id !== studentId))
+
+      await Swal.fire({
+        title: 'Deleted!',
+        text: 'Student deleted successfully',
+        icon: 'success',
+        confirmButtonColor: '#7c3aed'
+      })
+
+      await fetchStudents()
+    } catch (error: any) {
+      console.error('Error deleting student:', error)
+      await Swal.fire({
+        title: 'Error!',
+        text: error.message || 'Failed to delete student',
+        icon: 'error',
+        confirmButtonColor: '#7c3aed'
+      })
     }
   }
 
@@ -184,10 +371,18 @@ export default function StudentsPage() {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                         <div className="flex items-center gap-2">
-                          <button className="text-violet-600 hover:text-violet-900">
+                          <button 
+                            onClick={() => handleEdit(student)}
+                            className="text-violet-600 hover:text-violet-900 transition-colors"
+                            title="Edit student"
+                          >
                             <Edit className="w-4 h-4" />
                           </button>
-                          <button className="text-red-600 hover:text-red-900">
+                          <button 
+                            onClick={() => handleDelete(student)}
+                            className="text-red-600 hover:text-red-900 transition-colors"
+                            title="Delete student"
+                          >
                             <Trash2 className="w-4 h-4" />
                           </button>
                         </div>

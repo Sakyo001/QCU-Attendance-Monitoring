@@ -103,7 +103,7 @@ export default function ProfessorDashboard() {
   }
 
   const handleStartSession = (sectionId: string, scheduleId: string) => {
-    router.push(`/professor/attendance/${sectionId}?schedule=${scheduleId}`)
+    router.push(`/professor/attendance/${sectionId}`)
   }
 
   const handleCreateClassroom = async (formData: any) => {

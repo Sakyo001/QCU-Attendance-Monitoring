@@ -6,13 +6,11 @@ import { useEffect, useState, useRef } from 'react'
 import { Camera, ArrowLeft } from 'lucide-react'
 import * as faceapi from 'face-api.js'
 
-type LivenessStep = 'center' | 'left' | 'right' | 'up' | 'complete'
-
-interface LivenessProgress {
-  center: boolean
-  left: boolean
-  right: boolean
-  up: boolean
+interface LivenessMetrics {
+  eyesOpen: boolean
+  faceDetected: boolean
+  headMovement: boolean
+  livenessScore: number
 }
 
 export default function StudentFaceRegistrationPage() {
@@ -114,25 +112,23 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
   const [faceDetected, setFaceDetected] = useState(false)
   const [faceDescriptor, setFaceDescriptor] = useState<Float32Array | null>(null)
   const [livenessCheck, setLivenessCheck] = useState(true)
-  const [currentStep, setCurrentStep] = useState<LivenessStep>('center')
-  const [livenessProgress, setLivenessProgress] = useState<LivenessProgress>({
-    center: false,
-    left: false,
-    right: false,
-    up: false
-  })
   const [livenessComplete, setLivenessComplete] = useState(false)
-  const [holdProgress, setHoldProgress] = useState(0)
-  const [isInValidPosition, setIsInValidPosition] = useState(false)
+  const [livenessScore, setLivenessScore] = useState(0)
+  const [livenessMetrics, setLivenessMetrics] = useState<LivenessMetrics>({
+    eyesOpen: false,
+    faceDetected: false,
+    headMovement: false,
+    livenessScore: 0
+  })
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const captureTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const detectionIntervalRef = useRef<NodeJS.Timeout | null>(null)
-  const holdCounterRef = useRef(0)
-  const isInValidPositionRef = useRef(false)
-  const currentStepRef = useRef<LivenessStep>('center')
-  const HOLD_FRAMES_REQUIRED = 3
+  const livenessFramesRef = useRef(0)
+  const previousYawRef = useRef(0)
+  const LIVENESS_THRESHOLD = 30 // Frames required to verify liveness
+  const HEAD_MOVEMENT_THRESHOLD = 5 // Minimum yaw change to detect movement
 
   // Load face-api models
   useEffect(() => {
@@ -169,14 +165,6 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
     }
   }, [showCamera, modelsLoaded])
 
-  useEffect(() => {
-    currentStepRef.current = currentStep
-    holdCounterRef.current = 0
-    setHoldProgress(0)
-    setIsInValidPosition(false)
-    isInValidPositionRef.current = false
-  }, [currentStep])
-
   const calculateHeadPose = (landmarks: faceapi.FaceLandmarks68) => {
     const points = landmarks.positions
     const noseTip = points[30]
@@ -191,93 +179,45 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
     const rightDistance = Math.abs(noseTip.x - rightEye.x)
     const yaw = -((leftDistance - rightDistance) / eyeDistance) * 100
 
-    const eyeCenterY = (leftEye.y + rightEye.y) / 2
-    const mouthCenterY = (leftMouth.y + rightMouth.y) / 2
-    const faceHeight = Math.abs(chin.y - eyeCenterY)
-    const noseMouthDistance = Math.abs(noseTip.y - mouthCenterY)
-    const pitch = ((noseMouthDistance / faceHeight) - 0.5) * 100
-
-    const eyeYDiff = rightEye.y - leftEye.y
-    const roll = (eyeYDiff / eyeDistance) * 100
-
-    return { yaw, pitch, roll }
+    return yaw
   }
 
-  const checkLivenessStep = (yaw: number, pitch: number, roll: number) => {
-    const YAW_ENTER = 12
-    const PITCH_ENTER = 5
-    const CENTER_ENTER = 25
-    const CENTER_EXIT = 30
+  const checkEyesOpen = (landmarks: faceapi.FaceLandmarks68): boolean => {
+    const points = landmarks.positions
+    const leftEyeTop = points[37]
+    const leftEyeBottom = points[41]
+    const rightEyeTop = points[43]
+    const rightEyeBottom = points[47]
 
-    let positionCorrect = false
+    const leftEyeOpen = Math.abs(leftEyeBottom.y - leftEyeTop.y) > 5
+    const rightEyeOpen = Math.abs(rightEyeBottom.y - rightEyeTop.y) > 5
 
-    switch (currentStepRef.current) {
-      case 'center':
-        if (isInValidPositionRef.current) {
-          positionCorrect = Math.abs(yaw) < CENTER_EXIT && Math.abs(pitch) < CENTER_EXIT
-        } else {
-          positionCorrect = Math.abs(yaw) < CENTER_ENTER && Math.abs(pitch) < CENTER_ENTER
-        }
-        break
-      case 'left':
-        if (isInValidPositionRef.current) {
-          positionCorrect = yaw < -YAW_ENTER + 3
-        } else {
-          positionCorrect = yaw < -YAW_ENTER
-        }
-        break
-      case 'right':
-        if (isInValidPositionRef.current) {
-          positionCorrect = yaw > YAW_ENTER - 3
-        } else {
-          positionCorrect = yaw > YAW_ENTER
-        }
-        break
-      case 'up':
-        if (isInValidPositionRef.current) {
-          positionCorrect = pitch > PITCH_ENTER - 3
-        } else {
-          positionCorrect = pitch > PITCH_ENTER
-        }
-        break
-    }
+    return leftEyeOpen && rightEyeOpen
+  }
 
-    isInValidPositionRef.current = positionCorrect
-    setIsInValidPosition(positionCorrect)
+  const updateLivenessScore = (detection: faceapi.WithFaceDescriptors<faceapi.WithFaceLandmarks<faceapi.WithFaceDetection<{}>>>) => {
+    const eyesOpen = checkEyesOpen(detection.landmarks)
+    const yaw = calculateHeadPose(detection.landmarks)
+    const headMovement = Math.abs(yaw - previousYawRef.current) > HEAD_MOVEMENT_THRESHOLD
+    
+    previousYawRef.current = yaw
 
-    if (positionCorrect) {
-      holdCounterRef.current++
-      const progress = (holdCounterRef.current / HOLD_FRAMES_REQUIRED) * 100
-      setHoldProgress(() => progress)
-
-      if (holdCounterRef.current >= HOLD_FRAMES_REQUIRED) {
-        switch (currentStepRef.current) {
-          case 'center':
-            setLivenessProgress(prev => ({ ...prev, center: true }))
-            setCurrentStep('left')
-            break
-          case 'left':
-            setLivenessProgress(prev => ({ ...prev, left: true }))
-            setCurrentStep('right')
-            break
-          case 'right':
-            setLivenessProgress(prev => ({ ...prev, right: true }))
-            setCurrentStep('up')
-            break
-          case 'up':
-            setLivenessProgress(prev => ({ ...prev, up: true }))
-            setCurrentStep('complete')
-            setLivenessComplete(true)
-            break
-        }
-      }
+    if (eyesOpen && detection) {
+      livenessFramesRef.current++
     } else {
-      if (holdCounterRef.current > 0) {
-        holdCounterRef.current = Math.max(0, holdCounterRef.current - 1)
-        const progress = (holdCounterRef.current / HOLD_FRAMES_REQUIRED) * 100
-        setHoldProgress(() => progress)
-      }
+      livenessFramesRef.current = Math.max(0, livenessFramesRef.current - 1)
     }
+
+    const score = Math.min(100, (livenessFramesRef.current / LIVENESS_THRESHOLD) * 100)
+    setLivenessScore(score)
+    setLivenessMetrics({
+      eyesOpen,
+      faceDetected: true,
+      headMovement,
+      livenessScore: score
+    })
+
+    return score >= 100
   }
 
   const startFaceDetection = async () => {
@@ -297,8 +237,10 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
           setFaceDescriptor(detection.descriptor)
 
           if (livenessCheck && !livenessComplete) {
-            const { yaw, pitch, roll } = calculateHeadPose(detection.landmarks)
-            checkLivenessStep(yaw, pitch, roll)
+            const isLive = updateLivenessScore(detection)
+            if (isLive) {
+              setLivenessComplete(true)
+            }
           }
 
           if (!livenessCheck || livenessComplete) {
@@ -313,6 +255,7 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
         } else {
           setFaceDetected(false)
           setFaceDescriptor(null)
+          livenessFramesRef.current = 0
           if (captureTimeoutRef.current) {
             clearTimeout(captureTimeoutRef.current)
             captureTimeoutRef.current = null
@@ -364,18 +307,16 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
     setIsCapturing(false)
     setFaceDetected(false)
     setFaceDescriptor(null)
-    setCurrentStep('center')
-    setLivenessProgress({
-      center: false,
-      left: false,
-      right: false,
-      up: false
-    })
     setLivenessComplete(false)
-    setHoldProgress(0)
-    setIsInValidPosition(false)
-    isInValidPositionRef.current = false
-    holdCounterRef.current = 0
+    setLivenessScore(0)
+    setLivenessMetrics({
+      eyesOpen: false,
+      faceDetected: false,
+      headMovement: false,
+      livenessScore: 0
+    })
+    livenessFramesRef.current = 0
+    previousYawRef.current = 0
   }
 
   const capturePhoto = () => {
@@ -409,17 +350,31 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
     setIsSubmitting(true)
 
     try {
+      // Convert face descriptor to a plain array that can be JSON serialized
+      let descriptorArray = null
+      if (faceDescriptor) {
+        descriptorArray = Array.isArray(faceDescriptor) 
+          ? faceDescriptor 
+          : Array.from(faceDescriptor)
+      }
+
       const requestBody = {
-        studentId,
+        studentId: formData.studentNumber,
+        email: `${formData.firstName.toLowerCase()}.${formData.lastName.toLowerCase()}@student.edu`,
         firstName: formData.firstName,
         lastName: formData.lastName,
         middleInitial: formData.middleInitial,
-        studentNumber: formData.studentNumber,
         faceData: capturedImage,
-        faceDescriptor: faceDescriptor ? Array.from(faceDescriptor) : null
+        faceDescriptor: descriptorArray
       }
 
-      const response = await fetch('/api/student/face-registration/register', {
+      console.log('📤 Sending registration with:', {
+        ...requestBody,
+        faceData: 'base64 image',
+        faceDescriptor: descriptorArray ? `array of ${descriptorArray.length} values` : null
+      })
+
+      const response = await fetch('/api/student/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody)
@@ -568,22 +523,19 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
                         <>
                           <div className="bg-black/70 backdrop-blur-sm px-6 py-3 rounded-full">
                             <p className="text-white font-bold text-base">
-                              {currentStep === 'center' && '📍 Look straight at the camera'}
-                              {currentStep === 'left' && '👈 Turn your head LEFT'}
-                              {currentStep === 'right' && '👉 Turn your head RIGHT'}
-                              {currentStep === 'up' && '👆 Look UP'}
+                              📍 Look at the camera - ensure good lighting
                             </p>
                           </div>
-                          {isInValidPosition && holdProgress > 0 && (
+                          {faceDetected && livenessScore > 0 && (
                             <div className="bg-black/70 backdrop-blur-sm px-4 py-2 rounded-full">
                               <div className="flex items-center gap-2">
                                 <div className="w-32 h-2 bg-gray-600 rounded-full overflow-hidden">
                                   <div
                                     className="h-full bg-blue-400 transition-all duration-100"
-                                    style={{ width: `${holdProgress}%` }}
+                                    style={{ width: `${livenessScore}%` }}
                                   ></div>
                                 </div>
-                                <span className="text-white text-xs font-medium">Hold...</span>
+                                <span className="text-white text-xs font-medium">{Math.round(livenessScore)}%</span>
                               </div>
                             </div>
                           )}
@@ -619,22 +571,21 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
 
                     {livenessCheck && !livenessComplete && (
                       <div className="absolute right-6 top-1/2 transform -translate-y-1/2 bg-black/70 backdrop-blur-sm rounded-lg p-4 flex flex-col gap-3">
-                        <div className="text-xs font-bold text-white mb-2">Progress</div>
-                        <div className={`flex items-center gap-2 ${livenessProgress.center ? 'text-blue-400' : 'text-gray-400'}`}>
-                          <div className={`w-2 h-2 rounded-full ${livenessProgress.center ? 'bg-blue-400' : 'bg-gray-500'}`}></div>
-                          <span className="text-xs">Center</span>
+                        <div className="text-xs font-bold text-white mb-2">Liveness Metrics</div>
+                        <div className={`flex items-center gap-2 ${livenessMetrics.faceDetected ? 'text-blue-400' : 'text-gray-400'}`}>
+                          <div className={`w-2 h-2 rounded-full ${livenessMetrics.faceDetected ? 'bg-blue-400' : 'bg-gray-500'}`}></div>
+                          <span className="text-xs">Face Detected</span>
                         </div>
-                        <div className={`flex items-center gap-2 ${livenessProgress.left ? 'text-blue-400' : 'text-gray-400'}`}>
-                          <div className={`w-2 h-2 rounded-full ${livenessProgress.left ? 'bg-blue-400' : 'bg-gray-500'}`}></div>
-                          <span className="text-xs">Left</span>
+                        <div className={`flex items-center gap-2 ${livenessMetrics.eyesOpen ? 'text-blue-400' : 'text-gray-400'}`}>
+                          <div className={`w-2 h-2 rounded-full ${livenessMetrics.eyesOpen ? 'bg-blue-400' : 'bg-gray-500'}`}></div>
+                          <span className="text-xs">Eyes Open</span>
                         </div>
-                        <div className={`flex items-center gap-2 ${livenessProgress.right ? 'text-blue-400' : 'text-gray-400'}`}>
-                          <div className={`w-2 h-2 rounded-full ${livenessProgress.right ? 'bg-blue-400' : 'bg-gray-500'}`}></div>
-                          <span className="text-xs">Right</span>
+                        <div className={`flex items-center gap-2 ${livenessMetrics.headMovement ? 'text-blue-400' : 'text-gray-400'}`}>
+                          <div className={`w-2 h-2 rounded-full ${livenessMetrics.headMovement ? 'bg-blue-400' : 'bg-gray-500'}`}></div>
+                          <span className="text-xs">Head Movement</span>
                         </div>
-                        <div className={`flex items-center gap-2 ${livenessProgress.up ? 'text-blue-400' : 'text-gray-400'}`}>
-                          <div className={`w-2 h-2 rounded-full ${livenessProgress.up ? 'bg-blue-400' : 'bg-gray-500'}`}></div>
-                          <span className="text-xs">Up</span>
+                        <div className="mt-2 pt-2 border-t border-gray-600">
+                          <div className="text-xs font-bold text-blue-400">Liveness: {Math.round(livenessScore)}%</div>
                         </div>
                       </div>
                     )}
@@ -665,16 +616,15 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
                       setCapturedImage(null)
                       setFaceDescriptor(null)
                       setLivenessComplete(false)
-                      setCurrentStep('center')
-                      setLivenessProgress({
-                        center: false,
-                        left: false,
-                        right: false,
-                        up: false
+                      setLivenessScore(0)
+                      setLivenessMetrics({
+                        eyesOpen: false,
+                        faceDetected: false,
+                        headMovement: false,
+                        livenessScore: 0
                       })
-                      setHoldProgress(0)
-                      setIsInValidPosition(false)
-                      holdCounterRef.current = 0
+                      livenessFramesRef.current = 0
+                      previousYawRef.current = 0
                       startCamera()
                     }}
                     className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"

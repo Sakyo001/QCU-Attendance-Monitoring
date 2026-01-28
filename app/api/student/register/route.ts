@@ -30,6 +30,39 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'First name, last name, student ID, and email are required' }, { status: 400 })
     }
 
+    // Pre-check: verify email doesn't exist in users table
+    const { data: existingUser, error: checkUserError } = await supabase
+      .from('users')
+      .select('id, email')
+      .eq('email', email)
+      .limit(1)
+
+    if (checkUserError) {
+      console.error('Error checking existing user:', checkUserError)
+      return NextResponse.json({ error: 'Failed to validate email' }, { status: 500 })
+    }
+
+    if (existingUser && existingUser.length > 0) {
+      return NextResponse.json({ 
+        error: 'This email is already registered in the system'
+      }, { status: 400 })
+    }
+
+    // Pre-check: verify email doesn't exist in auth.users table
+    const { data: authUsers, error: authListError } = await supabase.auth.admin.listUsers()
+
+    if (authListError) {
+      console.error('Error checking auth users:', authListError)
+      return NextResponse.json({ error: 'Failed to validate email' }, { status: 500 })
+    }
+
+    const emailExistsInAuth = authUsers.users.some(user => user.email === email)
+    if (emailExistsInAuth) {
+      return NextResponse.json({ 
+        error: 'This email is already registered. Please use a different email address.'
+      }, { status: 400 })
+    }
+
     const password = 'student123'
 
     // Create Supabase Auth user
@@ -152,16 +185,17 @@ export async function POST(request: NextRequest) {
         face_data_length: (imagePath || faceData)?.length || 0,
         face_descriptor_type: typeof faceDescriptor,
         face_descriptor_is_array: Array.isArray(faceDescriptor),
-        face_descriptor_length: Array.isArray(faceDescriptor) ? faceDescriptor.length : 'N/A'
+        face_descriptor_length: Array.isArray(faceDescriptor) ? faceDescriptor.length : (faceDescriptor ? faceDescriptor.length : 0),
+        final_descriptor_is_array: Array.isArray(faceDescriptor) || (faceDescriptor && typeof faceDescriptor === 'object'),
+        final_descriptor_length: Array.isArray(faceDescriptor) ? faceDescriptor.length : (faceDescriptor?.length || 0)
       })
 
       const insertPayload = {
         student_number: studentId,
         first_name: firstName,
         last_name: lastName,
-        section_id: sectionCode || null,
         face_data: imagePath || faceData || null,
-        face_descriptor: faceDescriptor || null,
+        face_descriptor: Array.isArray(faceDescriptor) ? faceDescriptor : (faceDescriptor ? Array.from(faceDescriptor) : null),
         is_active: true
       }
 

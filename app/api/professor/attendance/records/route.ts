@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { v5 as uuidv5, NIL as NAMESPACE_NIL } from 'uuid'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -8,106 +9,99 @@ const supabase = createClient(
 
 export async function GET(request: NextRequest) {
   try {
-    const sessionId = request.nextUrl.searchParams.get('sessionId')
+    const sectionId = request.nextUrl.searchParams.get('sectionId')
 
-    if (!sessionId) {
+    if (!sectionId) {
       return NextResponse.json(
-        { success: false, error: 'Session ID required' },
+        { success: false, error: 'Section ID required' },
         { status: 400 },
       )
     }
 
-    // Fetch attendance session details to get shift_opened_at
-    const { data: sessionData, error: sessionError } = await supabase
-      .from('attendance_sessions')
-      .select('id, shift_opened_at')
-      .eq('id', sessionId)
-      .single()
+    // Get today's date in ISO format (YYYY-MM-DD)
+    const todayDate = new Date().toISOString().split('T')[0]
 
-    if (sessionError || !sessionData) {
-      console.error('Error fetching session:', sessionError)
+    // Get all registered students in this section
+    const { data: allRegisteredStudents, error: allStudentsError } = await supabase
+      .from('student_face_registrations')
+      .select('id, first_name, last_name, student_number')
+      .eq('is_active', true)
+      .order('last_name', { ascending: true })
+
+    if (allStudentsError) {
+      console.error('Error fetching all registered students:', allStudentsError)
       return NextResponse.json(
-        { success: false, error: 'Session not found' },
-        { status: 404 },
+        { success: false, error: allStudentsError.message },
+        { status: 500 },
       )
     }
 
-    // Fetch attendance records using the correct column name
+    const registeredStudents = allRegisteredStudents || []
+    console.log('📚 Found', registeredStudents.length, 'registered students')
+
+    // Get student numbers to look up in users table
+    const studentNumbers = registeredStudents.map(s => s.student_number)
+
+    // Fetch users by student_number to get their IDs
+    const { data: usersData, error: usersError } = await supabase
+      .from('users')
+      .select('id, student_id, first_name, last_name')
+      .in('student_id', studentNumbers)
+
+    if (usersError) {
+      console.error('Error fetching users:', usersError)
+      // Continue anyway, we'll just show all as absent
+    }
+
+    // Create a map of users by student_id for lookup
+    const usersMap = new Map(usersData?.map((u: any) => [u.student_id, u]) ?? [])
+
+    // Now fetch TODAY'S attendance records using attendance_session_id pattern
+    // Generate today's session ID: same as in mark API
+    const sessionKey = `attendance-${sectionId}-${todayDate}`
+    const sessionId = uuidv5(sessionKey, NAMESPACE_NIL)
+    
     const { data: recordsData, error: recordsError } = await supabase
       .from('attendance_records')
-      .select('id, attendance_session_id, student_registration_id, student_number, checked_in_at, status, face_match_confidence, created_at')
+      .select('id, student_registration_id, student_number, checked_in_at, face_match_confidence, status, section_id')
+      .eq('section_id', sectionId)
       .eq('attendance_session_id', sessionId)
       .order('checked_in_at', { ascending: true })
 
     if (recordsError) {
       console.error('Error fetching attendance records:', recordsError)
-      return NextResponse.json(
-        { success: false, error: recordsError.message },
-        { status: 500 },
-      )
+      // Continue anyway
     }
 
-    if (!recordsData || recordsData.length === 0) {
-      return NextResponse.json({
-        success: true,
-        records: [],
-      })
-    }
+    console.log('📋 Found', recordsData?.length || 0, 'attendance records for today')
 
-    // Get unique student numbers from records
-    const studentNumbers = [...new Set(recordsData.map((r: any) => r.student_number))]
+    // Create a map of today's attendance records by student_number for quick lookup
+    const attendanceMap = new Map()
+    recordsData?.forEach((record: any) => {
+      attendanceMap.set(record.student_number, record)
+    })
 
-    // Fetch student details from student_face_registrations
-    const { data: studentsData, error: studentsError } = await supabase
-      .from('student_face_registrations')
-      .select('student_number, first_name, last_name')
-      .in('student_number', studentNumbers)
-
-    if (studentsError) {
-      console.error('Error fetching students:', studentsError)
-      return NextResponse.json(
-        { success: false, error: studentsError.message },
-        { status: 500 },
-      )
-    }
-
-    // Create a map of students by student_number for quick lookup
-    const studentsMap = new Map(studentsData?.map((s: any) => [s.student_number, s]) ?? [])
-
-    // Calculate status based on timing
-    const shiftOpenTime = new Date(sessionData.shift_opened_at).getTime()
-    const lateThreshold = shiftOpenTime + 30 * 60 * 1000 // 30 minutes
-
-    // Transform response to flatten student data and calculate status
-    const records = recordsData.map((record: any) => {
-      const student = studentsMap.get(record.student_number)
-      const checkedInTime = new Date(record.checked_in_at).getTime()
+    // Merge: ALL registered students + today's attendance status
+    const records = registeredStudents.map((student: any) => {
+      // Get the user record to find their actual user ID
+      const user = usersMap.get(student.student_number)
+      const userId = user?.id
       
-      // Determine status based on time
-      let computedStatus = record.status || 'present'
-      if (checkedInTime > lateThreshold) {
-        computedStatus = 'late'
-      }
-
-      console.log('📊 Processing record:', {
-        recordId: record.id,
-        studentRegistrationId: record.student_registration_id,
-        studentNumber: record.student_number,
-        studentName: `${student?.first_name} ${student?.last_name}`,
-        status: computedStatus
-      })
-
+      // Look up attendance record using student_number (this is what's stored in attendance_records)
+      const attendance = attendanceMap.get(student.student_number)
+      
       return {
-        id: record.id,
-        student_registration_id: record.student_registration_id,
-        attendance_session_id: record.attendance_session_id,
-        student_number: record.student_number,
-        checked_in_at: record.checked_in_at,
-        status: computedStatus,
-        face_match_confidence: record.face_match_confidence,
-        created_at: record.created_at,
-        first_name: student?.first_name,
-        last_name: student?.last_name,
+        id: student.id,
+        student_id: userId || student.id,
+        student_number: student.student_number,
+        first_name: student.first_name,
+        last_name: student.last_name,
+        time_recorded: attendance?.checked_in_at || null,
+        checked_in_at: attendance?.checked_in_at || null,
+        status: attendance?.status || 'absent',
+        face_match_confidence: attendance?.face_match_confidence || null,
+        created_at: attendance?.checked_in_at || new Date().toISOString(),
+        section_id: sectionId,
       }
     })
 

@@ -15,10 +15,14 @@ interface AttendanceStats {
 }
 
 interface SectionReport {
+  id: string
   section_name: string
   course_code: string
   professor_name: string
-  total_students: number
+  total_attendance_records: number
+  present_count: number
+  absent_count: number
+  late_count: number
   attendance_rate: number
 }
 
@@ -54,70 +58,25 @@ export default function ReportsPage() {
   const fetchReports = async () => {
     setLoadingData(true)
     try {
-      // Fetch overall attendance stats
-      let query = supabase
-        .from('attendance_records')
-        .select('status')
+      // Build query parameters
+      const params = new URLSearchParams()
+      if (dateFrom) params.append('dateFrom', dateFrom)
+      if (dateTo) params.append('dateTo', dateTo)
 
-      if (dateFrom) {
-        query = query.gte('date', dateFrom)
-      }
-      if (dateTo) {
-        query = query.lte('date', dateTo)
+      const response = await fetch(`/api/admin/reports?${params.toString()}`)
+      if (!response.ok) {
+        throw new Error('Failed to fetch reports')
       }
 
-      const { data: attendanceData } = await query
+      const data = await response.json()
 
-      if (attendanceData) {
-        const presentCount = attendanceData.filter(r => r.status === 'present').length
-        const absentCount = attendanceData.filter(r => r.status === 'absent').length
-        const lateCount = attendanceData.filter(r => r.status === 'late').length
-        const totalRecords = attendanceData.length
-
-        setStats({
-          totalRecords,
-          presentCount,
-          absentCount,
-          lateCount,
-          attendanceRate: totalRecords > 0 ? (presentCount / totalRecords) * 100 : 0,
+      if (data.success) {
+        setStats(data.stats)
+        setSectionReports(data.sections)
+        console.log('✅ Reports loaded:', {
+          stats: data.stats,
+          sections: data.sections?.length || 0
         })
-      }
-
-      // Fetch section-wise reports
-      const { data: sections } = await supabase
-        .from('sections')
-        .select(`
-          id,
-          section_name,
-          courses (course_code),
-          users!professor_id (first_name, last_name),
-          enrollments (count)
-        `)
-
-      if (sections) {
-        const reports: SectionReport[] = []
-        
-        for (const section of sections) {
-          const { data: sectionAttendance } = await supabase
-            .from('attendance_records')
-            .select('status')
-            .eq('section_id', section.id)
-
-          const totalRecords = sectionAttendance?.length || 0
-          const presentCount = sectionAttendance?.filter(r => r.status === 'present').length || 0
-
-          reports.push({
-            section_name: section.section_name,
-            course_code: (section.courses as any)?.course_code || 'N/A',
-            professor_name: section.users 
-              ? `${(section.users as any).first_name} ${(section.users as any).last_name}`
-              : 'Unassigned',
-            total_students: Array.isArray(section.enrollments) ? section.enrollments.length : 0,
-            attendance_rate: totalRecords > 0 ? (presentCount / totalRecords) * 100 : 0,
-          })
-        }
-
-        setSectionReports(reports)
       }
     } catch (error) {
       console.error('Error fetching reports:', error)
@@ -278,7 +237,13 @@ export default function ReportsPage() {
                     Professor
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Students
+                    Present
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Absent
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Late
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Attendance Rate
@@ -288,13 +253,13 @@ export default function ReportsPage() {
               <tbody className="bg-white divide-y divide-gray-200">
                 {sectionReports.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="px-6 py-8 text-center text-gray-500">
+                    <td colSpan={7} className="px-6 py-8 text-center text-gray-500">
                       No data available
                     </td>
                   </tr>
                 ) : (
-                  sectionReports.map((report, index) => (
-                    <tr key={index} className="hover:bg-gray-50">
+                  sectionReports.map((report) => (
+                    <tr key={report.id} className="hover:bg-gray-50">
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="font-medium text-gray-900">{report.section_name}</div>
                       </td>
@@ -304,8 +269,20 @@ export default function ReportsPage() {
                       <td className="px-6 py-4 whitespace-nowrap text-gray-600">
                         {report.professor_name}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-gray-600">
-                        {report.total_students}
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className="px-2 py-1 bg-green-100 text-green-800 text-xs font-medium rounded-full">
+                          {report.present_count}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className="px-2 py-1 bg-red-100 text-red-800 text-xs font-medium rounded-full">
+                          {report.absent_count}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className="px-2 py-1 bg-yellow-100 text-yellow-800 text-xs font-medium rounded-full">
+                          {report.late_count}
+                        </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center gap-2">

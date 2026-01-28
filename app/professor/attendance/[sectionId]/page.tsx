@@ -5,6 +5,7 @@ import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import { useEffect, useState, useRef } from 'react'
 import { ArrowLeft, Loader2, Camera, RefreshCw, Check, X, ShieldCheck, Clock, Users, Plus } from 'lucide-react'
 import * as faceapi from 'face-api.js'
+import { usePassiveLivenessDetection } from '@/hooks/usePassiveLivenessDetection'
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
@@ -39,19 +40,14 @@ export default function AttendancePage() {
   const { user, loading } = useAuth()
   const router = useRouter()
   const params = useParams()
-  const searchParams = useSearchParams()
   const sectionId = params.sectionId as string
-  const scheduleId = searchParams.get('schedule')
 
   const [checkingRegistration, setCheckingRegistration] = useState(true)
   const [isRegistered, setIsRegistered] = useState(false)
-  const [attendanceSession, setAttendanceSession] = useState<AttendanceSession | null>(null)
-  const [loadingSession, setLoadingSession] = useState(true)
   const [showStudentRegModal, setShowStudentRegModal] = useState(false)
   const [showFaceRecognitionModal, setShowFaceRecognitionModal] = useState(false)
-  const [attendanceRecords, setAttendanceRecords] = useState<any[]>([])
-  const [registeredStudents, setRegisteredStudents] = useState<any[]>([])
   const [mergedAttendanceData, setMergedAttendanceData] = useState<any[]>([])
+  const [loadingRecords, setLoadingRecords] = useState(true)
 
   useEffect(() => {
     if (!loading && (!user || (user.role !== 'professor' && user.role !== 'adviser'))) {
@@ -61,8 +57,7 @@ export default function AttendancePage() {
 
     if (!loading && user) {
       checkFaceRegistration()
-      fetchAttendanceSession()
-      fetchRegisteredStudents()
+      fetchTodayAttendanceRecords()
     }
   }, [user, loading, router])
 
@@ -90,24 +85,26 @@ export default function AttendancePage() {
     }
   }
 
-  const fetchAttendanceSession = async () => {
+  const fetchTodayAttendanceRecords = async () => {
     try {
-      setLoadingSession(true)
-      const response = await fetch(`/api/professor/attendance/session?classSessionId=${scheduleId}`)
+      setLoadingRecords(true)
+      const response = await fetch(`/api/professor/attendance/records?sectionId=${sectionId}`)
       const data = await response.json()
-
-      if (data.success && data.session) {
-        setAttendanceSession(data.session)
-        // Fetch attendance records for this session
-        await fetchAttendanceRecords(data.session.id)
-      } else if (data.success) {
-        // Session doesn't exist yet
-        setAttendanceSession(null)
+      
+      if (data.success) {
+        const records = data.records || []
+        // Records API already returns ALL students with merged attendance status
+        // Just sort by status and set directly
+        const sorted = records.sort((a: any, b: any) => {
+          const statusOrder = { present: 0, late: 1, absent: 2 }
+          return (statusOrder[a.status as keyof typeof statusOrder] || 999) - (statusOrder[b.status as keyof typeof statusOrder] || 999)
+        })
+        setMergedAttendanceData(sorted)
       }
     } catch (error) {
-      // Error fetching session
+      console.error('Error fetching records:', error)
     } finally {
-      setLoadingSession(false)
+      setLoadingRecords(false)
     }
   }
 
@@ -117,152 +114,23 @@ export default function AttendancePage() {
       const data = await response.json()
       
       if (data.success) {
-        setRegisteredStudents(data.students || [])
+        // This is now just for reference, the actual display uses mergedAttendanceData from records API
+        console.log('Registered students:', data.students?.length || 0)
       }
     } catch (error) {
-      // Error fetching students
+      console.error('Error fetching registered students:', error)
     }
   }
 
-  const fetchAttendanceRecords = async (sessionId: string | undefined) => {
-    if (!sessionId) return
-    try {
-      const response = await fetch(`/api/professor/attendance/records?sessionId=${sessionId}`)
-      const data = await response.json()
-      
-      if (data.success) {
-        const records = data.records || []
-        setAttendanceRecords(records)
-        // Note: merge will happen automatically via useEffect when both registeredStudents and attendanceRecords are ready
-      }
-    } catch (error) {
-      // Error fetching records
-    }
-  }
-
-  const mergeAttendanceData = (records: any[]) => {
-    // Create a map of attended students for quick lookup using student_number
-    const attendedStudentsMap = new Map()
-    records.forEach(record => {
-      attendedStudentsMap.set(record.student_number, record)
-    })
-
-    // Merge: all registered students + mark attendance status
-    const merged = registeredStudents.map(student => {
-      const attendance = attendedStudentsMap.get(student.student_number)
-      const displayStatus = attendance?.status || 'absent'
-      
-      return {
-        ...student,
-        checked_in_at: attendance?.checked_in_at || null,
-        // Use the actual status from attendance_records if it exists, otherwise 'absent'
-        status: displayStatus
-      }
-    })
-
-    // Sort by status (present/late first, then absent)
-    const sorted = merged.sort((a, b) => {
-      const statusOrder = { present: 0, late: 1, absent: 2 }
-      return (statusOrder[a.status as keyof typeof statusOrder] || 999) - (statusOrder[b.status as keyof typeof statusOrder] || 999)
-    })
-
-    setMergedAttendanceData(sorted)
-  }
-
-  // Update merged data when either attendance records or registered students change
-  useEffect(() => {
-    // Always merge when we have registered students (even if no attendance records yet)
-    if (registeredStudents.length > 0) {
-      mergeAttendanceData(attendanceRecords)
-    }
-  }, [attendanceRecords, registeredStudents])
-
-  const handleOpenShift = async () => {
-    try {
-      const response = await fetch('/api/professor/attendance/session/open', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          classSessionId: scheduleId,
-          professorId: user?.id
-        })
-      })
-      
-      if (!response.ok) {
-        alert(`Failed to open shift: ${response.status} ${response.statusText}`)
-        return
-      }
-      
-      const data = await response.json()
-
-      if (data.success && data.session) {
-        setAttendanceSession(data.session)
-        await logShiftEvent(data.session.id, 'shift_open')
-        // Fetch initial attendance records
-        await fetchAttendanceRecords(data.session.id)
-        // Show facial recognition for attendance
-        setShowFaceRecognitionModal(true)
-      } else {
-        alert(data.error || 'Failed to open shift - no session returned')
-      }
-    } catch (error: any) {
-      alert('Failed to open shift: ' + error.message)
-    }
-  }
-
-  const handleCloseShift = async () => {
-    if (!attendanceSession) return
-
-    try {
-      const response = await fetch('/api/professor/attendance/session/close', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: attendanceSession.id
-        })
-      })
-
-      if (!response.ok) {
-        alert(`Failed to close shift: ${response.status}`)
-        return
-      }
-
-      const data = await response.json()
-
-      if (data.success && data.session) {
-        setAttendanceSession(data.session)
-        await logShiftEvent(attendanceSession.id, 'shift_close')
-        alert('Shift closed successfully!')
-      } else {
-        alert(data.error || 'Failed to close shift')
-      }
-    } catch (error: any) {
-      alert('Failed to close shift: ' + error.message)
-    }
-  }
-
-  const logShiftEvent = async (sessionId: string, eventType: 'shift_open' | 'shift_close') => {
-    try {
-      await fetch('/api/professor/attendance/log', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId,
-          eventType,
-          professorId: user?.id
-        })
-      })
-    } catch (error) {
-      // Error logging event
-    }
-  }
 
   const handleRegistrationComplete = () => {
     setIsRegistered(true)
     checkFaceRegistration()
+    // Refresh attendance records to show newly registered student
+    fetchTodayAttendanceRecords()
   }
 
-  if (loading || checkingRegistration || loadingSession) {
+  if (loading || checkingRegistration || loadingRecords) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <Loader2 className="w-8 h-8 animate-spin text-primary" />
@@ -284,8 +152,6 @@ export default function AttendancePage() {
     )
   }
 
-  const isShiftActive = attendanceSession?.is_active || false
-
   return (
     <div className="min-h-screen bg-neutral-50/50">
       {/* Header */}
@@ -295,18 +161,13 @@ export default function AttendancePage() {
         </Button>
         <div className="flex-1">
           <h1 className="text-lg font-semibold tracking-tight">Class Session</h1>
-          <p className="text-xs text-muted-foreground hidden sm:block">Manage attendance and session status</p>
+          <p className="text-xs text-muted-foreground hidden sm:block">Manage attendance for today</p>
         </div>
         <div className="flex items-center gap-2">
-          {!isShiftActive ? (
-            <Button onClick={handleOpenShift} className="gap-2 font-medium">
-              Open Shift
-            </Button>
-          ) : (
-            <Button variant="destructive" onClick={handleCloseShift} className="gap-2 font-medium">
-              Close Shift
-            </Button>
-          )}
+          <Button onClick={() => setShowFaceRecognitionModal(true)} className="gap-2 font-medium">
+            <Camera className="h-4 w-4" />
+            Mark Attendance
+          </Button>
           <Button variant="outline" size="sm" onClick={() => setShowStudentRegModal(true)} className="gap-2">
             <Plus className="h-4 w-4" />
             Register Student
@@ -317,41 +178,18 @@ export default function AttendancePage() {
       {/* Main Content */}
       <main className="container max-w-6xl py-8 space-y-8 px-6">
         {/* Status Indicators */}
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-2">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Session Status</CardTitle>
-              {isShiftActive ? (
-                 <Badge className="bg-emerald-600 hover:bg-emerald-700">Active</Badge>
-              ) : (
-                 <Badge variant="secondary">Inactive</Badge>
-              )}
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">
-                {isShiftActive ? 'Live' : 'Closed'}
-              </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                {isShiftActive 
-                  ? 'Students can mark attendance.' 
-                  : 'Start session to enable attendance.'}
-              </p>
-            </CardContent>
-          </Card>
-          
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-               <CardTitle className="text-sm font-medium">Start Time</CardTitle>
+               <CardTitle className="text-sm font-medium">Today's Date</CardTitle>
                <Clock className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">
-                {attendanceSession?.shift_opened_at 
-                  ? new Date(attendanceSession.shift_opened_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) 
-                  : '--:--'}
+                {new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
               </div>
                <p className="text-xs text-muted-foreground mt-1">
-                Session started at
+                Daily attendance tracking
               </p>
             </CardContent>
           </Card>
@@ -381,21 +219,6 @@ export default function AttendancePage() {
                  {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
                </p>
              </div>
-             {isShiftActive && (
-               <div className="flex items-center gap-2">
-                 <Button 
-                   onClick={() => setShowFaceRecognitionModal(true)}
-                   className="gap-2 bg-emerald-600 hover:bg-emerald-700"
-                 >
-                   <Camera className="h-4 w-4" />
-                   Mark Attendance
-                 </Button>
-                 <div className="flex items-center gap-2 text-xs text-emerald-600 font-medium animate-pulse">
-                   <div className="w-2 h-2 rounded-full bg-emerald-600" />
-                   Live
-                 </div>
-               </div>
-             )}
           </div>
           
           <div className="rounded-lg border bg-card text-card-foreground shadow-sm overflow-hidden">
@@ -450,17 +273,22 @@ export default function AttendancePage() {
         <StudentRegistrationModal
           sectionId={sectionId}
           onClose={() => setShowStudentRegModal(false)}
+          onRegistrationSuccess={() => {
+            setShowStudentRegModal(false)
+            fetchRegisteredStudents()
+          }}
         />
       )}
 
       {/* Attendance Recognition Modal */}
-      {showFaceRecognitionModal && attendanceSession && (
+      {showFaceRecognitionModal && (
         <AttendanceRecognitionModal
-          sessionId={attendanceSession.id}
           sectionId={sectionId}
           isOpen={showFaceRecognitionModal}
           onClose={() => setShowFaceRecognitionModal(false)}
-          onStudentMarked={() => fetchAttendanceRecords(attendanceSession.id)}
+          onStudentMarked={async () => {
+            await fetchTodayAttendanceRecords()
+          }}
         />
       )}
     </div>
@@ -472,6 +300,7 @@ export default function AttendancePage() {
 interface StudentRegistrationModalProps {
   sectionId: string
   onClose: () => void
+  onRegistrationSuccess?: () => void
 }
 
 interface StudentCredentials {
@@ -490,7 +319,7 @@ interface StudentLivenessProgress {
   up: boolean
 }
 
-function StudentRegistrationModal({ sectionId, onClose }: StudentRegistrationModalProps) {
+function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }: StudentRegistrationModalProps) {
   const [formData, setFormData] = useState({
     firstName: '',
     lastName: '',
@@ -505,27 +334,114 @@ function StudentRegistrationModal({ sectionId, onClose }: StudentRegistrationMod
   const [modelsLoaded, setModelsLoaded] = useState(false)
   const [faceDetected, setFaceDetected] = useState(false)
   const [faceDescriptor, setFaceDescriptor] = useState<Float32Array | null>(null)
-  const [currentStep, setCurrentStep] = useState<StudentLivenessStep>('center')
-  const [livenessProgress, setLivenessProgress] = useState<StudentLivenessProgress>({
-    center: false,
-    left: false,
-    right: false,
-    up: false
-  })
   const [livenessComplete, setLivenessComplete] = useState(false)
-  const [holdProgress, setHoldProgress] = useState(0)
-  const [isInValidPosition, setIsInValidPosition] = useState(false)
+  const [livenessScore, setLivenessScore] = useState(0)
+  const [livenessMetrics, setLivenessMetrics] = useState({
+    eyesOpen: false,
+    faceDetected: false,
+    headMovement: false,
+    livenessScore: 0
+  })
   const [credentials, setCredentials] = useState<StudentCredentials | null>(null)
+  const [validationErrors, setValidationErrors] = useState<{
+    studentId?: string
+    email?: string
+  }>({})
+  const [checkingEmail, setCheckingEmail] = useState(false)
+  const [checkingStudentId, setCheckingStudentId] = useState(false)
+
+  const { livenessScore: hookLivenessScore, livenessMetrics: hookLivenessMetrics, updateLivenessScore, resetLiveness } = usePassiveLivenessDetection()
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const captureTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const detectionIntervalRef = useRef<NodeJS.Timeout | null>(null)
-  const holdCounterRef = useRef(0)
-  const isInValidPositionRef = useRef(false)
-  const currentStepRef = useRef<StudentLivenessStep>('center')
 
-  const HOLD_FRAMES_REQUIRED = 3
+  // Sync hook values to component state
+  useEffect(() => {
+    setLivenessScore(hookLivenessScore)
+    setLivenessMetrics(hookLivenessMetrics)
+  }, [hookLivenessScore, hookLivenessMetrics])
+
+  // Validate email uniqueness
+  useEffect(() => {
+    const validateEmail = async () => {
+      if (!formData.email) {
+        setValidationErrors(prev => {
+          const newErrors = { ...prev }
+          delete newErrors.email
+          return newErrors
+        })
+        return
+      }
+
+      setCheckingEmail(true)
+      try {
+        const response = await fetch(`/api/student/check-email?email=${encodeURIComponent(formData.email)}`)
+        const data = await response.json()
+
+        if (data.exists) {
+          setValidationErrors(prev => ({
+            ...prev,
+            email: 'This email is already registered'
+          }))
+        } else {
+          setValidationErrors(prev => {
+            const newErrors = { ...prev }
+            delete newErrors.email
+            return newErrors
+          })
+        }
+      } catch (error) {
+        console.error('Error checking email:', error)
+      } finally {
+        setCheckingEmail(false)
+      }
+    }
+
+    const timer = setTimeout(validateEmail, 500)
+    return () => clearTimeout(timer)
+  }, [formData.email])
+
+  // Validate student ID uniqueness
+  useEffect(() => {
+    const validateStudentId = async () => {
+      if (!formData.studentId) {
+        setValidationErrors(prev => {
+          const newErrors = { ...prev }
+          delete newErrors.studentId
+          return newErrors
+        })
+        return
+      }
+
+      setCheckingStudentId(true)
+      try {
+        const response = await fetch(`/api/student/check-student-id?studentId=${encodeURIComponent(formData.studentId)}`)
+        const data = await response.json()
+
+        if (data.exists) {
+          setValidationErrors(prev => ({
+            ...prev,
+            studentId: 'This student ID is already registered'
+          }))
+        } else {
+          setValidationErrors(prev => {
+            const newErrors = { ...prev }
+            delete newErrors.studentId
+            return newErrors
+          })
+        }
+      } catch (error) {
+        console.error('Error checking student ID:', error)
+      } finally {
+        setCheckingStudentId(false)
+      }
+    }
+
+    const timer = setTimeout(validateStudentId, 500)
+    return () => clearTimeout(timer)
+  }, [formData.studentId])
 
   useEffect(() => {
     const loadModels = async () => {
@@ -574,102 +490,6 @@ function StudentRegistrationModal({ sectionId, onClose }: StudentRegistrationMod
     }
   }, [showCamera])
 
-  useEffect(() => {
-    currentStepRef.current = currentStep
-    holdCounterRef.current = 0
-    setHoldProgress(0)
-    setIsInValidPosition(false)
-    isInValidPositionRef.current = false
-  }, [currentStep])
-
-  const calculateHeadPose = (landmarks: faceapi.FaceLandmarks68) => {
-    const points = landmarks.positions
-    const noseTip = points[30]
-    const leftEye = points[36]
-    const rightEye = points[45]
-    const leftMouth = points[48]
-    const rightMouth = points[54]
-    const chin = points[8]
-
-    const eyeDistance = Math.abs(rightEye.x - leftEye.x)
-    const leftDistance = Math.abs(noseTip.x - leftEye.x)
-    const rightDistance = Math.abs(noseTip.x - rightEye.x)
-    const yaw = -((leftDistance - rightDistance) / eyeDistance) * 100
-
-    const eyeCenterY = (leftEye.y + rightEye.y) / 2
-    const mouthCenterY = (leftMouth.y + rightMouth.y) / 2
-    const faceHeight = Math.abs(chin.y - eyeCenterY)
-    const noseMouthDistance = Math.abs(noseTip.y - mouthCenterY)
-    const pitch = ((noseMouthDistance / faceHeight) - 0.5) * 100
-
-    return { yaw, pitch }
-  }
-
-  const checkLivenessStep = (yaw: number, pitch: number) => {
-    const YAW_ENTER = 12
-    const PITCH_ENTER = 5
-    const CENTER_ENTER = 25
-    const CENTER_EXIT = 30
-
-    let positionCorrect = false
-
-    switch (currentStepRef.current) {
-      case 'center':
-        if (isInValidPositionRef.current) {
-          positionCorrect = Math.abs(yaw) < CENTER_EXIT && Math.abs(pitch) < CENTER_EXIT
-        } else {
-          positionCorrect = Math.abs(yaw) < CENTER_ENTER && Math.abs(pitch) < CENTER_ENTER
-        }
-        break
-      case 'left':
-        positionCorrect = isInValidPositionRef.current ? (yaw < -YAW_ENTER + 3) : (yaw < -YAW_ENTER)
-        break
-      case 'right':
-        positionCorrect = isInValidPositionRef.current ? (yaw > YAW_ENTER - 3) : (yaw > YAW_ENTER)
-        break
-      case 'up':
-        positionCorrect = isInValidPositionRef.current ? (pitch > PITCH_ENTER - 3) : (pitch > PITCH_ENTER)
-        break
-    }
-
-    isInValidPositionRef.current = positionCorrect
-    setIsInValidPosition(positionCorrect)
-
-    if (positionCorrect) {
-      holdCounterRef.current++
-      const progress = (holdCounterRef.current / HOLD_FRAMES_REQUIRED) * 100
-      setHoldProgress(() => progress)
-
-      if (holdCounterRef.current >= HOLD_FRAMES_REQUIRED) {
-        switch (currentStepRef.current) {
-          case 'center':
-            setLivenessProgress(prev => ({ ...prev, center: true }))
-            setCurrentStep('left')
-            break
-          case 'left':
-            setLivenessProgress(prev => ({ ...prev, left: true }))
-            setCurrentStep('right')
-            break
-          case 'right':
-            setLivenessProgress(prev => ({ ...prev, right: true }))
-            setCurrentStep('up')
-            break
-          case 'up':
-            setLivenessProgress(prev => ({ ...prev, up: true }))
-            setCurrentStep('complete')
-            setLivenessComplete(true)
-            break
-        }
-      }
-    } else {
-      if (holdCounterRef.current > 0) {
-        holdCounterRef.current = Math.max(0, holdCounterRef.current - 1)
-        const progress = (holdCounterRef.current / HOLD_FRAMES_REQUIRED) * 100
-        setHoldProgress(() => progress)
-      }
-    }
-  }
-
   const startFaceDetection = async () => {
     if (!videoRef.current || !modelsLoaded) return
 
@@ -687,15 +507,18 @@ function StudentRegistrationModal({ sectionId, onClose }: StudentRegistrationMod
           setFaceDescriptor(detection.descriptor)
 
           if (!livenessComplete) {
-            const { yaw, pitch } = calculateHeadPose(detection.landmarks)
-            checkLivenessStep(yaw, pitch)
+            const isLive = updateLivenessScore(detection)
+            if (isLive) {
+              setLivenessComplete(true)
+            }
           }
         } else {
           setFaceDetected(false)
           setFaceDescriptor(null)
+          resetLiveness()
         }
       } catch (error) {
-        // Face detection error
+        console.error('Face detection error:', error)
       }
     }, 300)
   }
@@ -735,9 +558,15 @@ function StudentRegistrationModal({ sectionId, onClose }: StudentRegistrationMod
     setIsCapturing(false)
     setFaceDetected(false)
     setFaceDescriptor(null)
-    setCurrentStep('center')
     setLivenessComplete(false)
-    setLivenessProgress({ center: false, left: false, right: false, up: false })
+    setLivenessScore(0)
+    setLivenessMetrics({
+      eyesOpen: false,
+      faceDetected: false,
+      headMovement: false,
+      livenessScore: 0
+    })
+    resetLiveness()
   }
 
   const capturePhoto = () => {
@@ -786,6 +615,8 @@ function StudentRegistrationModal({ sectionId, onClose }: StudentRegistrationMod
       const data = await response.json()
       if (data.success && data.credentials) {
         setCredentials(data.credentials)
+        // Call callback to refresh student list in parent
+        onRegistrationSuccess?.()
       } else {
         alert(data.error || 'Failed to create student account')
       }
@@ -915,26 +746,50 @@ function StudentRegistrationModal({ sectionId, onClose }: StudentRegistrationMod
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Student ID *</label>
-                  <input
-                    type="text"
-                    value={formData.studentId}
-                    onChange={(e) => setFormData(prev => ({ ...prev, studentId: e.target.value }))}
-                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                    placeholder="e.g., 2024-001"
-                    required
-                  />
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={formData.studentId}
+                      onChange={(e) => setFormData(prev => ({ ...prev, studentId: e.target.value }))}
+                      className={`flex h-9 w-full rounded-md border bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 ${
+                        validationErrors.studentId
+                          ? 'border-red-500 focus-visible:ring-red-500'
+                          : 'border-input focus-visible:ring-ring'
+                      }`}
+                      placeholder="e.g., 2024-001"
+                      required
+                    />
+                    {checkingStudentId && (
+                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">Checking...</span>
+                    )}
+                  </div>
+                  {validationErrors.studentId && (
+                    <p className="text-xs text-red-600">{validationErrors.studentId}</p>
+                  )}
                 </div>
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-medium">Gmail/Email *</label>
-                <input
-                  type="email"
-                  value={formData.email}
-                  onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
-                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  placeholder="e.g., student@gmail.com"
-                  required
-                />
+                <div className="relative">
+                  <input
+                    type="email"
+                    value={formData.email}
+                    onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
+                    className={`flex h-9 w-full rounded-md border bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 ${
+                      validationErrors.email
+                        ? 'border-red-500 focus-visible:ring-red-500'
+                        : 'border-input focus-visible:ring-ring'
+                    }`}
+                    placeholder="e.g., student@gmail.com"
+                    required
+                  />
+                  {checkingEmail && (
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">Checking...</span>
+                  )}
+                </div>
+                {validationErrors.email && (
+                  <p className="text-xs text-red-600">{validationErrors.email}</p>
+                )}
               </div>
             </div>
 
@@ -966,29 +821,45 @@ function StudentRegistrationModal({ sectionId, onClose }: StudentRegistrationMod
 
                   <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                     <div className={`w-48 h-64 border-2 rounded-full transition-colors duration-300 ${
-                      isInValidPosition ? 'border-primary' : 'border-white/30'
+                      faceDetected ? 'border-primary' : 'border-white/30'
                     }`} />
                   </div>
 
-                  <div className="absolute top-4 inset-x-0 flex flex-col items-center pointer-events-none">
+                  <div className="absolute top-4 inset-x-0 flex flex-col items-center pointer-events-none gap-2">
                     {!livenessComplete ? (
                       <div className="bg-black/80 text-white text-sm font-medium px-4 py-2 rounded-full backdrop-blur-md">
-                        {currentStep === 'center' && 'Look Straight'}
-                        {currentStep === 'left' && 'Turn Head Left'}
-                        {currentStep === 'right' && 'Turn Head Right'}
-                        {currentStep === 'up' && 'Chin Up'}
+                        📍 Look at camera - ensure good lighting
                       </div>
                     ) : (
                       <div className="bg-emerald-600/90 text-white text-sm font-medium px-4 py-2 rounded-full backdrop-blur-md flex items-center gap-2">
-                        <Check className="w-4 h-4" /> Verified
+                        <Check className="w-4 h-4" /> Liveness Verified
                       </div>
                     )}
 
-                    {isInValidPosition && !livenessComplete && (
-                      <div className="mt-2 w-32 h-1 bg-gray-700 rounded-full overflow-hidden">
-                        <div className="h-full bg-primary transition-all duration-100" style={{ width: `${holdProgress}%` }} />
+                    {faceDetected && livenessScore > 0 && livenessScore < 100 && (
+                      <div className="mt-1 w-32 h-1 bg-gray-700 rounded-full overflow-hidden">
+                        <div className="h-full bg-primary transition-all duration-100" style={{ width: `${livenessScore}%` }} />
                       </div>
                     )}
+                  </div>
+
+                  <div className="absolute right-4 top-1/2 transform -translate-y-1/2 bg-black/70 backdrop-blur-sm rounded-lg p-3 flex flex-col gap-2 text-xs">
+                    <div className="text-white font-bold mb-1">Liveness Metrics</div>
+                    <div className={`flex items-center gap-2 ${livenessMetrics.faceDetected ? 'text-blue-400' : 'text-gray-400'}`}>
+                      <div className={`w-2 h-2 rounded-full ${livenessMetrics.faceDetected ? 'bg-blue-400' : 'bg-gray-500'}`}></div>
+                      <span>Face Detected</span>
+                    </div>
+                    <div className={`flex items-center gap-2 ${livenessMetrics.eyesOpen ? 'text-blue-400' : 'text-gray-400'}`}>
+                      <div className={`w-2 h-2 rounded-full ${livenessMetrics.eyesOpen ? 'bg-blue-400' : 'bg-gray-500'}`}></div>
+                      <span>Eyes Open</span>
+                    </div>
+                    <div className={`flex items-center gap-2 ${livenessMetrics.headMovement ? 'text-blue-400' : 'text-gray-400'}`}>
+                      <div className={`w-2 h-2 rounded-full ${livenessMetrics.headMovement ? 'bg-blue-400' : 'bg-gray-500'}`}></div>
+                      <span>Head Movement</span>
+                    </div>
+                    <div className="mt-2 pt-2 border-t border-gray-600">
+                      <div className="text-blue-400 font-bold">Liveness: {Math.round(livenessScore)}%</div>
+                    </div>
                   </div>
 
                   <div className="absolute bottom-4 inset-x-0 flex justify-center gap-4 px-4 z-10">
@@ -1010,6 +881,15 @@ function StudentRegistrationModal({ sectionId, onClose }: StudentRegistrationMod
                   <div className="absolute bottom-4 right-4">
                     <Button type="button" variant="secondary" size="sm" onClick={() => {
                       setCapturedImage(null)
+                      setLivenessComplete(false)
+                      setLivenessScore(0)
+                      setLivenessMetrics({
+                        eyesOpen: false,
+                        faceDetected: false,
+                        headMovement: false,
+                        livenessScore: 0
+                      })
+                      resetLiveness()
                       startCamera()
                     }}>
                       <RefreshCw className="w-4 h-4 mr-2" /> Retake
@@ -1024,7 +904,7 @@ function StudentRegistrationModal({ sectionId, onClose }: StudentRegistrationMod
             <Button type="button" variant="outline" onClick={onClose}>
               Cancel
             </Button>
-            <Button type="submit" disabled={isSubmitting || !capturedImage}>
+            <Button type="submit" disabled={isSubmitting || !capturedImage || Object.keys(validationErrors).length > 0}>
               {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
               Create Account
             </Button>
@@ -1038,14 +918,13 @@ function StudentRegistrationModal({ sectionId, onClose }: StudentRegistrationMod
 // --- Attendance Recognition Modal ---
 
 interface AttendanceRecognitionModalProps {
-  sessionId: string | undefined
   sectionId: string
   isOpen: boolean
   onClose: () => void
-  onStudentMarked: () => void
+  onStudentMarked: () => Promise<void>
 }
 
-function AttendanceRecognitionModal({ sessionId, sectionId, isOpen, onClose, onStudentMarked }: AttendanceRecognitionModalProps) {
+function AttendanceRecognitionModal({ sectionId, isOpen, onClose, onStudentMarked }: AttendanceRecognitionModalProps) {
   const [showCamera, setShowCamera] = useState(false)
   const [modelsLoaded, setModelsLoaded] = useState(false)
   const [faceDetected, setFaceDetected] = useState(false)
@@ -1174,7 +1053,7 @@ function AttendanceRecognitionModal({ sessionId, sectionId, isOpen, onClose, onS
   }
 
   const matchAndMarkAttendance = async (descriptor: Float32Array) => {
-    if (isProcessing || recognizingStudent || !sessionId) return
+    if (isProcessing || recognizingStudent) return
     setIsProcessing(true)
 
     try {
@@ -1198,12 +1077,11 @@ function AttendanceRecognitionModal({ sessionId, sectionId, isOpen, onClose, onS
       const student = matchData.student
       setRecognizingStudent(student)
 
-      // Mark attendance
+      // Mark attendance (backend will create/use today's session automatically)
       const markResponse = await fetch('/api/attendance/mark', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          sessionId: sessionId,
           sectionId: sectionId,
           studentId: student.id,
           faceMatchConfidence: matchData.confidence
@@ -1214,12 +1092,14 @@ function AttendanceRecognitionModal({ sessionId, sectionId, isOpen, onClose, onS
 
       if (markData.success) {
         setRecognitionError(null)
-        // Wait 2 seconds then refresh records
+        // Wait for records to be refetched, then close modal
+        await onStudentMarked()
+        // Small delay to ensure data is merged before closing
         setTimeout(() => {
-          onStudentMarked()
+          onClose()
           setRecognizingStudent(null)
           setIsProcessing(false)
-        }, 2000)
+        }, 500)
       } else {
         setRecognitionError('Failed to mark attendance')
         setIsProcessing(false)
@@ -1338,26 +1218,27 @@ function FaceRegistrationModal({ professorId, professorName, onComplete, onSkip 
   const [faceDetected, setFaceDetected] = useState(false)
   const [faceDescriptor, setFaceDescriptor] = useState<Float32Array | null>(null)
   const [livenessCheck, setLivenessCheck] = useState(true)
-  const [currentStep, setCurrentStep] = useState<LivenessStep>('center')
-  const [livenessProgress, setLivenessProgress] = useState<LivenessProgress>({
-    center: false,
-    left: false,
-    right: false,
-    up: false,
-    rotate: false
-  })
   const [livenessComplete, setLivenessComplete] = useState(false)
-  const [holdProgress, setHoldProgress] = useState(0)
-  const [isInValidPosition, setIsInValidPosition] = useState(false)
+  const [livenessScore, setLivenessScore] = useState(0)
+  const [livenessMetrics, setLivenessMetrics] = useState({
+    eyesOpen: false,
+    faceDetected: false,
+    headMovement: false,
+    livenessScore: 0
+  })
+  
+  const { livenessScore: hookLivenessScore, livenessMetrics: hookLivenessMetrics, updateLivenessScore, resetLiveness } = usePassiveLivenessDetection()
+  
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const captureTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const detectionIntervalRef = useRef<NodeJS.Timeout | null>(null)
-  const holdCounterRef = useRef(0)
-  const isInValidPositionRef = useRef(false)
-  const currentStepRef = useRef<LivenessStep>('center')
-  
-  const HOLD_FRAMES_REQUIRED = 3
+
+  // Sync hook values to component state
+  useEffect(() => {
+    setLivenessScore(hookLivenessScore)
+    setLivenessMetrics(hookLivenessMetrics)
+  }, [hookLivenessScore, hookLivenessMetrics])
 
   useEffect(() => {
     const loadModels = async () => {
@@ -1406,95 +1287,6 @@ function FaceRegistrationModal({ professorId, professorName, onComplete, onSkip 
     }
   }, [showCamera])
 
-  const calculateHeadPose = (landmarks: faceapi.FaceLandmarks68) => {
-    const points = landmarks.positions
-    const noseTip = points[30]
-    const leftEye = points[36]
-    const rightEye = points[45]
-    const leftMouth = points[48]
-    const rightMouth = points[54]
-    const chin = points[8]
-
-    const eyeDistance = Math.abs(rightEye.x - leftEye.x)
-    const leftDistance = Math.abs(noseTip.x - leftEye.x)
-    const rightDistance = Math.abs(noseTip.x - rightEye.x)
-    const yaw = -((leftDistance - rightDistance) / eyeDistance) * 100
-
-    const eyeCenterY = (leftEye.y + rightEye.y) / 2
-    const mouthCenterY = (leftMouth.y + rightMouth.y) / 2
-    const faceHeight = Math.abs(chin.y - eyeCenterY)
-    const noseMouthDistance = Math.abs(noseTip.y - mouthCenterY)
-    const pitch = ((noseMouthDistance / faceHeight) - 0.5) * 100
-    const roll = ((rightEye.y - leftEye.y) / eyeDistance) * 100
-
-    return { yaw, pitch, roll }
-  }
-
-  const checkLivenessStep = (yaw: number, pitch: number, roll: number) => {
-    const YAW_ENTER = 12
-    const PITCH_ENTER = 5
-    const CENTER_ENTER = 25
-    const CENTER_EXIT = 30
-    
-    let positionCorrect = false
-
-    switch (currentStepRef.current) {
-      case 'center':
-        if (isInValidPositionRef.current) {
-          positionCorrect = Math.abs(yaw) < CENTER_EXIT && Math.abs(pitch) < CENTER_EXIT
-        } else {
-          positionCorrect = Math.abs(yaw) < CENTER_ENTER && Math.abs(pitch) < CENTER_ENTER
-        }
-        break
-      case 'left':
-        positionCorrect = isInValidPositionRef.current ? (yaw < -YAW_ENTER + 3) : (yaw < -YAW_ENTER)
-        break
-      case 'right':
-        positionCorrect = isInValidPositionRef.current ? (yaw > YAW_ENTER - 3) : (yaw > YAW_ENTER)
-        break
-      case 'up':
-        positionCorrect = isInValidPositionRef.current ? (pitch > PITCH_ENTER - 3) : (pitch > PITCH_ENTER)
-        break
-    }
-
-    isInValidPositionRef.current = positionCorrect
-    setIsInValidPosition(positionCorrect)
-
-    if (positionCorrect) {
-      holdCounterRef.current++
-      const progress = (holdCounterRef.current / HOLD_FRAMES_REQUIRED) * 100
-      setHoldProgress(() => progress)
-
-      if (holdCounterRef.current >= HOLD_FRAMES_REQUIRED) {
-        switch (currentStepRef.current) {
-          case 'center':
-            setLivenessProgress(prev => ({ ...prev, center: true }))
-            setCurrentStep('left')
-            break
-          case 'left':
-            setLivenessProgress(prev => ({ ...prev, left: true }))
-            setCurrentStep('right')
-            break
-          case 'right':
-            setLivenessProgress(prev => ({ ...prev, right: true }))
-            setCurrentStep('up')
-            break
-          case 'up':
-            setLivenessProgress(prev => ({ ...prev, up: true }))
-            setCurrentStep('complete')
-            setLivenessComplete(true)
-            break
-        }
-      }
-    } else {
-      if (holdCounterRef.current > 0) {
-        holdCounterRef.current = Math.max(0, holdCounterRef.current - 1)
-        const progress = (holdCounterRef.current / HOLD_FRAMES_REQUIRED) * 100
-        setHoldProgress(() => progress)
-      }
-    }
-  }
-
   const startFaceDetection = async () => {
     if (!videoRef.current || !modelsLoaded) return
 
@@ -1512,25 +1304,18 @@ function FaceRegistrationModal({ professorId, professorName, onComplete, onSkip 
           setFaceDescriptor(detection.descriptor)
           
           if (livenessCheck && !livenessComplete) {
-            const { yaw, pitch, roll } = calculateHeadPose(detection.landmarks)
-            checkLivenessStep(yaw, pitch, roll)
-          }
-          
-          if (!livenessCheck || livenessComplete) {
-            if (!captureTimeoutRef.current) {
-               // Auto-capture removed for UX control - user should click capture
+            const isLive = updateLivenessScore(detection)
+            if (isLive) {
+              setLivenessComplete(true)
             }
           }
         } else {
           setFaceDetected(false)
           setFaceDescriptor(null)
-          if (captureTimeoutRef.current) {
-            clearTimeout(captureTimeoutRef.current)
-            captureTimeoutRef.current = null
-          }
+          resetLiveness()
         }
       } catch (error) {
-        // Face detection error
+        console.error('Face detection error:', error)
       }
     }, 300)
   }
@@ -1570,10 +1355,15 @@ function FaceRegistrationModal({ professorId, professorName, onComplete, onSkip 
     setIsCapturing(false)
     setFaceDetected(false)
     setFaceDescriptor(null)
-    setLivenessCheck(false)
-    setCurrentStep('center')
     setLivenessComplete(false)
-    setLivenessProgress({ center: false, left: false, right: false, up: false, rotate: false })
+    setLivenessScore(0)
+    setLivenessMetrics({
+      eyesOpen: false,
+      faceDetected: false,
+      headMovement: false,
+      livenessScore: 0
+    })
+    resetLiveness()
   }
 
   const capturePhoto = () => {
@@ -1685,30 +1475,47 @@ function FaceRegistrationModal({ professorId, professorName, onComplete, onSkip 
                       {/* Minimalist Overlay */}
                       <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                         <div className={`w-48 h-64 border-2 rounded-full transition-colors duration-300 ${
-                           isInValidPosition ? 'border-primary' : 'border-white/30'
+                           faceDetected ? 'border-primary' : 'border-white/30'
                         }`} />
                       </div>
 
                       {/* Instructions */}
-                      <div className="absolute top-4 inset-x-0 flex flex-col items-center pointer-events-none">
+                      <div className="absolute top-4 inset-x-0 flex flex-col items-center pointer-events-none gap-2">
                          {!livenessComplete ? (
                            <div className="bg-black/80 text-white text-sm font-medium px-4 py-2 rounded-full backdrop-blur-md">
-                             {currentStep === 'center' && 'Look Straight'}
-                             {currentStep === 'left' && 'Turn Head Left'}
-                             {currentStep === 'right' && 'Turn Head Right'}
-                             {currentStep === 'up' && 'Chin Up'}
+                             📍 Look at camera - ensure good lighting
                            </div>
                          ) : (
                            <div className="bg-emerald-600/90 text-white text-sm font-medium px-4 py-2 rounded-full backdrop-blur-md flex items-center gap-2">
-                             <Check className="w-4 h-4" /> Verified
+                             <Check className="w-4 h-4" /> Liveness Verified
                            </div>
                          )}
                          
-                         {isInValidPosition && !livenessComplete && (
-                           <div className="mt-2 w-32 h-1 bg-gray-700 rounded-full overflow-hidden">
-                              <div className="h-full bg-primary transition-all duration-100" style={{ width: `${holdProgress}%` }} />
+                         {faceDetected && livenessScore > 0 && livenessScore < 100 && (
+                           <div className="mt-1 w-32 h-1 bg-gray-700 rounded-full overflow-hidden">
+                              <div className="h-full bg-primary transition-all duration-100" style={{ width: `${livenessScore}%` }} />
                            </div>
                          )}
+                      </div>
+
+                      {/* Liveness Metrics */}
+                      <div className="absolute right-4 top-1/2 transform -translate-y-1/2 bg-black/70 backdrop-blur-sm rounded-lg p-3 flex flex-col gap-2 text-xs">
+                        <div className="text-white font-bold mb-1">Liveness Metrics</div>
+                        <div className={`flex items-center gap-2 ${livenessMetrics.faceDetected ? 'text-blue-400' : 'text-gray-400'}`}>
+                          <div className={`w-2 h-2 rounded-full ${livenessMetrics.faceDetected ? 'bg-blue-400' : 'bg-gray-500'}`}></div>
+                          <span>Face Detected</span>
+                        </div>
+                        <div className={`flex items-center gap-2 ${livenessMetrics.eyesOpen ? 'text-blue-400' : 'text-gray-400'}`}>
+                          <div className={`w-2 h-2 rounded-full ${livenessMetrics.eyesOpen ? 'bg-blue-400' : 'bg-gray-500'}`}></div>
+                          <span>Eyes Open</span>
+                        </div>
+                        <div className={`flex items-center gap-2 ${livenessMetrics.headMovement ? 'text-blue-400' : 'text-gray-400'}`}>
+                          <div className={`w-2 h-2 rounded-full ${livenessMetrics.headMovement ? 'bg-blue-400' : 'bg-gray-500'}`}></div>
+                          <span>Head Movement</span>
+                        </div>
+                        <div className="mt-2 pt-2 border-t border-gray-600">
+                          <div className="text-blue-400 font-bold">Liveness: {Math.round(livenessScore)}%</div>
+                        </div>
                       </div>
 
                       {/* Actions */}
@@ -1731,6 +1538,15 @@ function FaceRegistrationModal({ professorId, professorName, onComplete, onSkip 
                       <div className="absolute bottom-4 right-4">
                          <Button type="button" variant="secondary" size="sm" onClick={() => {
                             setCapturedImage(null)
+                            setLivenessComplete(false)
+                            setLivenessScore(0)
+                            setLivenessMetrics({
+                              eyesOpen: false,
+                              faceDetected: false,
+                              headMovement: false,
+                              livenessScore: 0
+                            })
+                            resetLiveness()
                             startCamera()
                          }}>
                            <RefreshCw className="w-4 h-4 mr-2" /> Retake

@@ -55,6 +55,7 @@ export default function FacultyPage() {
 
   const fetchFaculty = async () => {
     try {
+      setLoadingFaculty(true)
       const response = await fetch('/api/admin/faculty')
       if (!response.ok) {
         const error = await response.json()
@@ -64,8 +65,8 @@ export default function FacultyPage() {
       }
 
       const data = await response.json()
+      console.log('Faculty fetched:', data?.length || 0, 'members')
       setFaculty(data || [])
-      console.log('Faculty fetched:', data?.length || 0)
     } catch (error) {
       console.error('Exception in fetchFaculty:', error)
     } finally {
@@ -187,18 +188,30 @@ export default function FacultyPage() {
     isActive: boolean
   ) => {
     try {
-      const { error } = await supabase
-        .from('users')
-        .update({
-          first_name: firstName,
-          last_name: lastName,
-          email: email,
-          employee_id: employeeId,
-          is_active: isActive
+      console.log('🔄 Updating faculty:', facultyId)
+      
+      // Call the API endpoint to update
+      const response = await fetch('/api/admin/faculty/update', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          facultyId,
+          firstName,
+          lastName,
+          email,
+          employeeId,
+          isActive
         })
-        .eq('id', facultyId)
+      })
 
-      if (error) throw error
+      const result = await response.json()
+
+      if (!response.ok) {
+        console.error('❌ Update error:', result)
+        throw new Error(result.error || 'Failed to update faculty member')
+      }
+
+      console.log('✅ Faculty updated successfully')
 
       await Swal.fire({
         title: 'Success!',
@@ -207,12 +220,13 @@ export default function FacultyPage() {
         confirmButtonColor: '#7c3aed'
       })
 
+      // Refresh the faculty list
       await fetchFaculty()
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error updating faculty:', error)
       await Swal.fire({
         title: 'Error!',
-        text: 'Failed to update faculty member',
+        text: error.message || 'Failed to update faculty member',
         icon: 'error',
         confirmButtonColor: '#7c3aed'
       })
@@ -221,12 +235,26 @@ export default function FacultyPage() {
 
   const handleDeleteFaculty = async (facultyId: string) => {
     try {
-      const { error } = await supabase
-        .from('users')
-        .delete()
-        .eq('id', facultyId)
+      console.log('🗑️ Deleting faculty:', facultyId)
+      
+      // Call the API endpoint to delete both from users and auth
+      const response = await fetch('/api/admin/faculty/delete', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ facultyId })
+      })
 
-      if (error) throw error
+      const result = await response.json()
+
+      if (!response.ok) {
+        console.error('❌ Delete error:', result)
+        throw new Error(result.error || 'Failed to delete faculty member')
+      }
+
+      console.log('✅ Faculty deleted successfully from both database and auth')
+      
+      // Immediately update state to remove the deleted faculty
+      setFaculty(prevFaculty => prevFaculty.filter(f => f.id !== facultyId))
 
       await Swal.fire({
         title: 'Deleted!',
@@ -235,12 +263,14 @@ export default function FacultyPage() {
         confirmButtonColor: '#7c3aed'
       })
 
+      // Then fetch fresh list from server
+      console.log('🔄 Fetching updated faculty list...')
       await fetchFaculty()
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error deleting faculty:', error)
       await Swal.fire({
         title: 'Error!',
-        text: 'Failed to delete faculty member',
+        text: error.message || 'Failed to delete faculty member',
         icon: 'error',
         confirmButtonColor: '#7c3aed'
       })

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useEffect, useState, useRef } from 'react'
 import { Clock, Check, AlertCircle } from 'lucide-react'
 import * as faceapi from 'face-api.js'
+import { usePassiveLivenessDetection } from '@/hooks/usePassiveLivenessDetection'
 
 type AttendanceStatus = 'idle' | 'detecting' | 'success' | 'error'
 
@@ -23,6 +24,8 @@ export default function StudentAttendancePage() {
   } | null>(null)
   const [showCamera, setShowCamera] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
+
+  const { livenessScore, livenessMetrics, updateLivenessScore, resetLiveness } = usePassiveLivenessDetection()
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
@@ -160,6 +163,7 @@ export default function StudentAttendancePage() {
     setShowCamera(false)
     setFaceDetected(false)
     setStatus('idle')
+    resetLiveness()
   }
 
   const startFaceDetection = async () => {
@@ -177,14 +181,18 @@ export default function StudentAttendancePage() {
         if (detection) {
           setFaceDetected(true)
 
-          // Auto-capture after holding for a moment
-          if (!captureTimeoutRef.current) {
+          // Check liveness
+          const isLive = updateLivenessScore(detection)
+          
+          // Auto-capture once liveness is verified
+          if (isLive && !captureTimeoutRef.current) {
             captureTimeoutRef.current = setTimeout(async () => {
               await markAttendance(detection.descriptor)
-            }, 1500)
+            }, 500)
           }
         } else {
           setFaceDetected(false)
+          resetLiveness()
           if (captureTimeoutRef.current) {
             clearTimeout(captureTimeoutRef.current)
             captureTimeoutRef.current = null
@@ -345,7 +353,8 @@ export default function StudentAttendancePage() {
               <div className="absolute top-6 left-0 right-0 flex justify-center">
                 <div className="bg-black/70 backdrop-blur-sm px-6 py-3 rounded-full">
                   <p className="text-white font-bold">
-                    {status === 'detecting' && '👁️ Looking at your face...'}
+                    {status === 'detecting' && livenessScore < 100 && `👁️ Verifying liveness... ${Math.round(livenessScore)}%`}
+                    {status === 'detecting' && livenessScore === 100 && '✅ Liveness verified!'}
                     {status === 'success' && '✅ Attendance marked!'}
                     {status === 'error' && '❌ Error occurred'}
                   </p>
