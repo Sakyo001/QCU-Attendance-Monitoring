@@ -52,7 +52,8 @@ export async function POST(request: NextRequest) {
       hasFaceDescriptor: !!faceDescriptor,
       descriptorType: typeof faceDescriptor,
       descriptorIsArray: Array.isArray(faceDescriptor),
-      descriptorLength: Array.isArray(faceDescriptor) ? faceDescriptor.length : 'N/A'
+      descriptorLength: Array.isArray(faceDescriptor) ? faceDescriptor.length : 'N/A',
+      format: Array.isArray(faceDescriptor) && faceDescriptor.length === 128 ? 'FaceNet (128D)' : 'Unknown'
     })
 
     if (!faceDescriptor) {
@@ -95,7 +96,8 @@ export async function POST(request: NextRequest) {
     // Find best matching face using cosine similarity
     let bestMatch = null
     let bestSimilarity = -1
-    const SIMILARITY_THRESHOLD = 0.6 // Cosine similarity threshold
+    // Stricter threshold for better security - prevents photo spoofing
+    const SIMILARITY_THRESHOLD = 0.7 // Cosine similarity threshold (70% match required)
 
     for (const student of students) {
       try {

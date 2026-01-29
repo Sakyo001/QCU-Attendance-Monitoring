@@ -3,9 +3,8 @@
 import { useAuth } from '@/contexts/AuthContext'
 import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import { useEffect, useState, useRef } from 'react'
-import { ArrowLeft, Loader2, Camera, RefreshCw, Check, X, ShieldCheck, Clock, Users, Plus } from 'lucide-react'
-import * as faceapi from 'face-api.js'
-import { usePassiveLivenessDetection } from '@/hooks/usePassiveLivenessDetection'
+import { ArrowLeft, Loader2, Camera, RefreshCw, Check, X, ShieldCheck, Clock, Users, Plus, LayoutGrid, List, Monitor } from 'lucide-react'
+import { initializeFaceDetection, detectFaceInVideo } from '@/lib/mediapipe-face'
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
@@ -40,14 +39,20 @@ export default function AttendancePage() {
   const { user, loading } = useAuth()
   const router = useRouter()
   const params = useParams()
+  const searchParams = useSearchParams()
   const sectionId = params.sectionId as string
+  const entryMethod = searchParams.get('entryMethod') || 'face' // Default to face if not specified
 
   const [checkingRegistration, setCheckingRegistration] = useState(true)
   const [isRegistered, setIsRegistered] = useState(false)
+  const [faceVerified, setFaceVerified] = useState(entryMethod === 'password') // If password entry, skip face verification
+  const [passwordVerified, setPasswordVerified] = useState(entryMethod === 'password')
   const [showStudentRegModal, setShowStudentRegModal] = useState(false)
   const [showFaceRecognitionModal, setShowFaceRecognitionModal] = useState(false)
+  const [showFaceVerificationModal, setShowFaceVerificationModal] = useState(false)
   const [mergedAttendanceData, setMergedAttendanceData] = useState<any[]>([])
   const [loadingRecords, setLoadingRecords] = useState(true)
+  const [viewMode, setViewMode] = useState<'list' | 'seat-plan'>('list')
 
   useEffect(() => {
     if (!loading && (!user || (user.role !== 'professor' && user.role !== 'adviser'))) {
@@ -56,10 +61,16 @@ export default function AttendancePage() {
     }
 
     if (!loading && user) {
-      checkFaceRegistration()
+      // Only check face registration if using face entry method
+      if (entryMethod === 'face') {
+        checkFaceRegistration()
+      } else {
+        // For password entry method, skip face registration check
+        setCheckingRegistration(false)
+      }
       fetchTodayAttendanceRecords()
     }
-  }, [user, loading, router])
+  }, [user, loading, router, entryMethod])
 
   const checkFaceRegistration = async () => {
     try {
@@ -140,14 +151,25 @@ export default function AttendancePage() {
 
   if (!user) return null
 
-  // If not registered, show registration modal
-  if (!isRegistered) {
+  // If using face entry method and not registered, show registration modal
+  if (entryMethod === 'face' && !isRegistered) {
     return (
       <FaceRegistrationModal
         professorId={user?.id || ''}
         professorName={`${user?.firstName} ${user?.lastName}`}
         onComplete={handleRegistrationComplete}
         onSkip={() => setIsRegistered(true)}
+      />
+    )
+  }
+
+  // If using face entry method and registered but not verified, show verification modal
+  if (entryMethod === 'face' && isRegistered && !faceVerified) {
+    return (
+      <FaceVerificationModal
+        professorId={user?.id || ''}
+        professorName={`${user?.firstName} ${user?.lastName}`}
+        onVerificationSuccess={() => setFaceVerified(true)}
       />
     )
   }
@@ -219,9 +241,28 @@ export default function AttendancePage() {
                  {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
                </p>
              </div>
+             <div className="flex items-center bg-gray-100 rounded-lg p-1 border">
+               <Button 
+                 variant={viewMode === 'list' ? 'secondary' : 'ghost'} 
+                 size="sm" 
+                 onClick={() => setViewMode('list')}
+                 className="h-8 w-8 p-0"
+               >
+                 <List className="h-4 w-4" />
+               </Button>
+               <Button 
+                 variant={viewMode === 'seat-plan' ? 'secondary' : 'ghost'} 
+                 size="sm" 
+                 onClick={() => setViewMode('seat-plan')}
+                 className="h-8 w-8 p-0"
+               >
+                 <LayoutGrid className="h-4 w-4" />
+               </Button>
+             </div>
           </div>
           
-          <div className="rounded-lg border bg-card text-card-foreground shadow-sm overflow-hidden">
+          {viewMode === 'list' ? (
+            <div className="rounded-lg border bg-card text-card-foreground shadow-sm overflow-hidden">
              <Table>
                 <TableHeader>
                   <TableRow className="bg-muted/50 hover:bg-muted/50">
@@ -265,6 +306,87 @@ export default function AttendancePage() {
                 </TableBody>
              </Table>
           </div>
+          ) : (
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+              {mergedAttendanceData.length === 0 ? (
+                <div className="col-span-full h-64 flex flex-col items-center justify-center text-gray-500 border-2 border-dashed rounded-lg bg-gray-50/50">
+                   <Users className="h-12 w-12 mb-3 opacity-20" />
+                   <p>No students registered in this class.</p>
+                </div>
+              ) : (
+                mergedAttendanceData.map((record: any, index: number) => {
+                  const isPresent = record.status === 'present';
+                  const isLate = record.status === 'late';
+                  const isAbsent = !isPresent && !isLate;
+
+                  return (
+                    <div 
+                      key={record.id} 
+                      className={`
+                        relative flex flex-col p-4 rounded-xl border-2 transition-all duration-300
+                        ${isPresent 
+                            ? 'bg-emerald-50 border-emerald-200' 
+                            : isLate 
+                              ? 'bg-amber-50 border-amber-200' 
+                              : 'bg-red-50 border-red-200'
+                        }
+                      `}
+                    >
+                      {/* Seat Label */}
+                      <div className="absolute top-2 right-2 text-xs font-mono text-gray-400 font-bold">
+                        #{index + 1}
+                      </div>
+
+                      {/* Computer Monitor */}
+                      <div className="flex justify-center mb-3">
+                         <div className={`p-3 rounded-full ${
+                            isPresent 
+                              ? 'bg-emerald-100' 
+                              : isLate 
+                                ? 'bg-amber-100' 
+                                : 'bg-red-100'
+                         }`}>
+                           <Monitor className={`w-6 h-6 ${
+                              isPresent 
+                                ? 'text-emerald-600' 
+                                : isLate 
+                                  ? 'text-amber-600' 
+                                  : 'text-red-500'
+                           }`} />
+                         </div>
+                      </div>
+
+                      {/* Student Info */}
+                      <div className="text-center flex-1 flex flex-col justify-end">
+                        <p className={`text-sm font-bold leading-tight mb-1 truncate ${
+                            isPresent 
+                              ? 'text-emerald-900' 
+                              : isLate 
+                                ? 'text-amber-900' 
+                                : 'text-red-900'
+                        }`}>
+                          {record.first_name} {record.last_name}
+                        </p>
+                        
+                        <Badge variant="outline" className={`w-full justify-center text-[10px] h-5 px-0 ${
+                            isPresent 
+                              ? 'border-emerald-300 text-emerald-700 bg-emerald-50' 
+                              : isLate 
+                                ? 'border-amber-300 text-amber-700 bg-amber-50' 
+                                : 'border-red-300 text-red-700 bg-red-50'
+                        }`}>
+                             {isLate ? 'LATE' : (isPresent ? 'PRESENT' : 'ABSENT')}
+                        </Badge>
+                      </div>
+
+                      {/* Seat Base Visual */}
+                      <div className="mt-3 h-1 w-full bg-gray-200 rounded-full opacity-50"></div>
+                    </div>
+                  )
+                })
+              )}
+            </div>
+          )}
         </div>
       </main>
 
@@ -334,14 +456,6 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
   const [modelsLoaded, setModelsLoaded] = useState(false)
   const [faceDetected, setFaceDetected] = useState(false)
   const [faceDescriptor, setFaceDescriptor] = useState<Float32Array | null>(null)
-  const [livenessComplete, setLivenessComplete] = useState(false)
-  const [livenessScore, setLivenessScore] = useState(0)
-  const [livenessMetrics, setLivenessMetrics] = useState({
-    eyesOpen: false,
-    faceDetected: false,
-    headMovement: false,
-    livenessScore: 0
-  })
   const [credentials, setCredentials] = useState<StudentCredentials | null>(null)
   const [validationErrors, setValidationErrors] = useState<{
     studentId?: string
@@ -350,18 +464,10 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
   const [checkingEmail, setCheckingEmail] = useState(false)
   const [checkingStudentId, setCheckingStudentId] = useState(false)
 
-  const { livenessScore: hookLivenessScore, livenessMetrics: hookLivenessMetrics, updateLivenessScore, resetLiveness } = usePassiveLivenessDetection()
-
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const captureTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const detectionIntervalRef = useRef<NodeJS.Timeout | null>(null)
-
-  // Sync hook values to component state
-  useEffect(() => {
-    setLivenessScore(hookLivenessScore)
-    setLivenessMetrics(hookLivenessMetrics)
-  }, [hookLivenessScore, hookLivenessMetrics])
 
   // Validate email uniqueness
   useEffect(() => {
@@ -446,15 +552,13 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
   useEffect(() => {
     const loadModels = async () => {
       try {
-        const MODEL_URL = '/models'
-        await Promise.all([
-          faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-          faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
-          faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
-        ])
-        setModelsLoaded(true)
+        const loaded = await initializeFaceDetection()
+        setModelsLoaded(loaded)
+        if (loaded) {
+          console.log('✅ MediaPipe models loaded for Student Registration')
+        }
       } catch (error) {
-        console.error('Error loading face-api models:', error)
+        console.error('Error loading MediaPipe:', error)
       }
     }
     loadModels()
@@ -497,25 +601,14 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
       if (!videoRef.current || isCapturing) return
 
       try {
-        const detection = await faceapi
-          .detectSingleFace(videoRef.current, new faceapi.TinyFaceDetectorOptions())
-          .withFaceLandmarks()
-          .withFaceDescriptor()
+        const result = await detectFaceInVideo(videoRef.current)
 
-        if (detection) {
+        if (result.detected && result.descriptor) {
           setFaceDetected(true)
-          setFaceDescriptor(detection.descriptor)
-
-          if (!livenessComplete) {
-            const isLive = updateLivenessScore(detection)
-            if (isLive) {
-              setLivenessComplete(true)
-            }
-          }
+          setFaceDescriptor(new Float32Array(result.descriptor))
         } else {
           setFaceDetected(false)
           setFaceDescriptor(null)
-          resetLiveness()
         }
       } catch (error) {
         console.error('Face detection error:', error)
@@ -525,7 +618,7 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
 
   const startCamera = async () => {
     if (!modelsLoaded) {
-      alert('Models loading...')
+      alert('MediaPipe models loading...')
       return
     }
 
@@ -558,15 +651,6 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
     setIsCapturing(false)
     setFaceDetected(false)
     setFaceDescriptor(null)
-    setLivenessComplete(false)
-    setLivenessScore(0)
-    setLivenessMetrics({
-      eyesOpen: false,
-      faceDetected: false,
-      headMovement: false,
-      livenessScore: 0
-    })
-    resetLiveness()
   }
 
   const capturePhoto = () => {
@@ -801,7 +885,7 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
                 <div className="border border-dashed rounded-lg p-8 flex flex-col items-center justify-center bg-muted/30 hover:bg-muted/50 transition-colors">
                   <ShieldCheck className="h-10 w-10 text-muted-foreground mb-4" />
                   <p className="text-sm text-muted-foreground mb-6 text-center max-w-xs">
-                    Liveness detection enabled. You will be asked to move your head slightly.
+                    Position your face in the camera and ensure good lighting.
                   </p>
                   <Button type="button" onClick={startCamera}>
                     Start Camera
@@ -826,47 +910,18 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
                   </div>
 
                   <div className="absolute top-4 inset-x-0 flex flex-col items-center pointer-events-none gap-2">
-                    {!livenessComplete ? (
-                      <div className="bg-black/80 text-white text-sm font-medium px-4 py-2 rounded-full backdrop-blur-md">
-                        📍 Look at camera - ensure good lighting
-                      </div>
-                    ) : (
-                      <div className="bg-emerald-600/90 text-white text-sm font-medium px-4 py-2 rounded-full backdrop-blur-md flex items-center gap-2">
-                        <Check className="w-4 h-4" /> Liveness Verified
-                      </div>
-                    )}
-
-                    {faceDetected && livenessScore > 0 && livenessScore < 100 && (
-                      <div className="mt-1 w-32 h-1 bg-gray-700 rounded-full overflow-hidden">
-                        <div className="h-full bg-primary transition-all duration-100" style={{ width: `${livenessScore}%` }} />
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="absolute right-4 top-1/2 transform -translate-y-1/2 bg-black/70 backdrop-blur-sm rounded-lg p-3 flex flex-col gap-2 text-xs">
-                    <div className="text-white font-bold mb-1">Liveness Metrics</div>
-                    <div className={`flex items-center gap-2 ${livenessMetrics.faceDetected ? 'text-blue-400' : 'text-gray-400'}`}>
-                      <div className={`w-2 h-2 rounded-full ${livenessMetrics.faceDetected ? 'bg-blue-400' : 'bg-gray-500'}`}></div>
-                      <span>Face Detected</span>
-                    </div>
-                    <div className={`flex items-center gap-2 ${livenessMetrics.eyesOpen ? 'text-blue-400' : 'text-gray-400'}`}>
-                      <div className={`w-2 h-2 rounded-full ${livenessMetrics.eyesOpen ? 'bg-blue-400' : 'bg-gray-500'}`}></div>
-                      <span>Eyes Open</span>
-                    </div>
-                    <div className={`flex items-center gap-2 ${livenessMetrics.headMovement ? 'text-blue-400' : 'text-gray-400'}`}>
-                      <div className={`w-2 h-2 rounded-full ${livenessMetrics.headMovement ? 'bg-blue-400' : 'bg-gray-500'}`}></div>
-                      <span>Head Movement</span>
-                    </div>
-                    <div className="mt-2 pt-2 border-t border-gray-600">
-                      <div className="text-blue-400 font-bold">Liveness: {Math.round(livenessScore)}%</div>
+                    <div className="bg-black/80 text-white text-sm font-medium px-4 py-2 rounded-full backdrop-blur-md">
+                      📍 Look at camera and capture your face
                     </div>
                   </div>
+
+
 
                   <div className="absolute bottom-4 inset-x-0 flex justify-center gap-4 px-4 z-10">
                     <Button type="button" variant="destructive" size="sm" onClick={stopCamera}>
                       Cancel
                     </Button>
-                    {livenessComplete && faceDetected && (
+                    {faceDetected && (
                       <Button type="button" size="sm" onClick={capturePhoto} className="bg-emerald-600 hover:bg-emerald-700">
                         Capture
                       </Button>
@@ -881,15 +936,6 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
                   <div className="absolute bottom-4 right-4">
                     <Button type="button" variant="secondary" size="sm" onClick={() => {
                       setCapturedImage(null)
-                      setLivenessComplete(false)
-                      setLivenessScore(0)
-                      setLivenessMetrics({
-                        eyesOpen: false,
-                        faceDetected: false,
-                        headMovement: false,
-                        livenessScore: 0
-                      })
-                      resetLiveness()
                       startCamera()
                     }}>
                       <RefreshCw className="w-4 h-4 mr-2" /> Retake
@@ -940,15 +986,13 @@ function AttendanceRecognitionModal({ sectionId, isOpen, onClose, onStudentMarke
   useEffect(() => {
     const loadModels = async () => {
       try {
-        const MODEL_URL = '/models'
-        await Promise.all([
-          faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-          faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
-          faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
-        ])
-        setModelsLoaded(true)
+        const loaded = await initializeFaceDetection()
+        setModelsLoaded(loaded)
+        if (loaded) {
+          console.log('✅ MediaPipe models loaded for Attendance Recognition')
+        }
       } catch (error) {
-        console.error('Error loading face-api models:', error)
+        console.error('Error loading MediaPipe:', error)
       }
     }
     loadModels()
@@ -956,7 +1000,7 @@ function AttendanceRecognitionModal({ sectionId, isOpen, onClose, onStudentMarke
 
   const startCamera = async () => {
     if (!modelsLoaded) {
-      setRecognitionError('Facial recognition models are still loading...')
+      setRecognitionError('MediaPipe models are still loading...')
       return
     }
 
@@ -1029,18 +1073,16 @@ function AttendanceRecognitionModal({ sectionId, isOpen, onClose, onStudentMarke
       if (!videoRef.current || isProcessing) return
 
       try {
-        const detection = await faceapi
-          .detectSingleFace(videoRef.current, new faceapi.TinyFaceDetectorOptions())
-          .withFaceLandmarks()
-          .withFaceDescriptor()
+        const result = await detectFaceInVideo(videoRef.current)
 
-        if (detection) {
+        if (result.detected && result.descriptor) {
           setFaceDetected(true)
-          setFaceDescriptor(detection.descriptor)
+          const descriptor = new Float32Array(result.descriptor)
+          setFaceDescriptor(descriptor)
 
           // Auto-match face when detected
-          if (!isProcessing && detection.descriptor) {
-            await matchAndMarkAttendance(detection.descriptor)
+          if (!isProcessing) {
+            await matchAndMarkAttendance(descriptor)
           }
         } else {
           setFaceDetected(false)
@@ -1048,6 +1090,7 @@ function AttendanceRecognitionModal({ sectionId, isOpen, onClose, onStudentMarke
         }
       } catch (error) {
         // Face detection error
+        console.error('Face detection error:', error)
       }
     }, 500)
   }
@@ -1206,9 +1249,14 @@ interface LivenessProgress {
 }
 
 function FaceRegistrationModal({ professorId, professorName, onComplete, onSkip }: FaceRegistrationModalProps) {
+  // Parse professor name into first and last name
+  const [firstName, lastName] = professorName.split(' ').length > 1 
+    ? [professorName.split(' ')[0], professorName.split(' ').slice(1).join(' ')] 
+    : [professorName, '']
+
   const [formData, setFormData] = useState({
-    firstName: '',
-    lastName: ''
+    firstName: firstName,
+    lastName: lastName
   })
   const [capturedImage, setCapturedImage] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -1217,41 +1265,22 @@ function FaceRegistrationModal({ professorId, professorName, onComplete, onSkip 
   const [modelsLoaded, setModelsLoaded] = useState(false)
   const [faceDetected, setFaceDetected] = useState(false)
   const [faceDescriptor, setFaceDescriptor] = useState<Float32Array | null>(null)
-  const [livenessCheck, setLivenessCheck] = useState(true)
-  const [livenessComplete, setLivenessComplete] = useState(false)
-  const [livenessScore, setLivenessScore] = useState(0)
-  const [livenessMetrics, setLivenessMetrics] = useState({
-    eyesOpen: false,
-    faceDetected: false,
-    headMovement: false,
-    livenessScore: 0
-  })
-  
-  const { livenessScore: hookLivenessScore, livenessMetrics: hookLivenessMetrics, updateLivenessScore, resetLiveness } = usePassiveLivenessDetection()
   
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const captureTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const detectionIntervalRef = useRef<NodeJS.Timeout | null>(null)
 
-  // Sync hook values to component state
-  useEffect(() => {
-    setLivenessScore(hookLivenessScore)
-    setLivenessMetrics(hookLivenessMetrics)
-  }, [hookLivenessScore, hookLivenessMetrics])
-
   useEffect(() => {
     const loadModels = async () => {
       try {
-        const MODEL_URL = '/models'
-        await Promise.all([
-          faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-          faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
-          faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
-        ])
-        setModelsLoaded(true)
+        const loaded = await initializeFaceDetection()
+        setModelsLoaded(loaded)
+        if (loaded) {
+          console.log('✅ MediaPipe models loaded for Professor Registration')
+        }
       } catch (error) {
-        console.error('Error loading face-api models:', error)
+        console.error('Error loading MediaPipe:', error)
       }
     }
     loadModels()
@@ -1294,25 +1323,14 @@ function FaceRegistrationModal({ professorId, professorName, onComplete, onSkip 
       if (!videoRef.current || isCapturing) return
 
       try {
-        const detection = await faceapi
-          .detectSingleFace(videoRef.current, new faceapi.TinyFaceDetectorOptions())
-          .withFaceLandmarks()
-          .withFaceDescriptor()
+        const result = await detectFaceInVideo(videoRef.current)
 
-        if (detection) {
+        if (result.detected && result.descriptor) {
           setFaceDetected(true)
-          setFaceDescriptor(detection.descriptor)
-          
-          if (livenessCheck && !livenessComplete) {
-            const isLive = updateLivenessScore(detection)
-            if (isLive) {
-              setLivenessComplete(true)
-            }
-          }
+          setFaceDescriptor(new Float32Array(result.descriptor))
         } else {
           setFaceDetected(false)
           setFaceDescriptor(null)
-          resetLiveness()
         }
       } catch (error) {
         console.error('Face detection error:', error)
@@ -1322,7 +1340,7 @@ function FaceRegistrationModal({ professorId, professorName, onComplete, onSkip 
 
   const startCamera = async () => {
     if (!modelsLoaded) {
-      alert('Models loading...')
+      alert('MediaPipe models loading...')
       return
     }
 
@@ -1355,20 +1373,15 @@ function FaceRegistrationModal({ professorId, professorName, onComplete, onSkip 
     setIsCapturing(false)
     setFaceDetected(false)
     setFaceDescriptor(null)
-    setLivenessComplete(false)
-    setLivenessScore(0)
-    setLivenessMetrics({
-      eyesOpen: false,
-      faceDetected: false,
-      headMovement: false,
-      livenessScore: 0
-    })
-    resetLiveness()
   }
 
   const capturePhoto = () => {
     if (videoRef.current && !isCapturing && faceDescriptor) {
       setIsCapturing(true)
+      
+      // IMPORTANT: Save descriptor BEFORE stopping camera (which resets it)
+      const savedDescriptor = faceDescriptor
+      
       const canvas = document.createElement('canvas')
       canvas.width = videoRef.current.videoWidth
       canvas.height = videoRef.current.videoHeight
@@ -1379,6 +1392,11 @@ function FaceRegistrationModal({ professorId, professorName, onComplete, onSkip 
         ctx.drawImage(videoRef.current, 0, 0)
         setCapturedImage(canvas.toDataURL('image/jpeg', 0.9))
         stopCamera()
+        
+        // Restore the saved descriptor after camera is stopped
+        setFaceDescriptor(savedDescriptor)
+        
+        console.log('✅ Photo captured with face descriptor:', savedDescriptor.length, 'dimensions')
       }
     }
   }
@@ -1389,6 +1407,13 @@ function FaceRegistrationModal({ professorId, professorName, onComplete, onSkip 
 
     setIsSubmitting(true)
     try {
+      const descriptorArray = faceDescriptor ? Array.from(faceDescriptor) : null
+      
+      console.log('📤 Submitting professor registration:')
+      console.log('   - Professor ID:', professorId)
+      console.log('   - Has face descriptor:', !!descriptorArray)
+      console.log('   - Descriptor length:', descriptorArray?.length)
+      
       const response = await fetch('/api/professor/face-registration/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1397,17 +1422,20 @@ function FaceRegistrationModal({ professorId, professorName, onComplete, onSkip 
           firstName: formData.firstName,
           lastName: formData.lastName,
           faceData: capturedImage,
-          faceDescriptor: faceDescriptor ? Array.from(faceDescriptor) : null
+          faceDescriptor: descriptorArray
         })
       })
 
       const data = await response.json()
+      console.log('📨 Registration response:', data)
+      
       if (data.success) {
         onComplete()
       } else {
         alert(data.error || 'Failed to register')
       }
     } catch (error) {
+      console.error('❌ Registration error:', error)
       alert('Failed to register')
     } finally {
       setIsSubmitting(false)
@@ -1481,49 +1509,19 @@ function FaceRegistrationModal({ professorId, professorName, onComplete, onSkip 
 
                       {/* Instructions */}
                       <div className="absolute top-4 inset-x-0 flex flex-col items-center pointer-events-none gap-2">
-                         {!livenessComplete ? (
-                           <div className="bg-black/80 text-white text-sm font-medium px-4 py-2 rounded-full backdrop-blur-md">
-                             📍 Look at camera - ensure good lighting
-                           </div>
-                         ) : (
-                           <div className="bg-emerald-600/90 text-white text-sm font-medium px-4 py-2 rounded-full backdrop-blur-md flex items-center gap-2">
-                             <Check className="w-4 h-4" /> Liveness Verified
-                           </div>
-                         )}
-                         
-                         {faceDetected && livenessScore > 0 && livenessScore < 100 && (
-                           <div className="mt-1 w-32 h-1 bg-gray-700 rounded-full overflow-hidden">
-                              <div className="h-full bg-primary transition-all duration-100" style={{ width: `${livenessScore}%` }} />
-                           </div>
-                         )}
+                        <div className="bg-black/80 text-white text-sm font-medium px-4 py-2 rounded-full backdrop-blur-md">
+                          📍 Look at camera and capture your face
+                        </div>
                       </div>
 
-                      {/* Liveness Metrics */}
-                      <div className="absolute right-4 top-1/2 transform -translate-y-1/2 bg-black/70 backdrop-blur-sm rounded-lg p-3 flex flex-col gap-2 text-xs">
-                        <div className="text-white font-bold mb-1">Liveness Metrics</div>
-                        <div className={`flex items-center gap-2 ${livenessMetrics.faceDetected ? 'text-blue-400' : 'text-gray-400'}`}>
-                          <div className={`w-2 h-2 rounded-full ${livenessMetrics.faceDetected ? 'bg-blue-400' : 'bg-gray-500'}`}></div>
-                          <span>Face Detected</span>
-                        </div>
-                        <div className={`flex items-center gap-2 ${livenessMetrics.eyesOpen ? 'text-blue-400' : 'text-gray-400'}`}>
-                          <div className={`w-2 h-2 rounded-full ${livenessMetrics.eyesOpen ? 'bg-blue-400' : 'bg-gray-500'}`}></div>
-                          <span>Eyes Open</span>
-                        </div>
-                        <div className={`flex items-center gap-2 ${livenessMetrics.headMovement ? 'text-blue-400' : 'text-gray-400'}`}>
-                          <div className={`w-2 h-2 rounded-full ${livenessMetrics.headMovement ? 'bg-blue-400' : 'bg-gray-500'}`}></div>
-                          <span>Head Movement</span>
-                        </div>
-                        <div className="mt-2 pt-2 border-t border-gray-600">
-                          <div className="text-blue-400 font-bold">Liveness: {Math.round(livenessScore)}%</div>
-                        </div>
-                      </div>
+
 
                       {/* Actions */}
                       <div className="absolute bottom-4 inset-x-0 flex justify-center gap-4 px-4 z-10">
                          <Button type="button" variant="destructive" size="sm" onClick={stopCamera}>
                            Cancel
                          </Button>
-                         {livenessComplete && faceDetected && (
+                         {faceDetected && (
                            <Button type="button" size="sm" onClick={capturePhoto} className="bg-emerald-600 hover:bg-emerald-700">
                               Capture
                            </Button>
@@ -1538,15 +1536,6 @@ function FaceRegistrationModal({ professorId, professorName, onComplete, onSkip 
                       <div className="absolute bottom-4 right-4">
                          <Button type="button" variant="secondary" size="sm" onClick={() => {
                             setCapturedImage(null)
-                            setLivenessComplete(false)
-                            setLivenessScore(0)
-                            setLivenessMetrics({
-                              eyesOpen: false,
-                              faceDetected: false,
-                              headMovement: false,
-                              livenessScore: 0
-                            })
-                            resetLiveness()
                             startCamera()
                          }}>
                            <RefreshCw className="w-4 h-4 mr-2" /> Retake
@@ -1569,6 +1558,278 @@ function FaceRegistrationModal({ professorId, professorName, onComplete, onSkip 
              </Button>
           </div>
         </form>
+      </Card>
+    </div>
+  )
+}
+
+interface FaceVerificationModalProps {
+  professorId: string
+  professorName: string
+  onVerificationSuccess: () => void
+}
+
+function FaceVerificationModal({ professorId, professorName, onVerificationSuccess }: FaceVerificationModalProps) {
+  const [capturedImage, setCapturedImage] = useState<string | null>(null)
+  const [isVerifying, setIsVerifying] = useState(false)
+  const [showCamera, setShowCamera] = useState(false)
+  const [modelsLoaded, setModelsLoaded] = useState(false)
+  const [faceDetected, setFaceDetected] = useState(false)
+  const [faceDescriptor, setFaceDescriptor] = useState<Float32Array | null>(null)
+  const [verificationMessage, setVerificationMessage] = useState('')
+  const [verificationStatus, setVerificationStatus] = useState<'idle' | 'scanning' | 'success' | 'failed'>('idle')
+  
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const detectionIntervalRef = useRef<NodeJS.Timeout | null>(null)
+
+  useEffect(() => {
+    const loadModels = async () => {
+      try {
+        const loaded = await initializeFaceDetection()
+        setModelsLoaded(loaded)
+        if (loaded) {
+          console.log('✅ MediaPipe models loaded for Professor Verification')
+        }
+      } catch (error) {
+        console.error('Error loading MediaPipe:', error)
+      }
+    }
+    loadModels()
+  }, [])
+
+  useEffect(() => {
+    if (!showCamera || !streamRef.current || !videoRef.current) return
+
+    videoRef.current.srcObject = streamRef.current
+    
+    const playPromise = videoRef.current.play()
+    if (playPromise !== undefined) {
+      playPromise.catch(err => {
+        console.error('Autoplay failed, retrying...', err)
+        setTimeout(() => {
+          if (videoRef.current && streamRef.current) {
+            videoRef.current.play().catch(e => console.error('Retry failed:', e))
+          }
+        }, 100)
+      })
+    }
+
+    startFaceDetection()
+
+    return () => {
+      if (detectionIntervalRef.current) clearInterval(detectionIntervalRef.current)
+    }
+  }, [showCamera])
+
+  const startFaceDetection = async () => {
+    if (!videoRef.current || !modelsLoaded) return
+
+    detectionIntervalRef.current = setInterval(async () => {
+      if (!videoRef.current || isVerifying) return
+
+      try {
+        const result = await detectFaceInVideo(videoRef.current)
+
+        if (result.detected && result.descriptor) {
+          setFaceDetected(true)
+          setFaceDescriptor(new Float32Array(result.descriptor))
+          // Auto-verify when face is detected
+          if (!isVerifying) {
+            await performFaceVerification(new Float32Array(result.descriptor))
+          }
+        } else {
+          setFaceDetected(false)
+        }
+      } catch (error) {
+        console.error('Face detection error:', error)
+      }
+    }, 300)
+  }
+
+  const performFaceVerification = async (detectedDescriptor: Float32Array) => {
+    try {
+      setIsVerifying(true)
+      
+      // Validate descriptor - should be 128D from FaceNet embeddings
+      if (!detectedDescriptor || detectedDescriptor.length !== 128) {
+        console.error('❌ Invalid face descriptor:', detectedDescriptor?.length, '(expected 128)')
+        setVerificationStatus('failed')
+        setVerificationMessage('Face detection failed. Please try again.')
+        setTimeout(() => {
+          setVerificationStatus('idle')
+          setVerificationMessage('')
+        }, 2000)
+        setIsVerifying(false)
+        return
+      }
+
+      console.log('🎯 Attempting face verification:')
+      console.log('   - Descriptor length:', detectedDescriptor.length)
+      console.log('   - Descriptor sample:', Array.from(detectedDescriptor.slice(0, 5)))
+      
+      setVerificationStatus('scanning')
+      const response = await fetch('/api/professor/face-registration/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          professorId,
+          faceDescriptor: Array.from(detectedDescriptor)
+        })
+      })
+
+      const data = await response.json()
+      console.log('📨 Verification response:', data)
+
+      if (data.success && data.verified) {
+        setVerificationStatus('success')
+        setVerificationMessage('Face verified successfully! Accessing class...')
+        setTimeout(() => {
+          onVerificationSuccess()
+        }, 1500)
+      } else {
+        setVerificationStatus('failed')
+        setVerificationMessage(data.message || 'Face verification failed. Please try again.')
+        setTimeout(() => {
+          setVerificationStatus('idle')
+          setVerificationMessage('')
+        }, 2000)
+      }
+    } catch (error) {
+      console.error('Verification error:', error)
+      setVerificationStatus('failed')
+      setVerificationMessage('Verification error. Please try again.')
+      setTimeout(() => {
+        setVerificationStatus('idle')
+        setVerificationMessage('')
+      }, 2000)
+    } finally {
+      setIsVerifying(false)
+    }
+  }
+
+  const startCamera = async () => {
+    if (!modelsLoaded) {
+      alert('Models loading...')
+      return
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false
+      })
+      
+      streamRef.current = stream
+      requestAnimationFrame(() => {
+        setShowCamera(true)
+      })
+    } catch (error) {
+      console.error('Camera error:', error)
+      alert('Unable to access camera. Please check permissions.')
+    }
+  }
+
+  const stopCamera = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop())
+      streamRef.current = null
+    }
+    setShowCamera(false)
+    if (detectionIntervalRef.current) {
+      clearInterval(detectionIntervalRef.current)
+    }
+    setFaceDetected(false)
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+      <Card className="w-full max-w-md">
+        <CardHeader className="text-center">
+          <div className="flex items-center justify-center mb-4">
+            <ShieldCheck className="w-8 h-8 text-emerald-600" />
+          </div>
+          <CardTitle>Verify Your Identity</CardTitle>
+          <CardDescription>Live face verification required to access the class session</CardDescription>
+        </CardHeader>
+        
+        <CardContent className="space-y-4">
+          {!showCamera ? (
+            <div className="text-center space-y-4">
+              <p className="text-sm text-gray-600">Your face must be live (move your head) to verify. Photos will be rejected.</p>
+              <Button onClick={startCamera} className="w-full gap-2" disabled={!modelsLoaded}>
+                <Camera className="w-4 h-4" />
+                {modelsLoaded ? 'Start Face Verification' : 'Loading Models...'}
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="relative bg-black rounded-lg overflow-hidden" style={{ aspectRatio: '16/9' }}>
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  muted
+                  className="w-full h-full object-cover transform scale-x-[-1]"
+                />
+                
+                {!faceDetected && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/40">
+                    <div className="text-center text-white">
+                      <Loader2 className="w-8 h-8 animate-spin mx-auto mb-2" />
+                      <p className="text-sm">Position your face in frame</p>
+                    </div>
+                  </div>
+                )}
+
+                {verificationStatus === 'scanning' && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/40">
+                    <div className="text-center text-white">
+                      <Loader2 className="w-8 h-8 animate-spin mx-auto mb-2" />
+                      <p className="text-sm">Verifying...</p>
+                    </div>
+                  </div>
+                )}
+
+                {verificationStatus === 'success' && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-green-500/40">
+                    <div className="text-center text-white">
+                      <Check className="w-8 h-8 mx-auto mb-2" />
+                      <p className="text-sm">{verificationMessage}</p>
+                    </div>
+                  </div>
+                )}
+
+                {verificationStatus === 'failed' && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-red-500/40">
+                    <div className="text-center text-white">
+                      <X className="w-8 h-8 mx-auto mb-2" />
+                      <p className="text-sm">{verificationMessage}</p>
+                    </div>
+                  </div>
+                )}
+
+                <div className="absolute top-4 inset-x-0 flex flex-col items-center pointer-events-none gap-2">
+                  {faceDetected && (
+                    <div className="bg-emerald-600/90 text-white text-sm font-medium px-4 py-2 rounded-full backdrop-blur-md flex items-center gap-2">
+                      <Check className="w-4 h-4" /> Face Detected
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex gap-2">
+                <Button 
+                  onClick={stopCamera}
+                  variant="outline"
+                  className="w-full"
+                  disabled={isVerifying}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )}
+        </CardContent>
       </Card>
     </div>
   )

@@ -48,7 +48,7 @@ export async function GET(request: NextRequest) {
     // Fetch all sections with their data
     const { data: sections, error: sectionsError } = await supabase
       .from('sections')
-      .select('id, section_code, course_id, professor_id')
+      .select('id, section_code, course_id, semester')
 
     if (sectionsError) {
       console.error('Error fetching sections:', sectionsError)
@@ -85,7 +85,7 @@ export async function GET(request: NextRequest) {
         id: section.id,
         section_name: section.section_code,
         course_code: section.course_id ? `Course-${section.course_id.substring(0, 8)}` : 'N/A',
-        professor_name: section.professor_id ? (professorMap.get(section.professor_id) || 'Unassigned') : 'Unassigned',
+        professor_name: 'Unassigned',
         total_attendance_records: sectionAttendance.length,
         present_count: presentInSection,
         absent_count: sectionAttendance.filter((r: any) => r.status === 'absent').length,

@@ -153,34 +153,12 @@ export async function POST(request: NextRequest) {
     }
 
     // Always store in student_face_registrations table
-    let sectionCode = null
-    
-    // Fetch section code if sectionId is provided
-    if (sectionId) {
-      try {
-        const { data: sectionData, error: sectionError } = await supabase
-          .from('sections')
-          .select('section_code')
-          .eq('id', sectionId)
-          .single()
-
-        if (sectionError) {
-          console.warn('⚠️ Could not fetch section code:', sectionError)
-        } else if (sectionData) {
-          sectionCode = sectionData.section_code
-          console.log('✅ Found section code:', sectionCode)
-        }
-      } catch (sectionFetchError) {
-        console.warn('⚠️ Error fetching section:', sectionFetchError)
-      }
-    }
-
     try {
       console.log('About to insert into student_face_registrations with:', {
         student_number: studentId,
         first_name: firstName,
         last_name: lastName,
-        section_code: sectionCode,
+        section_id: sectionId || null,
         face_data_type: typeof (imagePath || faceData),
         face_data_length: (imagePath || faceData)?.length || 0,
         face_descriptor_type: typeof faceDescriptor,
@@ -194,6 +172,7 @@ export async function POST(request: NextRequest) {
         student_number: studentId,
         first_name: firstName,
         last_name: lastName,
+        section_id: sectionId || null,
         face_data: imagePath || faceData || null,
         face_descriptor: Array.isArray(faceDescriptor) ? faceDescriptor : (faceDescriptor ? Array.from(faceDescriptor) : null),
         is_active: true

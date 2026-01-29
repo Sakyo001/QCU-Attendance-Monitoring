@@ -3,16 +3,50 @@
 import { useAuth } from '@/contexts/AuthContext'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { Users, GraduationCap, BookOpen, BarChart3, Settings, LogOut } from 'lucide-react'
+import { Users, GraduationCap, BookOpen, BarChart3, LogOut, TrendingUp, Clock, CheckCircle, XCircle, AlertCircle } from 'lucide-react'
+
+interface DashboardStats {
+  totalStudents: number
+  totalProfessors: number
+  totalSections: number
+  registeredStudents: number
+  totalAttendanceRecords: number
+  overallAttendanceRate: number
+  today: {
+    total: number
+    present: number
+    absent: number
+    late: number
+    attendanceRate: number
+  }
+  recentActivity: Array<{
+    id: string
+    studentName: string
+    studentNumber: string
+    status: string
+    timestamp: string
+    section: string
+  }>
+}
 
 export default function AdminDashboard() {
   const { user, loading, signOut } = useAuth()
   const router = useRouter()
-  const [stats, setStats] = useState({
+  const [stats, setStats] = useState<DashboardStats>({
     totalStudents: 0,
     totalProfessors: 0,
     totalSections: 0,
-    attendanceRate: 0,
+    registeredStudents: 0,
+    totalAttendanceRecords: 0,
+    overallAttendanceRate: 0,
+    today: {
+      total: 0,
+      present: 0,
+      absent: 0,
+      late: 0,
+      attendanceRate: 0
+    },
+    recentActivity: []
   })
   const [loadingStats, setLoadingStats] = useState(true)
 
@@ -68,10 +102,58 @@ export default function AdminDashboard() {
   }
 
   const statCards = [
-    { label: 'Total Students', value: stats.totalStudents, icon: Users, color: 'bg-blue-500' },
-    { label: 'Total Professors', value: stats.totalProfessors, icon: GraduationCap, color: 'bg-green-500' },
-    { label: 'Active Sections', value: stats.totalSections, icon: BookOpen, color: 'bg-purple-500' },
+    { 
+      label: 'Total Students', 
+      value: stats.totalStudents, 
+      icon: Users, 
+      color: 'bg-blue-500',
+      subtext: `${stats.registeredStudents} registered`
+    },
+    { 
+      label: 'Total Professors', 
+      value: stats.totalProfessors, 
+      icon: GraduationCap, 
+      color: 'bg-green-500',
+      subtext: 'Active faculty'
+    },
+    { 
+      label: 'Active Sections', 
+      value: stats.totalSections, 
+      icon: BookOpen, 
+      color: 'bg-purple-500',
+      subtext: 'Class sections'
+    },
+    { 
+      label: 'Overall Attendance', 
+      value: `${stats.overallAttendanceRate.toFixed(1)}%`, 
+      icon: TrendingUp, 
+      color: 'bg-violet-500',
+      subtext: `${stats.totalAttendanceRecords} total records`
+    },
   ]
+
+  const formatTime = (timestamp: string) => {
+    const date = new Date(timestamp)
+    return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+  }
+
+  const formatDate = (timestamp: string) => {
+    const date = new Date(timestamp)
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  }
+
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case 'present':
+        return <span className="px-2 py-1 bg-green-100 text-green-800 text-xs font-medium rounded-full">Present</span>
+      case 'absent':
+        return <span className="px-2 py-1 bg-red-100 text-red-800 text-xs font-medium rounded-full">Absent</span>
+      case 'late':
+        return <span className="px-2 py-1 bg-yellow-100 text-yellow-800 text-xs font-medium rounded-full">Late</span>
+      default:
+        return <span className="px-2 py-1 bg-gray-100 text-gray-800 text-xs font-medium rounded-full">{status}</span>
+    }
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -99,23 +181,69 @@ export default function AdminDashboard() {
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
           {statCards.map((stat) => {
             const Icon = stat.icon
             return (
-              <div key={stat.label} className="bg-white rounded-lg shadow p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-gray-600">{stat.label}</p>
-                    <p className="text-3xl font-bold text-gray-900 mt-2">{stat.value}</p>
-                  </div>
+              <div key={stat.label} className="bg-white rounded-lg shadow p-6 hover:shadow-lg transition-shadow">
+                <div className="flex items-center justify-between mb-4">
                   <div className={`${stat.color} p-3 rounded-lg`}>
                     <Icon className="w-6 h-6 text-white" />
                   </div>
                 </div>
+                <p className="text-sm font-medium text-gray-600">{stat.label}</p>
+                <p className="text-3xl font-bold text-gray-900 mt-1">{stat.value}</p>
+                <p className="text-xs text-gray-500 mt-2">{stat.subtext}</p>
               </div>
             )
           })}
+        </div>
+
+        {/* Today's Attendance Overview */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+          <div className="bg-white rounded-lg shadow p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <Clock className="w-5 h-5 text-blue-600" />
+              <h3 className="text-lg font-semibold text-gray-900">Today's Summary</h3>
+            </div>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-gray-600">Total Records</span>
+                <span className="text-lg font-bold text-gray-900">{stats.today.total}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-gray-600">Attendance Rate</span>
+                <span className="text-lg font-bold text-violet-600">{stats.today.attendanceRate.toFixed(1)}%</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-lg shadow p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <CheckCircle className="w-5 h-5 text-green-600" />
+              <h3 className="text-lg font-semibold text-gray-900">Present Today</h3>
+            </div>
+            <div className="text-4xl font-bold text-green-600">{stats.today.present}</div>
+            <p className="text-sm text-gray-500 mt-2">Students marked present</p>
+          </div>
+
+          <div className="bg-white rounded-lg shadow p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <AlertCircle className="w-5 h-5 text-yellow-600" />
+              <h3 className="text-lg font-semibold text-gray-900">Absent & Late</h3>
+            </div>
+            <div className="flex items-center gap-4">
+              <div>
+                <div className="text-2xl font-bold text-red-600">{stats.today.absent}</div>
+                <p className="text-xs text-gray-500">Absent</p>
+              </div>
+              <div className="w-px h-12 bg-gray-200"></div>
+              <div>
+                <div className="text-2xl font-bold text-yellow-600">{stats.today.late}</div>
+                <p className="text-xs text-gray-500">Late</p>
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* Quick Actions */}
@@ -168,17 +296,6 @@ export default function AdminDashboard() {
                   <div className="text-sm text-gray-600">Attendance analytics</div>
                 </div>
               </button>
-              
-              <button 
-                onClick={() => router.push('/admin/settings')}
-                className="flex items-center gap-3 p-4 border border-gray-200 rounded-lg hover:border-violet-500 hover:bg-violet-50 transition-all"
-              >
-                <Settings className="w-5 h-5 text-violet-600" />
-                <div className="text-left">
-                  <div className="font-medium text-gray-900">System Settings</div>
-                  <div className="text-sm text-gray-600">Configure system options</div>
-                </div>
-              </button>
             </div>
           </div>
         </div>
@@ -186,10 +303,58 @@ export default function AdminDashboard() {
         {/* Recent Activity */}
         <div className="mt-8 bg-white rounded-lg shadow">
           <div className="px-6 py-4 border-b border-gray-200">
-            <h2 className="text-lg font-semibold text-gray-900">Recent Activity</h2>
+            <h2 className="text-lg font-semibold text-gray-900">Recent Attendance Activity</h2>
           </div>
-          <div className="p-6">
-            <p className="text-gray-600 text-center py-8">No recent activity to display</p>
+          <div className="overflow-x-auto">
+            {stats.recentActivity.length === 0 ? (
+              <div className="p-8 text-center">
+                <p className="text-gray-600">No recent activity to display</p>
+              </div>
+            ) : (
+              <table className="w-full">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Student
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Student Number
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Section
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Status
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Time
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {stats.recentActivity.map((activity) => (
+                    <tr key={activity.id} className="hover:bg-gray-50">
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="font-medium text-gray-900">{activity.studentName}</div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                        {activity.studentNumber}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                        {activity.section}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        {getStatusBadge(activity.status)}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                        <div>{formatDate(activity.timestamp)}</div>
+                        <div className="text-xs text-gray-500">{formatTime(activity.timestamp)}</div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
       </main>

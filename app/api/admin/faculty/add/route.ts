@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
+import bcrypt from 'bcryptjs'
 
 export async function POST(request: Request) {
   try {
@@ -14,6 +15,9 @@ export async function POST(request: Request) {
       )
     }
 
+    // Hash the password
+    const hashedPassword = await bcrypt.hash(password, 10)
+
     // Use service role client (bypasses RLS)
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -27,7 +31,7 @@ export async function POST(request: Request) {
         first_name: firstName,
         last_name: lastName,
         email: email,
-        password: password,
+        password_hash: hashedPassword,
         employee_id: employeeId,
         role: role || 'professor',
         is_active: true,

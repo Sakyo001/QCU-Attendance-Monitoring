@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
+import bcrypt from 'bcryptjs'
 
 export async function POST(request: Request) {
   try {
@@ -21,10 +22,10 @@ export async function POST(request: Request) {
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     )
 
-    // Query with service role
+    // Query with service role - fetch both password and password_hash
     const { data: dbUser, error: dbError } = await supabase
       .from('users')
-      .select('id, email, password, role, is_active, first_name, last_name, student_id, employee_id')
+      .select('id, email, password, password_hash, role, is_active, first_name, last_name, student_id, employee_id')
       .eq('email', email)
       .single()
 
@@ -46,11 +47,43 @@ export async function POST(request: Request) {
 
     console.log('User found:', dbUser.email, 'Role:', dbUser.role)
     console.log('Password in DB:', dbUser.password ? 'exists' : 'NULL/empty')
+    console.log('Password hash in DB:', dbUser.password_hash ? 'exists' : 'NULL/empty')
     console.log('Password provided:', password)
-    console.log('Passwords match:', dbUser.password === password)
 
-    // Check password
-    if (dbUser.password !== password) {
+    // Check password with bcrypt (for hashed passwords) or plain text (fallback for old accounts)
+    let isPasswordValid = false
+    
+    if (dbUser.password_hash) {
+      // New hashed password - verify with bcrypt
+      try {
+        isPasswordValid = await bcrypt.compare(password, dbUser.password_hash)
+        console.log('Bcrypt password match:', isPasswordValid)
+      } catch (bcryptError) {
+        console.error('Bcrypt error:', bcryptError)
+        isPasswordValid = false
+      }
+    } else if (dbUser.password) {
+      // Fallback to plain text comparison for old accounts without hashes
+      isPasswordValid = password === dbUser.password
+      console.log('Plain text password match:', isPasswordValid)
+      
+      // If valid with plain text, automatically hash and update for future logins
+      if (isPasswordValid) {
+        try {
+          const hashedPassword = await bcrypt.hash(password, 10)
+          await supabase
+            .from('users')
+            .update({ password_hash: hashedPassword })
+            .eq('id', dbUser.id)
+          console.log('Password automatically hashed and updated for user:', email)
+        } catch (hashError) {
+          console.error('Error hashing password on login:', hashError)
+          // Still allow login even if hashing fails
+        }
+      }
+    }
+    
+    if (!isPasswordValid) {
       console.error('Password mismatch for user:', email)
       return NextResponse.json(
         { error: 'Invalid email or password' },

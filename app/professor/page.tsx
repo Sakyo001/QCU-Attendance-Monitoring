@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { BookOpen, Users, Calendar, LogOut, Clock, MapPin, Play } from 'lucide-react'
 import { createClient } from '@/utils/supabase/client'
+import { ClassAccessModal } from '@/components/class-access-modal'
+import { PasswordVerificationModal } from '@/components/password-verification-modal'
 
 interface Section {
   id: string
@@ -35,6 +37,10 @@ export default function ProfessorDashboard() {
   const [loadingSections, setLoadingSections] = useState(true)
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [todayClasses, setTodayClasses] = useState(0)
+  const [showClassAccessModal, setShowClassAccessModal] = useState(false)
+  const [showPasswordModal, setShowPasswordModal] = useState(false)
+  const [selectedSectionId, setSelectedSectionId] = useState<string>('')
+  const [selectedScheduleId, setSelectedScheduleId] = useState<string>('')
 
   useEffect(() => {
     if (!loading && (!user || (user.role !== 'professor' && user.role !== 'adviser'))) {
@@ -103,7 +109,27 @@ export default function ProfessorDashboard() {
   }
 
   const handleStartSession = (sectionId: string, scheduleId: string) => {
-    router.push(`/professor/attendance/${sectionId}`)
+    // Store the selected class info and show the access modal
+    setSelectedSectionId(sectionId)
+    setSelectedScheduleId(scheduleId)
+    setShowClassAccessModal(true)
+  }
+
+  const handlePasswordClick = () => {
+    setShowClassAccessModal(false)
+    setShowPasswordModal(true)
+  }
+
+  const handlePasswordVerified = () => {
+    setShowPasswordModal(false)
+    // Navigate to attendance page with entry method parameter
+    router.push(`/professor/attendance/${selectedSectionId}?entryMethod=password`)
+  }
+
+  const handleFaceRecognitionClick = () => {
+    setShowClassAccessModal(false)
+    // Navigate to attendance page with entry method parameter
+    router.push(`/professor/attendance/${selectedSectionId}?entryMethod=face`)
   }
 
   const handleCreateClassroom = async (formData: any) => {
@@ -310,6 +336,23 @@ export default function ProfessorDashboard() {
           onSubmit={handleCreateClassroom}
         />
       )}
+
+      {/* Class Access Modal */}
+      <ClassAccessModal
+        isOpen={showClassAccessModal}
+        onClose={() => setShowClassAccessModal(false)}
+        onPasswordClick={handlePasswordClick}
+        onFaceRecognitionClick={handleFaceRecognitionClick}
+        professorName={`${user?.firstName} ${user?.lastName}`}
+      />
+
+      {/* Password Verification Modal */}
+      <PasswordVerificationModal
+        isOpen={showPasswordModal}
+        onClose={() => setShowPasswordModal(false)}
+        onVerified={handlePasswordVerified}
+        professorId={user?.id || ''}
+      />
     </div>
   )
 }

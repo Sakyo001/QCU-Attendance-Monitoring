@@ -4,14 +4,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState, useRef } from 'react'
 import { Camera, ArrowLeft } from 'lucide-react'
-import * as faceapi from 'face-api.js'
-
-interface LivenessMetrics {
-  eyesOpen: boolean
-  faceDetected: boolean
-  headMovement: boolean
-  livenessScore: number
-}
+import { initializeFaceDetection, detectFaceInVideo } from '@/lib/mediapipe-face'
 
 export default function StudentFaceRegistrationPage() {
   const { user, loading } = useAuth()
@@ -111,38 +104,23 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
   const [modelsLoaded, setModelsLoaded] = useState(false)
   const [faceDetected, setFaceDetected] = useState(false)
   const [faceDescriptor, setFaceDescriptor] = useState<Float32Array | null>(null)
-  const [livenessCheck, setLivenessCheck] = useState(true)
-  const [livenessComplete, setLivenessComplete] = useState(false)
-  const [livenessScore, setLivenessScore] = useState(0)
-  const [livenessMetrics, setLivenessMetrics] = useState<LivenessMetrics>({
-    eyesOpen: false,
-    faceDetected: false,
-    headMovement: false,
-    livenessScore: 0
-  })
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const captureTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const detectionIntervalRef = useRef<NodeJS.Timeout | null>(null)
-  const livenessFramesRef = useRef(0)
-  const previousYawRef = useRef(0)
-  const LIVENESS_THRESHOLD = 30 // Frames required to verify liveness
-  const HEAD_MOVEMENT_THRESHOLD = 5 // Minimum yaw change to detect movement
 
-  // Load face-api models
+  // Load MediaPipe models
   useEffect(() => {
     const loadModels = async () => {
       try {
-        const MODEL_URL = '/models'
-        await Promise.all([
-          faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-          faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
-          faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
-        ])
-        setModelsLoaded(true)
+        const loaded = await initializeFaceDetection()
+        setModelsLoaded(loaded)
+        if (loaded) {
+          console.log('✅ MediaPipe models loaded for Student Face Registration')
+        }
       } catch (error) {
-        console.error('Error loading face-api models:', error)
+        console.error('Error loading MediaPipe:', error)
         alert('Failed to load facial recognition models. Please refresh the page.')
       }
     }
@@ -150,75 +128,29 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
   }, [])
 
   useEffect(() => {
-    if (showCamera && streamRef.current && videoRef.current) {
-      videoRef.current.srcObject = streamRef.current
-      startFaceDetection()
+    if (!showCamera || !streamRef.current || !videoRef.current) return
+
+    videoRef.current.srcObject = streamRef.current
+    
+    const playPromise = videoRef.current.play()
+    if (playPromise !== undefined) {
+      playPromise.catch(err => {
+        console.error('Autoplay failed, retrying...', err)
+        setTimeout(() => {
+          if (videoRef.current && streamRef.current) {
+            videoRef.current.play().catch(e => console.error('Retry failed:', e))
+          }
+        }, 100)
+      })
     }
+
+    startFaceDetection()
 
     return () => {
-      if (captureTimeoutRef.current) {
-        clearTimeout(captureTimeoutRef.current)
-      }
-      if (detectionIntervalRef.current) {
-        clearInterval(detectionIntervalRef.current)
-      }
+      if (captureTimeoutRef.current) clearTimeout(captureTimeoutRef.current)
+      if (detectionIntervalRef.current) clearInterval(detectionIntervalRef.current)
     }
   }, [showCamera, modelsLoaded])
-
-  const calculateHeadPose = (landmarks: faceapi.FaceLandmarks68) => {
-    const points = landmarks.positions
-    const noseTip = points[30]
-    const leftEye = points[36]
-    const rightEye = points[45]
-    const leftMouth = points[48]
-    const rightMouth = points[54]
-    const chin = points[8]
-
-    const eyeDistance = Math.abs(rightEye.x - leftEye.x)
-    const leftDistance = Math.abs(noseTip.x - leftEye.x)
-    const rightDistance = Math.abs(noseTip.x - rightEye.x)
-    const yaw = -((leftDistance - rightDistance) / eyeDistance) * 100
-
-    return yaw
-  }
-
-  const checkEyesOpen = (landmarks: faceapi.FaceLandmarks68): boolean => {
-    const points = landmarks.positions
-    const leftEyeTop = points[37]
-    const leftEyeBottom = points[41]
-    const rightEyeTop = points[43]
-    const rightEyeBottom = points[47]
-
-    const leftEyeOpen = Math.abs(leftEyeBottom.y - leftEyeTop.y) > 5
-    const rightEyeOpen = Math.abs(rightEyeBottom.y - rightEyeTop.y) > 5
-
-    return leftEyeOpen && rightEyeOpen
-  }
-
-  const updateLivenessScore = (detection: faceapi.WithFaceDescriptors<faceapi.WithFaceLandmarks<faceapi.WithFaceDetection<{}>>>) => {
-    const eyesOpen = checkEyesOpen(detection.landmarks)
-    const yaw = calculateHeadPose(detection.landmarks)
-    const headMovement = Math.abs(yaw - previousYawRef.current) > HEAD_MOVEMENT_THRESHOLD
-    
-    previousYawRef.current = yaw
-
-    if (eyesOpen && detection) {
-      livenessFramesRef.current++
-    } else {
-      livenessFramesRef.current = Math.max(0, livenessFramesRef.current - 1)
-    }
-
-    const score = Math.min(100, (livenessFramesRef.current / LIVENESS_THRESHOLD) * 100)
-    setLivenessScore(score)
-    setLivenessMetrics({
-      eyesOpen,
-      faceDetected: true,
-      headMovement,
-      livenessScore: score
-    })
-
-    return score >= 100
-  }
 
   const startFaceDetection = async () => {
     if (!videoRef.current || !modelsLoaded) return
@@ -227,27 +159,20 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
       if (!videoRef.current || isCapturing) return
 
       try {
-        const detection = await faceapi
-          .detectSingleFace(videoRef.current, new faceapi.TinyFaceDetectorOptions())
-          .withFaceLandmarks()
-          .withFaceDescriptor()
+        const result = await detectFaceInVideo(videoRef.current)
 
-        if (detection) {
+        if (result.detected && result.descriptor) {
           setFaceDetected(true)
-          setFaceDescriptor(detection.descriptor)
-
-          if (livenessCheck && !livenessComplete) {
-            const isLive = updateLivenessScore(detection)
-            if (isLive) {
-              setLivenessComplete(true)
-            }
-          }
-
-          if (!livenessCheck || livenessComplete) {
-            if (!captureTimeoutRef.current) {
-              captureTimeoutRef.current = setTimeout(() => {
-                if (!isCapturing) {
-                  capturePhoto()
+          setFaceDescriptor(new Float32Array(result.descriptor))
+        } else {
+          setFaceDetected(false)
+          setFaceDescriptor(null)
+        }
+      } catch (error) {
+        console.error('Face detection error:', error)
+      }
+    }, 300)
+  }
                 }
               }, 1000)
             }

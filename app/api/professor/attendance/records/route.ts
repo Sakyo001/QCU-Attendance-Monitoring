@@ -26,6 +26,7 @@ export async function GET(request: NextRequest) {
       .from('student_face_registrations')
       .select('id, first_name, last_name, student_number')
       .eq('is_active', true)
+      .eq('section_id', sectionId)
       .order('last_name', { ascending: true })
 
     if (allStudentsError) {

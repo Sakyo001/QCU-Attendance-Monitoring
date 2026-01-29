@@ -10,10 +10,33 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const { professorId, firstName, lastName, faceData, faceDescriptor } = body
 
+    console.log('📥 Professor registration request:')
+    console.log('   - Professor ID:', professorId)
+    console.log('   - Name:', firstName, lastName)
+    console.log('   - Has faceData:', !!faceData)
+    console.log('   - Has faceDescriptor:', !!faceDescriptor)
+    console.log('   - Descriptor type:', typeof faceDescriptor)
+    console.log('   - Descriptor is array:', Array.isArray(faceDescriptor))
+    console.log('   - Descriptor length:', faceDescriptor?.length)
+
     // Validate required fields
     if (!professorId || !firstName || !lastName || !faceData) {
       return NextResponse.json(
         { error: 'All fields are required (professorId, firstName, lastName, faceData)' },
+        { status: 400 }
+      )
+    }
+
+    // Validate face descriptor (FaceNet provides 128-dimension embeddings for identity recognition)
+    if (!faceDescriptor || !Array.isArray(faceDescriptor) || faceDescriptor.length !== 128) {
+      console.error('❌ Invalid face descriptor:', {
+        exists: !!faceDescriptor,
+        isArray: Array.isArray(faceDescriptor),
+        length: faceDescriptor?.length,
+        expected: 128
+      })
+      return NextResponse.json(
+        { error: 'Invalid face descriptor. Please recapture your photo.' },
         { status: 400 }
       )
     }
