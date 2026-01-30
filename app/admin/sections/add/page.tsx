@@ -45,7 +45,7 @@ export default function AddSectionPage() {
           semester: formData.semester,
           academic_year: academicYear,
           max_students: formData.maxStudents,
-        })
+        } as any)
         .select()
         .single()
 
