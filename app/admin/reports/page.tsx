@@ -92,7 +92,7 @@ export default function ReportsPage() {
         r.section_name,
         r.course_code,
         r.professor_name,
-        r.total_students.toString(),
+        r.total_attendance_records.toString(),
         `${r.attendance_rate.toFixed(1)}%`,
       ]),
     ].map(row => row.join(',')).join('\n')
