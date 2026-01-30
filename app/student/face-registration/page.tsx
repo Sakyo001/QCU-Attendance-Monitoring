@@ -104,11 +104,23 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
   const [modelsLoaded, setModelsLoaded] = useState(false)
   const [faceDetected, setFaceDetected] = useState(false)
   const [faceDescriptor, setFaceDescriptor] = useState<Float32Array | null>(null)
+  const [recognizedName, setRecognizedName] = useState<string>('')
+  const [recognitionConfidence, setRecognitionConfidence] = useState<number>(0)
+  const [boundingBox, setBoundingBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null)
+  const [autoCapture, setAutoCapture] = useState(true)
+  const [boundingBoxMode, setBoundingBoxMode] = useState(true)
+  const [captureCountdown, setCaptureCountdown] = useState<number>(0)
 
   const videoRef = useRef<HTMLVideoElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const captureTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const detectionIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const autoCaptureTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const faceStableStartRef = useRef<number | null>(null)
+  const consecutiveFaceDetectionsRef = useRef<number>(0)
+  const savedFaceDescriptorRef = useRef<Float32Array | null>(null) // Permanent storage for captured descriptor
 
   // Load MediaPipe models
   useEffect(() => {
@@ -149,8 +161,100 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
     return () => {
       if (captureTimeoutRef.current) clearTimeout(captureTimeoutRef.current)
       if (detectionIntervalRef.current) clearInterval(detectionIntervalRef.current)
+      if (autoCaptureTimeoutRef.current) clearTimeout(autoCaptureTimeoutRef.current)
+      if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current)
     }
   }, [showCamera, modelsLoaded])
+
+  // Draw bounding box and recognition results on canvas
+  useEffect(() => {
+    if (!canvasRef.current || !videoRef.current) return
+
+    const canvas = canvasRef.current
+    const video = videoRef.current
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
+    const drawLoop = () => {
+      if (!showCamera) return
+
+      // Match canvas size to video
+      canvas.width = video.videoWidth
+      canvas.height = video.videoHeight
+
+      // Clear canvas
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+      // Draw bounding box if face detected
+      if (boundingBox) {
+        const { x, y, width, height } = boundingBox
+
+        // Draw rectangle with green color for detected face
+        ctx.strokeStyle = faceDetected ? '#10b981' : '#ef4444'
+        ctx.lineWidth = 3
+        ctx.strokeRect(x, y, width, height)
+
+        // Draw corners for better visual
+        const cornerLength = 30
+        ctx.strokeStyle = faceDetected ? '#10b981' : '#ef4444'
+        ctx.lineWidth = 5
+
+        // Top-left
+        ctx.beginPath()
+        ctx.moveTo(x, y + cornerLength)
+        ctx.lineTo(x, y)
+        ctx.lineTo(x + cornerLength, y)
+        ctx.stroke()
+
+        // Top-right
+        ctx.beginPath()
+        ctx.moveTo(x + width - cornerLength, y)
+        ctx.lineTo(x + width, y)
+        ctx.lineTo(x + width, y + cornerLength)
+        ctx.stroke()
+
+        // Bottom-left
+        ctx.beginPath()
+        ctx.moveTo(x, y + height - cornerLength)
+        ctx.lineTo(x, y + height)
+        ctx.lineTo(x + cornerLength, y + height)
+        ctx.stroke()
+
+        // Bottom-right
+        ctx.beginPath()
+        ctx.moveTo(x + width - cornerLength, y + height)
+        ctx.lineTo(x + width, y + height)
+        ctx.lineTo(x + width, y + height - cornerLength)
+        ctx.stroke()
+
+        // Draw name label above the box
+        if (recognizedName) {
+          const labelText = recognizedName === 'Unknown' 
+            ? 'Unknown Person' 
+            : recognizedName
+          const confidence = recognitionConfidence > 0 
+            ? ` (${(recognitionConfidence * 100).toFixed(0)}%)` 
+            : ''
+          
+          // Measure text
+          ctx.font = 'bold 18px Arial'
+          const textWidth = ctx.measureText(labelText + confidence).width
+          
+          // Background for text
+          ctx.fillStyle = recognizedName === 'Unknown' ? 'rgba(239, 68, 68, 0.9)' : 'rgba(16, 185, 129, 0.9)'
+          ctx.fillRect(x, y - 40, textWidth + 20, 35)
+
+          // Text
+          ctx.fillStyle = '#ffffff'
+          ctx.fillText(labelText + confidence, x + 10, y - 15)
+        }
+      }
+
+      requestAnimationFrame(drawLoop)
+    }
+
+    drawLoop()
+  }, [boundingBox, faceDetected, recognizedName, recognitionConfidence, showCamera])
 
   const startFaceDetection = async () => {
     if (!videoRef.current || !modelsLoaded) return
@@ -161,35 +265,106 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
       try {
         const result = await detectFaceInVideo(videoRef.current)
 
-        if (result.detected && result.descriptor) {
+        if (result.detected && result.descriptor && result.boundingBox) {
           setFaceDetected(true)
-          setFaceDescriptor(new Float32Array(result.descriptor))
+          const descriptor = new Float32Array(result.descriptor)
+          setFaceDescriptor(descriptor)
+          
+          // IMPORTANT: Save to ref IMMEDIATELY when detected (not just during capture)
+          savedFaceDescriptorRef.current = descriptor
+          console.log('✅ Face detected! Descriptor length:', descriptor.length, '- Saved to ref immediately')
+          
+          // Convert normalized coordinates to pixel coordinates
+          const video = videoRef.current
+          const box = result.boundingBox
+          const x = (box.xCenter - box.width / 2) * video.videoWidth
+          const y = (box.yCenter - box.height / 2) * video.videoHeight
+          const width = box.width * video.videoWidth
+          const height = box.height * video.videoHeight
+          
+          setBoundingBox({ x, y, width, height })
+
+          // Perform face recognition
+          recognizeFace(result.descriptor)
+
+          // Track consecutive face detections for stability
+          consecutiveFaceDetectionsRef.current += 1
+
+          // Auto capture with countdown - VERY forgiving, just need 1 detection
+          if (autoCapture && !isCapturing && consecutiveFaceDetectionsRef.current >= 1) {
+            // Face detected - start countdown immediately
+            if (!faceStableStartRef.current) {
+              faceStableStartRef.current = Date.now()
+            }
+
+            const CAPTURE_DELAY = 1200 // 1.2 seconds - faster capture
+            const elapsed = Date.now() - faceStableStartRef.current
+            const remaining = Math.max(0, CAPTURE_DELAY - elapsed)
+            const countdown = Math.ceil(remaining / 1000)
+            setCaptureCountdown(countdown)
+
+            if (remaining <= 0 && !isCapturing) {
+              // Time to capture!
+              console.log('📸 Auto-capturing photo...')
+              capturePhoto()
+            }
+          }
         } else {
-          setFaceDetected(false)
-          setFaceDescriptor(null)
+          // Face lost - be EXTREMELY forgiving
+          // Decrement very slowly - almost never reset
+          if (consecutiveFaceDetectionsRef.current > 0) {
+            consecutiveFaceDetectionsRef.current -= 0.25 // Even slower decay - very forgiving
+          }
+          
+          // Only reset everything if face is lost for 8+ detection cycles (very patient)
+          if (consecutiveFaceDetectionsRef.current <= 0) {
+            consecutiveFaceDetectionsRef.current = 0
+            setFaceDetected(false)
+            setFaceDescriptor(null)
+            setBoundingBox(null)
+            setRecognizedName('')
+            setRecognitionConfidence(0)
+            faceStableStartRef.current = null
+            setCaptureCountdown(0)
+            
+            if (autoCaptureTimeoutRef.current) {
+              clearTimeout(autoCaptureTimeoutRef.current)
+              autoCaptureTimeoutRef.current = null
+            }
+          }
+          // Keep showing "face detected" state even during brief losses
+          else {
+            // Don't update UI - maintain the "detected" appearance
+          }
         }
       } catch (error) {
         console.error('Face detection error:', error)
       }
     }, 300)
   }
-                }
-              }, 1000)
-            }
-          }
-        } else {
-          setFaceDetected(false)
-          setFaceDescriptor(null)
-          livenessFramesRef.current = 0
-          if (captureTimeoutRef.current) {
-            clearTimeout(captureTimeoutRef.current)
-            captureTimeoutRef.current = null
-          }
-        }
-      } catch (error) {
-        console.error('Face detection error:', error)
+
+  const recognizeFace = async (descriptor: number[]) => {
+    try {
+      const response = await fetch('/api/attendance/match-face', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ faceDescriptor: descriptor })
+      })
+
+      const data = await response.json()
+
+      if (data.matched && data.student) {
+        setRecognizedName(`${data.student.firstName} ${data.student.lastName}`)
+        setRecognitionConfidence(data.confidence || 0)
+      } else {
+        setRecognizedName('Unknown')
+        setRecognitionConfidence(0)
       }
-    }, 300)
+    } catch (error) {
+      console.error('Face recognition error:', error)
+      setRecognizedName('Unknown')
+      setRecognitionConfidence(0)
+    }
   }
 
   const startCamera = async () => {
@@ -227,26 +402,63 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
     }
     if (detectionIntervalRef.current) {
       clearInterval(detectionIntervalRef.current)
+      detectionIntervalRef.current = null
+    }
+    if (autoCaptureTimeoutRef.current) {
+      clearTimeout(autoCaptureTimeoutRef.current)
+      autoCaptureTimeoutRef.current = null
+    }
+    if (countdownIntervalRef.current) {
+      clearInterval(countdownIntervalRef.current)
+      countdownIntervalRef.current = null
     }
     setShowCamera(false)
     setIsCapturing(false)
     setFaceDetected(false)
     setFaceDescriptor(null)
-    setLivenessComplete(false)
-    setLivenessScore(0)
-    setLivenessMetrics({
-      eyesOpen: false,
-      faceDetected: false,
-      headMovement: false,
-      livenessScore: 0
-    })
-    livenessFramesRef.current = 0
-    previousYawRef.current = 0
+    setBoundingBox(null)
+    setRecognizedName('')
+    setRecognitionConfidence(0)
+    setCaptureCountdown(0)
+    // NOTE: Don't clear savedFaceDescriptorRef - it must persist for submission!
+    faceStableStartRef.current = null
+    consecutiveFaceDetectionsRef.current = 0
   }
 
   const capturePhoto = () => {
-    if (videoRef.current && !isCapturing && faceDescriptor && (!livenessCheck || livenessComplete)) {
+    console.log('📸 Attempting to capture photo...')
+    console.log('   - Face descriptor in state:', !!faceDescriptor, faceDescriptor?.length)
+    console.log('   - Face descriptor in ref:', !!savedFaceDescriptorRef.current, savedFaceDescriptorRef.current?.length)
+    console.log('   - Face detected flag:', faceDetected)
+    console.log('   - Models loaded:', modelsLoaded)
+    
+    // Use descriptor from state OR ref
+    const descriptorToCheck = faceDescriptor || savedFaceDescriptorRef.current
+    
+    // CRITICAL: Prevent capture if no face descriptor exists
+    if (!descriptorToCheck) {
+      console.error('❌ Cannot capture: No face descriptor detected')
+      console.error('   State descriptor:', faceDescriptor)
+      console.error('   Ref descriptor:', savedFaceDescriptorRef.current)
+      console.error('   This usually means MediaPipe face detection is not working')
+      alert('Face not detected! Please:\n1. Ensure your face is clearly visible\n2. Wait a moment for detection to activate\n3. Look directly at the camera')
+      setIsCapturing(false)
+      return
+    }
+    
+    console.log('✅ Face descriptor confirmed, proceeding with capture')
+    
+    if (videoRef.current && !isCapturing) {
       setIsCapturing(true)
+      
+      // IMPORTANT: Save descriptor to REF (permanent storage) BEFORE stopping camera
+      const savedDescriptor = faceDescriptor
+      if (savedDescriptor) {
+        savedFaceDescriptorRef.current = savedDescriptor
+        console.log('📋 Saved face descriptor to ref:', savedDescriptor.length, 'dimensions')
+      } else {
+        console.warn('⚠️ No face descriptor available at capture time!')
+      }
 
       const canvas = document.createElement('canvas')
       canvas.width = videoRef.current.videoWidth
@@ -259,7 +471,20 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
 
         const imageData = canvas.toDataURL('image/jpeg', 0.9)
         setCapturedImage(imageData)
+        
+        // Reset all capture-related states
+        faceStableStartRef.current = null
+        consecutiveFaceDetectionsRef.current = 0
+        setCaptureCountdown(0)
+        
+        console.log('✅ Photo captured successfully')
+        
         stopCamera()
+        
+        // Restore the saved descriptor after stopping camera
+        if (savedDescriptor) {
+          setFaceDescriptor(savedDescriptor)
+        }
       }
     }
   }
@@ -275,12 +500,15 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
     setIsSubmitting(true)
 
     try {
+      // Use descriptor from ref if state is null (more reliable)
+      const descriptorToUse = faceDescriptor || savedFaceDescriptorRef.current
+      
       // Convert face descriptor to a plain array that can be JSON serialized
       let descriptorArray = null
-      if (faceDescriptor) {
-        descriptorArray = Array.isArray(faceDescriptor) 
-          ? faceDescriptor 
-          : Array.from(faceDescriptor)
+      if (descriptorToUse) {
+        descriptorArray = Array.isArray(descriptorToUse) 
+          ? descriptorToUse 
+          : Array.from(descriptorToUse)
       }
 
       const requestBody = {
@@ -296,7 +524,11 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
       console.log('📤 Sending registration with:', {
         ...requestBody,
         faceData: 'base64 image',
-        faceDescriptor: descriptorArray ? `array of ${descriptorArray.length} values` : null
+        faceDescriptorFromState: !!faceDescriptor,
+        faceDescriptorFromRef: !!savedFaceDescriptorRef.current,
+        faceDescriptorFinal: !!descriptorToUse,
+        faceDescriptor: descriptorArray ? `array of ${descriptorArray.length} values` : null,
+        descriptorSample: descriptorArray?.slice(0, 5)
       })
 
       const response = await fetch('/api/student/register', {
@@ -308,6 +540,30 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
       const data = await response.json()
 
       if (data.success) {
+        // Broadcast event to notify other parts of the app that a new student was registered
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('student-registered', {
+            detail: {
+              studentId: formData.studentNumber,
+              firstName: formData.firstName,
+              lastName: formData.lastName,
+              email: data.credentials?.email,
+              timestamp: new Date().toISOString()
+            }
+          }))
+          console.log('✅ Student registration event broadcasted')
+        }
+
+        // Also trigger a storage event for cross-tab communication
+        if (typeof window !== 'undefined' && window.localStorage) {
+          localStorage.setItem('last-student-registration', JSON.stringify({
+            studentId: formData.studentNumber,
+            firstName: formData.firstName,
+            lastName: formData.lastName,
+            timestamp: new Date().toISOString()
+          }))
+        }
+
         alert('Facial registration completed successfully!')
         onComplete()
       } else {
@@ -405,11 +661,24 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
                   <Camera className="w-12 h-12 text-gray-400 mx-auto mb-3" />
                   <p className="text-gray-600 mb-4">Capture your photo for facial recognition</p>
 
-                  <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-                    <p className="text-sm font-medium text-gray-700 mb-2">✓ Liveness Detection Enabled</p>
-                    <p className="text-xs text-gray-500">
-                      Follow head movement instructions to verify you're a real person
+                  <div className="mb-6 p-4 bg-emerald-50 border border-emerald-200 rounded-lg">
+                    <p className="text-sm font-medium text-emerald-700 mb-2">✓ Instant Auto-Capture Mode</p>
+                    <p className="text-xs text-gray-600">
+                      Just show your face to the camera - photo captures automatically in 1 second! No need to hold perfectly still.
                     </p>
+                  </div>
+
+                  {/* Controls */}
+                  <div className="mb-4 flex items-center justify-center gap-4">
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={autoCapture}
+                        onChange={(e) => setAutoCapture(e.target.checked)}
+                        className="w-4 h-4 accent-emerald-600"
+                      />
+                      <span className="text-sm text-emerald-700 font-medium">Auto Capture (Recommended)</span>
+                    </label>
                   </div>
 
                   <button
@@ -424,7 +693,7 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
 
               {showCamera && (
                 <div className="space-y-4">
-                  <div className="relative bg-black rounded-lg overflow-hidden w-full" style={{ height: '400px' }}>
+                  <div className="relative bg-black rounded-lg overflow-hidden w-full" style={{ height: '500px' }}>
                     <video
                       ref={videoRef}
                       autoPlay
@@ -433,50 +702,50 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
                       style={{ width: '100%', height: '100%', display: 'block', objectFit: 'cover', transform: 'scaleX(-1)' }}
                     />
 
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <div className="relative w-72 h-96">
-                        <div className="absolute inset-0 border-4 border-blue-400 rounded-full opacity-60 animate-pulse"></div>
-                        <div className="absolute top-0 left-1/2 transform -translate-x-1/2 w-12 h-12 border-t-4 border-l-4 border-r-4 border-blue-400 animate-pulse"></div>
-                        <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 w-12 h-12 border-b-4 border-l-4 border-r-4 border-blue-400 animate-pulse"></div>
-                        <div className="absolute top-1/2 left-0 transform -translate-y-1/2 w-12 h-12 border-t-4 border-b-4 border-l-4 border-blue-400 animate-pulse"></div>
-                        <div className="absolute top-1/2 right-0 transform -translate-y-1/2 w-12 h-12 border-t-4 border-b-4 border-r-4 border-blue-400 animate-pulse"></div>
-                      </div>
-                    </div>
+                    {/* Canvas overlay for bounding box - Always show */}
+                    <canvas
+                      ref={canvasRef}
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: '100%',
+                        height: '100%',
+                        transform: 'scaleX(-1)',
+                        pointerEvents: 'none'
+                      }}
+                    />
 
+                    {/* Status indicators */}
                     <div className="absolute top-6 left-0 right-0 flex flex-col items-center gap-3">
-                      {livenessCheck && !livenessComplete && (
+                      {faceDetected ? (
                         <>
-                          <div className="bg-black/70 backdrop-blur-sm px-6 py-3 rounded-full">
+                          <div className="bg-emerald-600/90 backdrop-blur-sm px-6 py-3 rounded-full shadow-lg">
                             <p className="text-white font-bold text-base">
-                              📍 Look at the camera - ensure good lighting
+                              ✅ Face Detected {recognizedName && `- ${recognizedName}`}
                             </p>
                           </div>
-                          {faceDetected && livenessScore > 0 && (
-                            <div className="bg-black/70 backdrop-blur-sm px-4 py-2 rounded-full">
-                              <div className="flex items-center gap-2">
-                                <div className="w-32 h-2 bg-gray-600 rounded-full overflow-hidden">
-                                  <div
-                                    className="h-full bg-blue-400 transition-all duration-100"
-                                    style={{ width: `${livenessScore}%` }}
-                                  ></div>
-                                </div>
-                                <span className="text-white text-xs font-medium">{Math.round(livenessScore)}%</span>
-                              </div>
+                          {autoCapture && captureCountdown > 0 && (
+                            <div className="bg-blue-600/95 backdrop-blur-sm px-8 py-4 rounded-full shadow-lg animate-pulse">
+                              <p className="text-white text-2xl font-bold">
+                                📸 Capturing...
+                              </p>
                             </div>
                           )}
                         </>
-                      )}
-                      {livenessComplete && (
-                        <div className="bg-emerald-600/90 backdrop-blur-sm px-6 py-3 rounded-full">
+                      ) : (
+                        <div className="bg-black/70 backdrop-blur-sm px-6 py-3 rounded-full">
                           <p className="text-white font-bold text-base">
-                            ✅ Liveness verified! Click "Capture Photo Now" button
+                            📍 Show your face to the camera
                           </p>
                         </div>
                       )}
                     </div>
 
+
+                    {/* Control buttons */}
                     <div className="absolute bottom-6 left-0 right-0 flex justify-center gap-3">
-                      {livenessComplete && faceDetected && (
+                      {!autoCapture && faceDetected && (
                         <button
                           type="button"
                           onClick={capturePhoto}
@@ -494,34 +763,28 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
                       </button>
                     </div>
 
-                    {livenessCheck && !livenessComplete && (
+                    {/* Recognition info panel */}
+                    {faceDetected && (
                       <div className="absolute right-6 top-1/2 transform -translate-y-1/2 bg-black/70 backdrop-blur-sm rounded-lg p-4 flex flex-col gap-3">
-                        <div className="text-xs font-bold text-white mb-2">Liveness Metrics</div>
-                        <div className={`flex items-center gap-2 ${livenessMetrics.faceDetected ? 'text-blue-400' : 'text-gray-400'}`}>
-                          <div className={`w-2 h-2 rounded-full ${livenessMetrics.faceDetected ? 'bg-blue-400' : 'bg-gray-500'}`}></div>
+                        <div className="text-xs font-bold text-white mb-2">Recognition Info</div>
+                        <div className="flex items-center gap-2 text-blue-400">
+                          <div className="w-2 h-2 rounded-full bg-blue-400"></div>
                           <span className="text-xs">Face Detected</span>
                         </div>
-                        <div className={`flex items-center gap-2 ${livenessMetrics.eyesOpen ? 'text-blue-400' : 'text-gray-400'}`}>
-                          <div className={`w-2 h-2 rounded-full ${livenessMetrics.eyesOpen ? 'bg-blue-400' : 'bg-gray-500'}`}></div>
-                          <span className="text-xs">Eyes Open</span>
-                        </div>
-                        <div className={`flex items-center gap-2 ${livenessMetrics.headMovement ? 'text-blue-400' : 'text-gray-400'}`}>
-                          <div className={`w-2 h-2 rounded-full ${livenessMetrics.headMovement ? 'bg-blue-400' : 'bg-gray-500'}`}></div>
-                          <span className="text-xs">Head Movement</span>
-                        </div>
-                        <div className="mt-2 pt-2 border-t border-gray-600">
-                          <div className="text-xs font-bold text-blue-400">Liveness: {Math.round(livenessScore)}%</div>
-                        </div>
-                      </div>
-                    )}
-
-                    {livenessComplete && (
-                      <div className="absolute right-6 top-1/2 transform -translate-y-1/2 bg-emerald-600/90 backdrop-blur-sm rounded-lg p-4">
-                        <div className="text-center">
-                          <div className="text-2xl mb-2">✅</div>
-                          <div className="text-xs font-bold text-white">Liveness</div>
-                          <div className="text-xs font-bold text-white">Complete!</div>
-                        </div>
+                        {recognizedName && (
+                          <>
+                            <div className={`flex items-center gap-2 ${recognizedName !== 'Unknown' ? 'text-emerald-400' : 'text-yellow-400'}`}>
+                              <div className={`w-2 h-2 rounded-full ${recognizedName !== 'Unknown' ? 'bg-emerald-400' : 'bg-yellow-400'}`}></div>
+                              <span className="text-xs">{recognizedName !== 'Unknown' ? 'Recognized' : 'Unknown Person'}</span>
+                            </div>
+                            {recognitionConfidence > 0 && (
+                              <div className="mt-2 pt-2 border-t border-gray-600">
+                                <div className="text-xs text-gray-400">Confidence</div>
+                                <div className="text-sm font-bold text-blue-400">{(recognitionConfidence * 100).toFixed(1)}%</div>
+                              </div>
+                            )}
+                          </>
+                        )}
                       </div>
                     )}
                   </div>
@@ -540,16 +803,12 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
                     onClick={() => {
                       setCapturedImage(null)
                       setFaceDescriptor(null)
-                      setLivenessComplete(false)
-                      setLivenessScore(0)
-                      setLivenessMetrics({
-                        eyesOpen: false,
-                        faceDetected: false,
-                        headMovement: false,
-                        livenessScore: 0
-                      })
-                      livenessFramesRef.current = 0
-                      previousYawRef.current = 0
+                      setBoundingBox(null)
+                      setRecognizedName('')
+                      setRecognitionConfidence(0)
+                      setCaptureCountdown(0)
+                      faceStableStartRef.current = null
+                      consecutiveFaceDetectionsRef.current = 0
                       startCamera()
                     }}
                     className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"

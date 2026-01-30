@@ -53,6 +53,7 @@ export default function AttendancePage() {
   const [mergedAttendanceData, setMergedAttendanceData] = useState<any[]>([])
   const [loadingRecords, setLoadingRecords] = useState(true)
   const [viewMode, setViewMode] = useState<'list' | 'seat-plan'>('list')
+  const [newStudentNotification, setNewStudentNotification] = useState<string | null>(null)
 
   useEffect(() => {
     if (!loading && (!user || (user.role !== 'professor' && user.role !== 'adviser'))) {
@@ -71,6 +72,44 @@ export default function AttendancePage() {
       fetchTodayAttendanceRecords()
     }
   }, [user, loading, router, entryMethod])
+
+  // Listen for student registration events to auto-refresh attendance list
+  useEffect(() => {
+    const handleStudentRegistered = (event: CustomEvent) => {
+      console.log('📢 Student registered event received:', event.detail)
+      const { firstName, lastName } = event.detail
+      
+      // Show notification
+      setNewStudentNotification(`${firstName} ${lastName} has been registered!`)
+      setTimeout(() => setNewStudentNotification(null), 5000)
+      
+      // Automatically refresh the attendance records to include the new student
+      fetchTodayAttendanceRecords()
+    }
+
+    const handleStorageChange = (event: StorageEvent) => {
+      if (event.key === 'last-student-registration') {
+        console.log('📢 Student registration detected via storage event')
+        const data = event.newValue ? JSON.parse(event.newValue) : null
+        if (data) {
+          setNewStudentNotification(`${data.firstName} ${data.lastName} has been registered!`)
+          setTimeout(() => setNewStudentNotification(null), 5000)
+        }
+        // Refresh attendance records when registration happens in another tab
+        fetchTodayAttendanceRecords()
+      }
+    }
+
+    // Add event listeners
+    window.addEventListener('student-registered', handleStudentRegistered as EventListener)
+    window.addEventListener('storage', handleStorageChange)
+
+    // Cleanup
+    return () => {
+      window.removeEventListener('student-registered', handleStudentRegistered as EventListener)
+      window.removeEventListener('storage', handleStorageChange)
+    }
+  }, [sectionId])
 
   const checkFaceRegistration = async () => {
     try {
@@ -176,6 +215,22 @@ export default function AttendancePage() {
 
   return (
     <div className="min-h-screen bg-neutral-50/50">
+      {/* Success Notification Banner */}
+      {newStudentNotification && (
+        <div className="fixed top-20 left-1/2 transform -translate-x-1/2 z-50 animate-in slide-in-from-top duration-300">
+          <div className="bg-emerald-600 text-white px-6 py-3 rounded-lg shadow-lg flex items-center gap-3">
+            <Check className="h-5 w-5" />
+            <span className="font-medium">{newStudentNotification}</span>
+            <button 
+              onClick={() => setNewStudentNotification(null)}
+              className="ml-2 hover:bg-emerald-700 rounded p-1"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <header className="sticky top-0 z-30 flex h-16 items-center gap-4 bg-background border-b px-6">
         <Button variant="ghost" size="icon" onClick={() => router.push('/professor')}>
@@ -397,7 +452,9 @@ export default function AttendancePage() {
           onClose={() => setShowStudentRegModal(false)}
           onRegistrationSuccess={() => {
             setShowStudentRegModal(false)
+            // Refresh both registered students and attendance records
             fetchRegisteredStudents()
+            fetchTodayAttendanceRecords()
           }}
         />
       )}
@@ -463,11 +520,24 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
   }>({})
   const [checkingEmail, setCheckingEmail] = useState(false)
   const [checkingStudentId, setCheckingStudentId] = useState(false)
+  
+  // New states for bounding box and auto-capture
+  const [boundingBox, setBoundingBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null)
+  const [recognizedName, setRecognizedName] = useState<string | null>(null)
+  const [recognitionConfidence, setRecognitionConfidence] = useState<number | null>(null)
+  const [captureCountdown, setCaptureCountdown] = useState<number | null>(null)
+  const [autoCapture, setAutoCapture] = useState(true)
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const captureTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const detectionIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const faceStableStartRef = useRef<number | null>(null)
+  const consecutiveFaceDetectionsRef = useRef<number>(0)
+  const autoCaptureTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const savedFaceDescriptorRef = useRef<Float32Array | null>(null) // Permanent storage for captured descriptor
 
   // Validate email uniqueness
   useEffect(() => {
@@ -549,6 +619,87 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
     return () => clearTimeout(timer)
   }, [formData.studentId])
 
+  // Canvas drawing effect for bounding box
+  useEffect(() => {
+    if (!showCamera || !canvasRef.current || !videoRef.current) return
+
+    const canvas = canvasRef.current
+    const video = videoRef.current
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
+    const drawFrame = () => {
+      canvas.width = video.videoWidth
+      canvas.height = video.videoHeight
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+      if (boundingBox) {
+        const { x, y, width, height } = boundingBox
+        
+        // Draw bounding box
+        ctx.strokeStyle = '#10b981'
+        ctx.lineWidth = 3
+        ctx.strokeRect(x, y, width, height)
+        
+        // Draw corner markers
+        const cornerLength = 30
+        ctx.lineCap = 'round'
+        
+        // Top-left
+        ctx.beginPath()
+        ctx.moveTo(x, y + cornerLength)
+        ctx.lineTo(x, y)
+        ctx.lineTo(x + cornerLength, y)
+        ctx.stroke()
+        
+        // Top-right
+        ctx.beginPath()
+        ctx.moveTo(x + width - cornerLength, y)
+        ctx.lineTo(x + width, y)
+        ctx.lineTo(x + width, y + cornerLength)
+        ctx.stroke()
+        
+        // Bottom-left
+        ctx.beginPath()
+        ctx.moveTo(x, y + height - cornerLength)
+        ctx.lineTo(x, y + height)
+        ctx.lineTo(x + cornerLength, y + height)
+        ctx.stroke()
+        
+        // Bottom-right
+        ctx.beginPath()
+        ctx.moveTo(x + width - cornerLength, y + height)
+        ctx.lineTo(x + width, y + height)
+        ctx.lineTo(x + width, y + height - cornerLength)
+        ctx.stroke()
+        
+        // Draw name label if recognized
+        if (recognizedName) {
+          const labelText = recognitionConfidence !== null 
+            ? `${recognizedName} (${Math.round(recognitionConfidence * 100)}%)`
+            : recognizedName
+          
+          ctx.font = '18px sans-serif'
+          const textWidth = ctx.measureText(labelText).width
+          const padding = 10
+          const labelHeight = 30
+          
+          // Background
+          ctx.fillStyle = 'rgba(16, 185, 129, 0.9)'
+          ctx.fillRect(x, y - labelHeight - 5, textWidth + padding * 2, labelHeight)
+          
+          // Text
+          ctx.fillStyle = 'white'
+          ctx.fillText(labelText, x + padding, y - 12)
+        }
+      }
+
+      requestAnimationFrame(drawFrame)
+    }
+
+    drawFrame()
+  }, [showCamera, boundingBox, recognizedName, recognitionConfidence])
+
   useEffect(() => {
     const loadModels = async () => {
       try {
@@ -591,8 +742,33 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
     return () => {
       if (captureTimeoutRef.current) clearTimeout(captureTimeoutRef.current)
       if (detectionIntervalRef.current) clearInterval(detectionIntervalRef.current)
+      if (autoCaptureTimeoutRef.current) clearTimeout(autoCaptureTimeoutRef.current)
+      if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current)
     }
   }, [showCamera])
+
+  const recognizeFace = async (descriptor: Float32Array) => {
+    try {
+      const response = await fetch('/api/attendance/match-face', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ faceDescriptor: Array.from(descriptor) })
+      })
+      const data = await response.json()
+      
+      if (data.success && data.matched) {
+        setRecognizedName(`${data.student.first_name} ${data.student.last_name}`)
+        setRecognitionConfidence(data.confidence)
+      } else {
+        setRecognizedName('Unknown')
+        setRecognitionConfidence(null)
+      }
+    } catch (error) {
+      console.error('Recognition error:', error)
+      setRecognizedName(null)
+      setRecognitionConfidence(null)
+    }
+  }
 
   const startFaceDetection = async () => {
     if (!videoRef.current || !modelsLoaded) return
@@ -603,12 +779,61 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
       try {
         const result = await detectFaceInVideo(videoRef.current)
 
-        if (result.detected && result.descriptor) {
+        if (result.detected && result.descriptor && result.boundingBox) {
           setFaceDetected(true)
-          setFaceDescriptor(new Float32Array(result.descriptor))
+          const descriptor = new Float32Array(result.descriptor)
+          setFaceDescriptor(descriptor)
+          
+          // IMPORTANT: Save to ref IMMEDIATELY when detected (not just during capture)
+          savedFaceDescriptorRef.current = descriptor
+          console.log('✅ Face detected! Descriptor length:', descriptor.length, '- Saved to ref')
+          
+          // Update bounding box for canvas drawing
+          const video = videoRef.current
+          const box = result.boundingBox
+          setBoundingBox({
+            x: box.x * video.videoWidth,
+            y: box.y * video.videoHeight,
+            width: box.width * video.videoWidth,
+            height: box.height * video.videoHeight
+          })
+          
+          // Recognize face
+          recognizeFace(descriptor)
+          
+          // Auto-capture logic - ULTRA LENIENT
+          consecutiveFaceDetectionsRef.current += 1
+          
+          if (autoCapture && !isCapturing && consecutiveFaceDetectionsRef.current >= 1) {
+            if (!faceStableStartRef.current) {
+              faceStableStartRef.current = Date.now()
+            }
+            
+            const CAPTURE_DELAY = 1200 // 1.2 seconds
+            const elapsed = Date.now() - faceStableStartRef.current
+            const remaining = Math.max(0, CAPTURE_DELAY - elapsed)
+            const countdownValue = Math.ceil(remaining / 1000)
+            
+            setCaptureCountdown(countdownValue)
+            
+            if (elapsed >= CAPTURE_DELAY) {
+              capturePhoto()
+            }
+          }
         } else {
           setFaceDetected(false)
-          setFaceDescriptor(null)
+          setBoundingBox(null)
+          setRecognizedName(null)
+          setRecognitionConfidence(null)
+          
+          // Ultra-lenient forgiveness: slow decay, reset after many misses
+          consecutiveFaceDetectionsRef.current = Math.max(0, consecutiveFaceDetectionsRef.current - 0.25)
+          
+          if (consecutiveFaceDetectionsRef.current < 0.1) {
+            consecutiveFaceDetectionsRef.current = 0
+            faceStableStartRef.current = null
+            setCaptureCountdown(null)
+          }
         }
       } catch (error) {
         console.error('Face detection error:', error)
@@ -647,15 +872,56 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
     }
     if (captureTimeoutRef.current) clearTimeout(captureTimeoutRef.current)
     if (detectionIntervalRef.current) clearInterval(detectionIntervalRef.current)
+    if (autoCaptureTimeoutRef.current) clearTimeout(autoCaptureTimeoutRef.current)
+    if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current)
+    
     setShowCamera(false)
     setIsCapturing(false)
     setFaceDetected(false)
     setFaceDescriptor(null)
+    setBoundingBox(null)
+    setRecognizedName(null)
+    setRecognitionConfidence(null)
+    setCaptureCountdown(null)
+    // NOTE: Don't clear savedFaceDescriptorRef - it must persist for submission!
+    
+    faceStableStartRef.current = null
+    consecutiveFaceDetectionsRef.current = 0
   }
 
   const capturePhoto = () => {
-    if (videoRef.current && !isCapturing && faceDescriptor) {
+    console.log('📸 Attempting to capture photo...')
+    console.log('   - Face descriptor in state:', !!faceDescriptor, faceDescriptor?.length)
+    console.log('   - Face descriptor in ref:', !!savedFaceDescriptorRef.current, savedFaceDescriptorRef.current?.length)
+    console.log('   - Face detected flag:', faceDetected)
+    
+    // Use descriptor from state OR ref
+    const descriptorToCheck = faceDescriptor || savedFaceDescriptorRef.current
+    
+    // CRITICAL: Prevent capture if no face descriptor exists
+    if (!descriptorToCheck) {
+      console.error('❌ Cannot capture: No face descriptor detected')
+      console.error('   State descriptor:', faceDescriptor)
+      console.error('   Ref descriptor:', savedFaceDescriptorRef.current)
+      alert('Face not detected! Please position your face clearly in the camera and wait for detection.')
+      setIsCapturing(false)
+      return
+    }
+    
+    console.log('✅ Descriptor found! Proceeding with capture')
+    
+    if (videoRef.current && !isCapturing) {
       setIsCapturing(true)
+      
+      // IMPORTANT: Save descriptor to REF (permanent storage) BEFORE stopping camera
+      const savedDescriptor = faceDescriptor
+      if (savedDescriptor) {
+        savedFaceDescriptorRef.current = savedDescriptor
+        console.log('📋 Saved face descriptor to ref:', savedDescriptor.length, 'dimensions')
+      } else {
+        console.warn('⚠️ No face descriptor available at capture time!')
+      }
+      
       const canvas = document.createElement('canvas')
       canvas.width = videoRef.current.videoWidth
       canvas.height = videoRef.current.videoHeight
@@ -665,7 +931,15 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
         ctx.scale(-1, 1)
         ctx.drawImage(videoRef.current, 0, 0)
         setCapturedImage(canvas.toDataURL('image/jpeg', 0.9))
+        console.log('✅ Photo captured successfully')
+        
+        // Stop camera after saving descriptor
         stopCamera()
+        
+        // Restore the saved descriptor to state after stopping camera
+        if (savedDescriptor) {
+          setFaceDescriptor(savedDescriptor)
+        }
       }
     }
   }
@@ -679,7 +953,17 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
 
     setIsSubmitting(true)
     try {
-      const descriptorArray = faceDescriptor ? Array.from(faceDescriptor) : null
+      // Use descriptor from ref if state is null (more reliable)
+      const descriptorToUse = faceDescriptor || savedFaceDescriptorRef.current
+      const descriptorArray = descriptorToUse ? Array.from(descriptorToUse) : null
+      
+      console.log('📤 Submitting student registration:')
+      console.log('   - Student ID:', formData.studentId)
+      console.log('   - Face descriptor from state:', !!faceDescriptor)
+      console.log('   - Face descriptor from ref:', !!savedFaceDescriptorRef.current)
+      console.log('   - Final descriptor used:', !!descriptorToUse)
+      console.log('   - Descriptor length:', descriptorArray?.length)
+      console.log('   - Descriptor sample:', descriptorArray?.slice(0, 5))
 
       const response = await fetch('/api/student/register', {
         method: 'POST',
@@ -699,6 +983,31 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
       const data = await response.json()
       if (data.success && data.credentials) {
         setCredentials(data.credentials)
+        
+        // Broadcast event to notify that a new student was registered
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('student-registered', {
+            detail: {
+              studentId: formData.studentId,
+              firstName: formData.firstName,
+              lastName: formData.lastName,
+              email: formData.email,
+              timestamp: new Date().toISOString()
+            }
+          }))
+          console.log('✅ Student registration event broadcasted from professor modal')
+        }
+
+        // Also update localStorage for cross-tab communication
+        if (typeof window !== 'undefined' && window.localStorage) {
+          localStorage.setItem('last-student-registration', JSON.stringify({
+            studentId: formData.studentId,
+            firstName: formData.firstName,
+            lastName: formData.lastName,
+            timestamp: new Date().toISOString()
+          }))
+        }
+        
         // Call callback to refresh student list in parent
         onRegistrationSuccess?.()
       } else {
@@ -781,7 +1090,9 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
 
   return (
     <div className="fixed inset-0 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-      <Card className="w-full max-w-lg shadow-xl border-border/40 max-h-[90vh] overflow-y-auto">
+      <Card className={`w-full shadow-xl border-border/40 transition-all ${
+        showCamera ? 'max-w-2xl' : 'max-w-lg max-h-[90vh] overflow-y-auto'
+      }`}>
         <CardHeader>
           <CardTitle>Register New Student</CardTitle>
           <CardDescription>
@@ -791,10 +1102,11 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
 
         <form onSubmit={handleSubmit}>
           <div className="p-6 pt-0 space-y-6">
-            {/* Personal Information */}
-            <div className="space-y-4">
-              <h3 className="font-semibold text-sm">Personal Information</h3>
-              <div className="grid grid-cols-2 gap-4">
+            {/* Personal Information - Hide when camera is active */}
+            {!showCamera && (
+              <div className="space-y-4">
+                <h3 className="font-semibold text-sm">Personal Information</h3>
+                <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <label className="text-sm font-medium">First Name *</label>
                   <input
@@ -876,6 +1188,7 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
                 )}
               </div>
             </div>
+            )}
 
             {/* Photo Verification */}
             <div className="space-y-4">
@@ -894,7 +1207,7 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
               )}
 
               {showCamera && (
-                <div className="relative rounded-lg overflow-hidden bg-black aspect-video">
+                <div className="relative rounded-lg overflow-hidden bg-black" style={{ height: '500px' }}>
                   <video
                     ref={videoRef}
                     autoPlay
@@ -903,29 +1216,36 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
                     className="w-full h-full object-cover transform scale-x-[-1]"
                   />
 
-                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                    <div className={`w-48 h-64 border-2 rounded-full transition-colors duration-300 ${
-                      faceDetected ? 'border-primary' : 'border-white/30'
-                    }`} />
-                  </div>
+                  {/* Canvas overlay for bounding box */}
+                  <canvas
+                    ref={canvasRef}
+                    className="absolute inset-0 w-full h-full object-cover pointer-events-none transform scale-x-[-1]"
+                  />
 
+                  {/* Status indicators */}
                   <div className="absolute top-4 inset-x-0 flex flex-col items-center pointer-events-none gap-2">
                     <div className="bg-black/80 text-white text-sm font-medium px-4 py-2 rounded-full backdrop-blur-md">
-                      📍 Look at camera and capture your face
+                      {autoCapture ? '⚡ Instant Auto-Capture Mode' : '📍 Look at camera'}
                     </div>
+                    
+                    {faceDetected && captureCountdown !== null && captureCountdown > 0 && (
+                      <div className="bg-emerald-600 text-white text-xs font-bold px-3 py-1.5 rounded-full backdrop-blur-md animate-pulse">
+                        Capturing...
+                      </div>
+                    )}
+                    
+                    {!faceDetected && (
+                      <div className="bg-red-600/90 text-white text-xs px-3 py-1.5 rounded-full backdrop-blur-md">
+                        No face detected
+                      </div>
+                    )}
                   </div>
 
-
-
+                  {/* Cancel button only */}
                   <div className="absolute bottom-4 inset-x-0 flex justify-center gap-4 px-4 z-10">
                     <Button type="button" variant="destructive" size="sm" onClick={stopCamera}>
                       Cancel
                     </Button>
-                    {faceDetected && (
-                      <Button type="button" size="sm" onClick={capturePhoto} className="bg-emerald-600 hover:bg-emerald-700">
-                        Capture
-                      </Button>
-                    )}
                   </div>
                 </div>
               )}

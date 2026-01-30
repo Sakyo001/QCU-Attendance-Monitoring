@@ -63,12 +63,12 @@ const loadMediaPipeScripts = async (): Promise<boolean> => {
         // Initialize the model first
         await faceMesh.initialize()
         
-        // Then set options
+        // Then set options - very low confidence for maximum leniency
         faceMesh.setOptions({
           maxNumFaces: 1,
           refineLandmarks: true,
-          minDetectionConfidence: 0.5,
-          minTrackingConfidence: 0.5
+          minDetectionConfidence: 0.2,  // Very low - extremely lenient
+          minTrackingConfidence: 0.2    // Very low - tracks through any movement
         })
         
         console.log('✅ MediaPipe Face Mesh loaded from window')
@@ -114,12 +114,12 @@ const loadMediaPipeScripts = async (): Promise<boolean> => {
         // Initialize the model first
         await faceMesh.initialize()
 
-        // Then set options
+        // Then set options - very low confidence for maximum leniency
         faceMesh.setOptions({
           maxNumFaces: 1,
           refineLandmarks: true,
-          minDetectionConfidence: 0.5,
-          minTrackingConfidence: 0.5
+          minDetectionConfidence: 0.2,  // Very low - extremely lenient
+          minTrackingConfidence: 0.2    // Very low - tracks through any movement
         })
 
         console.log('✅ MediaPipe Face Mesh initialized successfully')

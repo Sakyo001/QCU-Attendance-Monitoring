@@ -23,11 +23,24 @@ export async function POST(request: NextRequest) {
       faceDataLength: faceData?.length || 0,
       hasFaceDescriptor: !!faceDescriptor,
       faceDescriptorType: typeof faceDescriptor,
-      faceDescriptorLength: Array.isArray(faceDescriptor) ? faceDescriptor.length : 'not array'
+      faceDescriptorLength: Array.isArray(faceDescriptor) ? faceDescriptor.length : 'not array',
+      faceDescriptorSample: Array.isArray(faceDescriptor) ? faceDescriptor.slice(0, 5) : 'not array'
     })
 
     if (!firstName || !lastName || !studentId || !email) {
       return NextResponse.json({ error: 'First name, last name, student ID, and email are required' }, { status: 400 })
+    }
+
+    // Validate face descriptor
+    if (!faceDescriptor || !Array.isArray(faceDescriptor) || faceDescriptor.length !== 128) {
+      console.error('❌ Invalid face descriptor:', {
+        exists: !!faceDescriptor,
+        isArray: Array.isArray(faceDescriptor),
+        length: Array.isArray(faceDescriptor) ? faceDescriptor.length : 'not array'
+      })
+      return NextResponse.json({ 
+        error: 'Face descriptor is required for registration. Please ensure your face is detected before capturing the photo.' 
+      }, { status: 400 })
     }
 
     // Pre-check: verify email doesn't exist in users table
