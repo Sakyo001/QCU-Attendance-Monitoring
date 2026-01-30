@@ -1,13 +1,10 @@
-import { createClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
 import { v5 as uuidv5, NIL as NAMESPACE_NIL } from 'uuid'
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
-const supabase = createClient(supabaseUrl, supabaseServiceKey)
+import { getSupabaseAdmin } from '@/utils/supabase/admin'
 
 export async function POST(request: NextRequest) {
   try {
+    const supabase = getSupabaseAdmin()
     const body = await request.json()
     const { sectionId, studentId, faceMatchConfidence } = body
 
@@ -43,14 +40,14 @@ export async function POST(request: NextRequest) {
       }, { status: 404 })
     }
 
-    console.log('✅ Found registration:', registration.first_name, registration.last_name)
+    console.log('✅ Found registration:', (registration as any).first_name, (registration as any).last_name)
 
     // Check if attendance record already exists for today
     const { data: existing } = await supabase
       .from('attendance_records')
       .select('id, checked_in_at')
       .eq('attendance_session_id', sessionId)
-      .eq('student_number', registration.student_number)
+      .eq('student_number', (registration as any).student_number)
       .single()
 
     if (existing) {

@@ -1,15 +1,12 @@
-import { createClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
 import { writeFile, mkdir, readdir } from 'fs/promises'
 import { join } from 'path'
 import { existsSync } from 'fs'
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
-const supabase = createClient(supabaseUrl, supabaseServiceKey)
+import { getSupabaseAdmin } from '@/utils/supabase/admin'
 
 export async function POST(request: NextRequest) {
   try {
+    const supabase = getSupabaseAdmin()
     const body = await request.json()
     const { firstName, lastName, middleInitial, studentId, email, sectionId, faceData, faceDescriptor } = body
 
@@ -69,7 +66,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Failed to validate email' }, { status: 500 })
     }
 
-    const emailExistsInAuth = authUsers.users.some(user => user.email === email)
+    const emailExistsInAuth = (authUsers as any).users.some((user: any) => user.email === email)
     if (emailExistsInAuth) {
       return NextResponse.json({ 
         error: 'This email is already registered. Please use a different email address.'

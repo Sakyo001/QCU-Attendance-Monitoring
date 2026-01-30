@@ -1,9 +1,5 @@
-import { createClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
-const supabase = createClient(supabaseUrl, supabaseServiceKey)
+import { getSupabaseAdmin } from '@/utils/supabase/admin'
 
 // Euclidean distance calculation
 function euclideanDistance(a: number[], b: number[]): number {
@@ -45,6 +41,7 @@ function cosineSimilarity(a: number[], b: number[]): number {
 
 export async function POST(request: NextRequest) {
   try {
+    const supabase = getSupabaseAdmin()
     const body = await request.json()
     const { faceDescriptor } = body
 

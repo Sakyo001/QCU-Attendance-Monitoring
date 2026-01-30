@@ -1,13 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
 import { v5 as uuidv5, NIL as NAMESPACE_NIL } from 'uuid'
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-)
+import { getSupabaseAdmin } from '@/utils/supabase/admin'
 
 export async function GET(request: NextRequest) {
+  const supabase = getSupabaseAdmin()
   try {
     const sectionId = request.nextUrl.searchParams.get('sectionId')
 
@@ -41,7 +37,7 @@ export async function GET(request: NextRequest) {
     console.log('📚 Found', registeredStudents.length, 'registered students')
 
     // Get student numbers to look up in users table
-    const studentNumbers = registeredStudents.map(s => s.student_number)
+    const studentNumbers = (registeredStudents as any).map((s: any) => s.student_number)
 
     // Fetch users by student_number to get their IDs
     const { data: usersData, error: usersError } = await supabase
@@ -86,7 +82,7 @@ export async function GET(request: NextRequest) {
     const records = registeredStudents.map((student: any) => {
       // Get the user record to find their actual user ID
       const user = usersMap.get(student.student_number)
-      const userId = user?.id
+      const userId = (user as any)?.id
       
       // Look up attendance record using student_number (this is what's stored in attendance_records)
       const attendance = attendanceMap.get(student.student_number)

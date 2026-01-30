@@ -1,10 +1,5 @@
-import { createClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
+import { getSupabaseAdmin } from '@/utils/supabase/admin'
 
 // Cosine similarity calculation (matching the student face matching API)
 function cosineSimilarity(a: number[], b: number[]): number {
@@ -33,6 +28,7 @@ function cosineSimilarity(a: number[], b: number[]): number {
 
 export async function POST(request: Request) {
   try {
+    const supabase = getSupabaseAdmin()
     const body = await request.json()
     const { professorId, faceDescriptor } = body
 
