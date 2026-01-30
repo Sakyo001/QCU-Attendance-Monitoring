@@ -91,10 +91,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.log('Fetching user for email:', authUser.email)
       
       // Try to fetch user from database by email - select only needed fields
-      const { data: dbUser, error } = await supabase
+      const { data: dbUser, error } = await (supabase as any)
         .from('users')
         .select('id, email, password, role, is_active, first_name, last_name, student_id, employee_id')
-        .eq('email', authUser.email)
+        .eq('email', authUser.email as any)
         .limit(1)
         .single()
 
@@ -110,9 +110,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           password: '' // Set empty password for auth users
         }
         
-        const { data: createdUser, error: createError } = await supabase
+        const { data: createdUser, error: createError } = await (supabase as any)
           .from('users')
-          .insert([newUser])
+          .insert([newUser as any])
           .select('id, email, password, role, is_active, first_name, last_name, student_id, employee_id')
           .single()
 

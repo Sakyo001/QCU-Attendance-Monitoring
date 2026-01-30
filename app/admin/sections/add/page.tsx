@@ -55,7 +55,7 @@ export default function AddSectionPage() {
       }
 
       if (sectionData) {
-        console.log('Section created successfully:', sectionData.id)
+        console.log('Section created successfully:', (sectionData as any).id)
         router.push('/admin/sections')
       } else {
         throw new Error('No section data returned from insert')

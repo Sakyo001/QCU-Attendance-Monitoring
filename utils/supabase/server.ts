@@ -9,12 +9,12 @@ export function createClient(cookieStore: ReturnType<typeof cookies>) {
     {
       cookies: {
         getAll() {
-          return cookieStore.getAll()
+          return (cookieStore as any).getAll()
         },
-        setAll(cookiesToSet) {
+        setAll(cookiesToSet: any) {
           try {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
+            cookiesToSet.forEach(({ name, value, options }: any) =>
+              (cookieStore as any).set(name, value, options)
             )
           } catch {
             // The `setAll` method was called from a Server Component.
@@ -23,6 +23,6 @@ export function createClient(cookieStore: ReturnType<typeof cookies>) {
           }
         },
       },
-    }
+    } as any
   )
 }

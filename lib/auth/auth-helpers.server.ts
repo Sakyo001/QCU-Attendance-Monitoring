@@ -8,8 +8,8 @@ import { mapDbUserToAuthUser } from './utils'
 
 // Get current authenticated user (server-side only)
 export async function getCurrentUser(): Promise<AuthUser | null> {
-  const cookieStore = await cookies()
-  const supabase = createClient(cookieStore)
+  const cookieStore = cookies()
+  const supabase = createClient(cookieStore as any)
   
   const { data: { user: authUser }, error: authError } = await supabase.auth.getUser()
   
@@ -29,10 +29,10 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
   }
 
   // Update last login
-  await supabase
+  await (supabase as any)
     .from('users')
-    .update({ last_login: new Date().toISOString() })
-    .eq('id', dbUser.id)
+    .update({ last_login: new Date().toISOString() } as any)
+    .eq('id', (dbUser as any).id)
 
   return mapDbUserToAuthUser(dbUser)
 }

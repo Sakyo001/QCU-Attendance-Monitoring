@@ -18,7 +18,7 @@ export async function PUT(request: NextRequest) {
     console.log('🔄 Updating student:', studentId)
 
     // Update the users table
-    const { data, error } = await supabase
+    const { data, error } = await (supabase as any)
       .from('users')
       .update({
         first_name: firstName,

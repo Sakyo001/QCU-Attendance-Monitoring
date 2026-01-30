@@ -48,7 +48,7 @@ export async function signUpWithEmail(data: SignUpData) {
   const supabase = createClient()
   
   // Create user record in database directly
-  const { data: dbUser, error: dbError } = await supabase
+  const { data: dbUser, error: dbError } = await (supabase as any)
     .from('users')
     .insert({
       email: data.email,
@@ -59,7 +59,7 @@ export async function signUpWithEmail(data: SignUpData) {
       employee_id: data.employeeId,
       student_id: data.studentId,
       is_active: true,
-    })
+    } as any)
     .select()
     .single()
 

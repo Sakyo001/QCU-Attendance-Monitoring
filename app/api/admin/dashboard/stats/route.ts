@@ -34,9 +34,9 @@ export async function GET(request: NextRequest) {
       .gte('checked_in_at', today + 'T00:00:00')
       .lte('checked_in_at', today + 'T23:59:59')
 
-    const todayPresent = todayAttendance?.filter(r => r.status === 'present').length || 0
-    const todayAbsent = todayAttendance?.filter(r => r.status === 'absent').length || 0
-    const todayLate = todayAttendance?.filter(r => r.status === 'late').length || 0
+    const todayPresent = (todayAttendance as any)?.filter((r: any) => r.status === 'present').length || 0
+    const todayAbsent = (todayAttendance as any)?.filter((r: any) => r.status === 'absent').length || 0
+    const todayLate = (todayAttendance as any)?.filter((r: any) => r.status === 'late').length || 0
 
     // Get total attendance records (all time)
     const { count: totalAttendanceRecords } = await supabase
@@ -47,7 +47,7 @@ export async function GET(request: NextRequest) {
       .from('attendance_records')
       .select('status')
 
-    const totalPresent = allAttendance?.filter(r => r.status === 'present').length || 0
+    const totalPresent = (allAttendance as any)?.filter((r: any) => r.status === 'present').length || 0
     const overallAttendanceRate = allAttendance && allAttendance.length > 0
       ? (totalPresent / allAttendance.length) * 100
       : 0
@@ -66,28 +66,28 @@ export async function GET(request: NextRequest) {
       .limit(10)
 
     // Get student names for recent activity
-    const studentNumbers = recentActivity?.map(r => r.student_number) || []
+    const studentNumbers = (recentActivity as any)?.map((r: any) => r.student_number) || []
     const { data: students } = await supabase
       .from('student_face_registrations')
       .select('student_number, first_name, last_name')
       .in('student_number', studentNumbers)
 
     const studentMap = new Map(
-      students?.map(s => [s.student_number, `${s.first_name} ${s.last_name}`]) || []
+      (students as any)?.map((s: any) => [s.student_number, `${s.first_name} ${s.last_name}`]) || []
     )
 
     // Get section codes
-    const sectionIds = recentActivity?.map(r => r.section_id).filter(Boolean) || []
+    const sectionIds = (recentActivity as any)?.map((r: any) => r.section_id).filter(Boolean) || []
     const { data: sections } = await supabase
       .from('sections')
       .select('id, section_code')
       .in('id', sectionIds)
 
     const sectionMap = new Map(
-      sections?.map(s => [s.id, s.section_code]) || []
+      (sections as any)?.map((s: any) => [s.id, s.section_code]) || []
     )
 
-    const enrichedActivity = recentActivity?.map(activity => ({
+    const enrichedActivity = (recentActivity as any)?.map((activity: any) => ({
       id: activity.id,
       studentName: studentMap.get(activity.student_number) || activity.student_number,
       studentNumber: activity.student_number,

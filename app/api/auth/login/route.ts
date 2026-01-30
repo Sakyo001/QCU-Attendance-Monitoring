@@ -100,7 +100,7 @@ export async function POST(request: Request) {
     }
 
     // Update last_login (fire and forget)
-    supabase
+    (supabase as any)
       .from('users')
       .update({ last_login: new Date().toISOString() })
       .eq('id', dbUser.id)

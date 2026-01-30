@@ -4,8 +4,8 @@ import { cookies } from 'next/headers'
 
 export async function GET() {
   try {
-    const cookieStore = await cookies()
-    const supabase = createClient(cookieStore)
+    const cookieStore = cookies()
+    const supabase = createClient(cookieStore as any)
     
     // Get all sections
     const { data: sections, error } = await supabase

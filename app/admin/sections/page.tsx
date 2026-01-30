@@ -98,7 +98,7 @@ export default function SectionsPage() {
 
       if (error) throw error
 
-      setSections(data || [])
+      setSections((data as any) || [])
     } catch (error) {
       console.error('Error fetching sections:', error)
     } finally {
@@ -210,15 +210,15 @@ export default function SectionsPage() {
     maxStudents: number
   ) => {
     try {
-      const { error } = await supabase
+      const { error } = await (supabase as any)
         .from('sections')
         .update({
           section_code: sectionCode,
           semester: semester,
           academic_year: academicYear,
           max_students: maxStudents
-        })
-        .eq('id', sectionId)
+        } as any)
+        .eq('id', sectionId as any)
 
       if (error) throw error
 
@@ -247,7 +247,7 @@ export default function SectionsPage() {
       const { error } = await supabase
         .from('sections')
         .delete()
-        .eq('id', sectionId)
+        .eq('id', sectionId as any)
 
       if (error) throw error
 

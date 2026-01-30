@@ -176,9 +176,9 @@ export async function POST(request: NextRequest) {
         face_data_length: (imagePath || faceData)?.length || 0,
         face_descriptor_type: typeof faceDescriptor,
         face_descriptor_is_array: Array.isArray(faceDescriptor),
-        face_descriptor_length: Array.isArray(faceDescriptor) ? faceDescriptor.length : (faceDescriptor ? faceDescriptor.length : 0),
+        face_descriptor_length: Array.isArray(faceDescriptor) ? (faceDescriptor as any).length : ((faceDescriptor as any) ? (faceDescriptor as any).length : 0),
         final_descriptor_is_array: Array.isArray(faceDescriptor) || (faceDescriptor && typeof faceDescriptor === 'object'),
-        final_descriptor_length: Array.isArray(faceDescriptor) ? faceDescriptor.length : (faceDescriptor?.length || 0)
+        final_descriptor_length: Array.isArray(faceDescriptor) ? (faceDescriptor as any).length : ((faceDescriptor as any)?.length || 0)
       })
 
       const insertPayload = {

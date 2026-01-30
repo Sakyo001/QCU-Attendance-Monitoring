@@ -28,7 +28,7 @@ export default function DebugPage() {
 
       // Get sections assigned to current professor
       console.log('Fetching sections with professor_id:', user?.id)
-      const { data: myProfessorSections, error: myProfessorSectionsError } = await supabase
+      const { data: myProfessorSections, error: myProfessorSectionsError } = await (supabase as any)
         .from('sections')
         .select('id, section_name, professor_id, room, courses(course_name)')
         .eq('professor_id', user?.id)
@@ -44,7 +44,7 @@ export default function DebugPage() {
       setAllSections(allSectionsData || [])
 
       // Get ALL professors (to see what professors exist)
-      const { data: allProfessorsData, error: allProfessorsError } = await supabase
+      const { data: allProfessorsData, error: allProfessorsError } = await (supabase as any)
         .from('users')
         .select('id, email, role, first_name, last_name')
         .eq('role', 'professor')

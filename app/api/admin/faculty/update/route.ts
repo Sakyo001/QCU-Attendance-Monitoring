@@ -19,15 +19,16 @@ export async function PUT(request: NextRequest) {
     console.log('Update data:', { firstName, lastName, email, employeeId, isActive })
 
     // Update the users table
-    const { data, error } = await supabase
+    const updateData: any = {
+      first_name: firstName,
+      last_name: lastName,
+      email: email,
+      employee_id: employeeId,
+      is_active: isActive
+    }
+    const { data, error } = await (supabase as any)
       .from('users')
-      .update({
-        first_name: firstName,
-        last_name: lastName,
-        email: email,
-        employee_id: employeeId,
-        is_active: isActive
-      })
+      .update(updateData)
       .eq('id', facultyId)
       .select()
 

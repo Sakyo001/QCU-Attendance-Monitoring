@@ -32,9 +32,9 @@ export async function GET(request: NextRequest) {
     console.log('✅ Found', allAttendance?.length || 0, 'attendance records')
 
     // Calculate overall stats
-    const presentCount = allAttendance?.filter(r => r.status === 'present').length || 0
-    const absentCount = allAttendance?.filter(r => r.status === 'absent').length || 0
-    const lateCount = allAttendance?.filter(r => r.status === 'late').length || 0
+    const presentCount = (allAttendance as any)?.filter((r: any) => r.status === 'present').length || 0
+    const absentCount = (allAttendance as any)?.filter((r: any) => r.status === 'absent').length || 0
+    const lateCount = (allAttendance as any)?.filter((r: any) => r.status === 'late').length || 0
     const totalRecords = allAttendance?.length || 0
 
     const overallStats = {

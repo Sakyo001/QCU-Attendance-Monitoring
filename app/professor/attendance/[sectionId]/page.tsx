@@ -56,7 +56,7 @@ export default function AttendancePage() {
   const [newStudentNotification, setNewStudentNotification] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!loading && (!user || (user.role !== 'professor' && user.role !== 'adviser'))) {
+    if (!loading && (!user || (user.role !== 'professor' && (user.role as any) !== 'adviser'))) {
       router.push('/professor/login')
       return
     }
@@ -790,10 +790,10 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
           
           // Update bounding box for canvas drawing
           const video = videoRef.current
-          const box = result.boundingBox
+          const box = result.boundingBox as any
           setBoundingBox({
-            x: box.x * video.videoWidth,
-            y: box.y * video.videoHeight,
+            x: box.xCenter ? (box.xCenter - box.width / 2) * video.videoWidth : box.x * video.videoWidth,
+            y: box.yCenter ? (box.yCenter - box.height / 2) * video.videoHeight : box.y * video.videoHeight,
             width: box.width * video.videoWidth,
             height: box.height * video.videoHeight
           })

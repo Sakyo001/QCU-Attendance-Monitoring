@@ -13,7 +13,7 @@ interface UsePassiveLivenessDetectionReturn {
   livenessMetrics: LivenessMetrics
   livenessFramesRef: React.MutableRefObject<number>
   previousYawRef: React.MutableRefObject<number>
-  updateLivenessScore: (detection: faceapi.WithFaceDescriptors<faceapi.WithFaceLandmarks<faceapi.WithFaceDetection<{}>>>) => boolean
+  updateLivenessScore: (detection: faceapi.WithFaceDescriptor<faceapi.WithFaceLandmarks<faceapi.WithFaceDetection<{}>>>) => boolean
   resetLiveness: () => void
 }
 
@@ -59,7 +59,7 @@ export function usePassiveLivenessDetection(): UsePassiveLivenessDetectionReturn
     return leftEyeOpen && rightEyeOpen
   }
 
-  const updateLivenessScore = (detection: faceapi.WithFaceDescriptors<faceapi.WithFaceLandmarks<faceapi.WithFaceDetection<{}>>>): boolean => {
+  const updateLivenessScore = (detection: faceapi.WithFaceDescriptor<faceapi.WithFaceLandmarks<faceapi.WithFaceDetection<{}>>>): boolean => {
     const eyesOpen = checkEyesOpen(detection.landmarks)
     const yaw = calculateHeadPose(detection.landmarks)
     const headMovement = Math.abs(yaw - previousYawRef.current) > HEAD_MOVEMENT_THRESHOLD

@@ -36,18 +36,18 @@ export async function POST(request: NextRequest) {
       // Check if password_hash exists (bcrypt hashed), otherwise use plain text password for now
       let isPasswordValid = false
       
-      if (professor.password_hash) {
+      if ((professor as any).password_hash) {
         // Compare with bcrypt hash
-        isPasswordValid = await bcrypt.compare(password, professor.password_hash)
-      } else if (professor.password) {
+        isPasswordValid = await bcrypt.compare(password, (professor as any).password_hash)
+      } else if ((professor as any).password) {
         // Fallback to plain text comparison (for existing users without hashed passwords)
         // In production, migrate these passwords to hashes
-        isPasswordValid = password === professor.password
+        isPasswordValid = password === (professor as any).password
         
         // If valid with plain text, hash and update the database
         if (isPasswordValid) {
           const hashedPassword = await bcrypt.hash(password, 10)
-          await supabase
+          await (supabase as any)
             .from('users')
             .update({ password_hash: hashedPassword })
             .eq('id', professorId)
@@ -73,10 +73,10 @@ export async function POST(request: NextRequest) {
       success: true,
       message: 'Password verified successfully',
       professor: {
-        id: professor.id,
-        firstName: professor.firstName,
-        lastName: professor.lastName,
-        email: professor.email
+        id: (professor as any).id,
+        firstName: (professor as any).firstName,
+        lastName: (professor as any).lastName,
+        email: (professor as any).email
       }
     })
 

@@ -40,7 +40,7 @@ export default function ProfessorSectionsPage() {
   const fetchMySections = async () => {
     try {
       // Fetch sections where this professor is assigned
-      const { data, error } = await supabase
+      const { data, error } = await (supabase as any)
         .from('professor_sections_view')
         .select('*')
         .eq('professor_id', user?.id)
@@ -48,7 +48,7 @@ export default function ProfessorSectionsPage() {
 
       if (error) throw error
 
-      setSections(data || [])
+      setSections((data as any) || [])
     } catch (error) {
       console.error('Error fetching sections:', error)
     } finally {

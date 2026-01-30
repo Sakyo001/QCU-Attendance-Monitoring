@@ -44,8 +44,8 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    const cookieStore = await cookies()
-    const supabase = createClient(cookieStore)
+    const cookieStore = cookies()
+    const supabase = createClient(cookieStore as any)
 
     // Get today's session for this class
     const today = new Date().toISOString().split('T')[0]

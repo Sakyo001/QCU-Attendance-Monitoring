@@ -11,14 +11,11 @@ export function createClient() {
         autoRefreshToken: true,
         detectSessionInUrl: true,
       },
-      headers: {
-        'Content-Type': 'application/json',
-      },
       global: {
         headers: {
           'Content-Type': 'application/json',
         },
       },
-    }
+    } as any
   )
 }

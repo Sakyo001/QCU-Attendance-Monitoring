@@ -72,13 +72,13 @@ export async function proxy(request: NextRequest) {
   }
 
   // User is logged in - get their role (only one query)
-  const { data: userData } = await supabase
+  const { data: userData } = await (supabase as any)
     .from('users')
     .select('role')
     .eq('auth_id', user.id)
     .single()
 
-  const userRole = userData?.role
+  const userRole = (userData as any)?.role
 
   // If no role found, let AuthContext handle the redirect
   if (!userRole) {

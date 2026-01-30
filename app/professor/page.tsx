@@ -43,7 +43,7 @@ export default function ProfessorDashboard() {
   const [selectedScheduleId, setSelectedScheduleId] = useState<string>('')
 
   useEffect(() => {
-    if (!loading && (!user || (user.role !== 'professor' && user.role !== 'adviser'))) {
+    if (!loading && (!user || (user.role !== 'professor' && (user.role as any) !== 'adviser'))) {
       router.push('/professor/login')
       return
     }
@@ -385,7 +385,7 @@ function CreateClassroomModal({ sections: initialSections, professorName, onClos
   const fetchSectionsForModal = async () => {
     setLoadingSections(true)
     try {
-      const { data, error } = await supabase
+      const { data, error } = await (supabase as any)
         .from('sections')
         .select('id, section_code, semester, academic_year, max_students')
         .order('section_code')
@@ -396,7 +396,7 @@ function CreateClassroomModal({ sections: initialSections, professorName, onClos
         return
       }
 
-      setSections(data || [])
+      setSections((data as any) || [])
     } catch (err) {
       console.error('Exception fetching sections:', err)
       setSections(initialSections)
