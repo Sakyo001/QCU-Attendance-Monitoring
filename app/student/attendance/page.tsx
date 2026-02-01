@@ -125,13 +125,18 @@ export default function StudentAttendancePage() {
     const playPromise = videoRef.current.play()
     if (playPromise !== undefined) {
       playPromise.catch(err => {
-        console.error('Autoplay failed, retrying...', err)
-        // Retry with a small delay
-        setTimeout(() => {
-          if (videoRef.current && streamRef.current) {
-            videoRef.current.play().catch(e => console.error('Retry failed:', e))
-          }
-        }, 100)
+        // Ignore play interruption errors (normal when component unmounts)
+        if (err.name !== 'AbortError') {
+          console.error('Autoplay failed, retrying...', err)
+          // Retry with a small delay
+          setTimeout(() => {
+            if (videoRef.current && streamRef.current) {
+              videoRef.current.play().catch(e => {
+                if (e.name !== 'AbortError') console.error('Retry failed:', e)
+              })
+            }
+          }, 100)
+        }
       })
     }
 
@@ -140,6 +145,11 @@ export default function StudentAttendancePage() {
 
     // Cleanup function
     return () => {
+      // Pause video to prevent play() promise errors
+      if (videoRef.current) {
+        videoRef.current.pause()
+        videoRef.current.srcObject = null
+      }
       if (detectionIntervalRef.current) {
         clearInterval(detectionIntervalRef.current)
       }

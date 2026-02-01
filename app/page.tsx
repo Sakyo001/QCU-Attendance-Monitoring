@@ -28,10 +28,10 @@ export default function Home() {
             <span className="font-bold text-xl tracking-tight">EduScan</span>
           </div>
           <div className="flex items-center gap-4">
-             <Link href="https://github.com/your-repo" target="_blank" className="text-muted-foreground hover:text-foreground transition-colors">
+             <Link href="/login" className="text-muted-foreground hover:text-foreground transition-colors">
               <Github className="w-5 h-5" />
              </Link>
-             <Link href="#portals">
+             <Link href="/login">
                <Button variant="default" size="sm" className="hidden sm:flex rounded-full">
                  Access Portal
                </Button>
@@ -64,7 +64,7 @@ export default function Home() {
           </p>
           
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-            <Link href="#portals">
+            <Link href="/login">
               <Button size="lg" className="rounded-full text-lg h-14 px-8 shadow-xl shadow-primary/20 hover:shadow-primary/40 transition-all hover:scale-105">
                 Get Started
                 <ArrowRight className="ml-2 w-5 h-5" />
@@ -149,7 +149,7 @@ export default function Home() {
 
           <div className="grid md:grid-cols-3 gap-8 max-w-6xl mx-auto">
             {/* Admin Portal Card */}
-            <Link href="/admin/login" className="transform hover:-translate-y-2 transition-all duration-300">
+            <Link href="/login" className="transform hover:-translate-y-2 transition-all duration-300">
                <div className="group relative bg-background rounded-3xl p-1 h-full shadow-lg hover:shadow-2xl hover:shadow-primary/20 transition-all duration-500">
                  <div className="absolute inset-0 bg-gradient-to-r from-primary to-blue-600 rounded-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-500 blur-xl -z-10" />
                  <div className="bg-card h-full rounded-[20px] p-8 flex flex-col items-center text-center border overflow-hidden relative">
@@ -174,7 +174,7 @@ export default function Home() {
             </Link>
 
             {/* Professor Portal Card */}
-            <Link href="/professor/login" className="transform hover:-translate-y-2 transition-all duration-300">
+            <Link href="/login" className="transform hover:-translate-y-2 transition-all duration-300">
              <div className="group relative bg-background rounded-3xl p-1 h-full shadow-lg hover:shadow-2xl hover:shadow-violet-600/20 transition-all duration-500">
                  <div className="absolute inset-0 bg-gradient-to-r from-violet-600 to-fuchsia-600 rounded-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-500 blur-xl -z-10" />
                  <div className="bg-card h-full rounded-[20px] p-8 flex flex-col items-center text-center border overflow-hidden relative">
@@ -198,7 +198,7 @@ export default function Home() {
             </Link>
 
             {/* Student Portal Card */}
-             <Link href="/student/login" className="transform hover:-translate-y-2 transition-all duration-300">
+             <Link href="/login" className="transform hover:-translate-y-2 transition-all duration-300">
                <div className="group relative bg-background rounded-3xl p-1 h-full shadow-lg hover:shadow-2xl hover:shadow-emerald-600/20 transition-all duration-500">
                  <div className="absolute inset-0 bg-gradient-to-r from-emerald-500 to-teal-500 rounded-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-500 blur-xl -z-10" />
                  <div className="bg-card h-full rounded-[20px] p-8 flex flex-col items-center text-center border overflow-hidden relative">

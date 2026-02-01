@@ -35,7 +35,7 @@ let initializePromise: Promise<boolean> | null = null
 
 export interface FaceDetectionResult {
   detected: boolean
-  descriptor: number[] | null // Now 128D FaceNet embeddings instead of 1404D landmarks
+  descriptor: number[] | null // Face Mesh 478 landmarks with irises (1434D: x,y,z for each point)
   landmarks: any[] | null
   boundingBox: {
     xCenter: number
@@ -289,10 +289,11 @@ export const detectFaceInVideo = async (
             height: maxY - minY
           }
           
-          // Generate FaceNet embedding (128D) for identity recognition
-          const descriptor = await generateFaceNetEmbedding(videoElement, boundingBox)
+          // Use Face Mesh landmarks as descriptor (478 points * 3 coordinates = 1434D)
+          const descriptor = landmarks.flatMap((lm: any) => [lm.x, lm.y, lm.z])
 
-          if (!descriptor) {
+          if (!descriptor || descriptor.length !== 1434) {
+            console.error('❌ Invalid landmark count:', descriptor?.length, '(expected 1434)')
             resolve({
               detected: false,
               descriptor: null,
@@ -329,6 +330,43 @@ export const detectFaceInVideo = async (
       })
     }
   })
+}
+
+// Extract FaceNet 128D embeddings from video (for accurate face recognition)
+export const extractFaceNetDescriptor = async (
+  videoElement: HTMLVideoElement
+): Promise<number[] | null> => {
+  if (!faceNetModelsLoaded) {
+    console.error('❌ FaceNet models not loaded')
+    return null
+  }
+
+  try {
+    // Detect face with landmarks and descriptor using face-api.js
+    const detection = await faceapi
+      .detectSingleFace(videoElement, new faceapi.TinyFaceDetectorOptions())
+      .withFaceLandmarks()
+      .withFaceDescriptor()
+
+    if (!detection || !detection.descriptor) {
+      console.warn('⚠️ No face detected with FaceNet')
+      return null
+    }
+
+    // FaceNet returns 128D Float32Array, convert to regular array
+    const descriptor = Array.from(detection.descriptor)
+    
+    if (descriptor.length !== 128) {
+      console.error('❌ Invalid FaceNet descriptor length:', descriptor.length)
+      return null
+    }
+
+    console.log('✅ FaceNet descriptor extracted:', descriptor.length, 'dimensions')
+    return descriptor
+  } catch (error) {
+    console.error('❌ FaceNet extraction error:', error)
+    return null
+  }
 }
 
 // Calculate cosine similarity between two descriptors

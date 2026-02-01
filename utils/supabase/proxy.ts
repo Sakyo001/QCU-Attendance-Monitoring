@@ -9,9 +9,9 @@ const protectedRoutes = {
 }
 
 const loginRoutes = {
-  admin: '/admin/login',
-  professor: '/professor/login',
-  student: '/student/login',
+  admin: '/login',
+  professor: '/login',
+  student: '/login',
 }
 
 export async function proxy(request: NextRequest) {
@@ -45,9 +45,9 @@ export async function proxy(request: NextRequest) {
   )
 
   // Check if trying to access protected routes
-  const isAdminRoute = pathname.startsWith('/admin') && !pathname.startsWith('/admin/login')
-  const isProfessorRoute = pathname.startsWith('/professor') && !pathname.startsWith('/professor/login')
-  const isStudentRoute = pathname.startsWith('/student') && !pathname.startsWith('/student/login')
+  const isAdminRoute = pathname.startsWith('/admin') && !pathname.startsWith('/login')
+  const isProfessorRoute = pathname.startsWith('/professor') && !pathname.startsWith('/login')
+  const isStudentRoute = pathname.startsWith('/student') && !pathname.startsWith('/login')
 
   // For login pages and public routes, skip auth check
   if (!isAdminRoute && !isProfessorRoute && !isStudentRoute) {

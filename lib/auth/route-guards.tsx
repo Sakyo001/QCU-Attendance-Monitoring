@@ -46,7 +46,7 @@ export function RouteGuard({ children, allowedRoles, redirectTo }: RouteGuardPro
 
 export function AdminGuard({ children }: { children: React.ReactNode }) {
   return (
-    <RouteGuard allowedRoles={['admin']} redirectTo="/admin/login">
+    <RouteGuard allowedRoles={['admin']} redirectTo="/login">
       {children}
     </RouteGuard>
   )
@@ -54,7 +54,7 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
 
 export function ProfessorGuard({ children }: { children: React.ReactNode }) {
   return (
-    <RouteGuard allowedRoles={['professor']} redirectTo="/professor/login">
+    <RouteGuard allowedRoles={['professor']} redirectTo="/login">
       {children}
     </RouteGuard>
   )
@@ -62,7 +62,7 @@ export function ProfessorGuard({ children }: { children: React.ReactNode }) {
 
 export function StudentGuard({ children }: { children: React.ReactNode }) {
   return (
-    <RouteGuard allowedRoles={['student']} redirectTo="/student/login">
+    <RouteGuard allowedRoles={['student']} redirectTo="/login">
       {children}
     </RouteGuard>
   )

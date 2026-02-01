@@ -5,6 +5,8 @@ import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import { useEffect, useState, useRef } from 'react'
 import { ArrowLeft, Loader2, Camera, RefreshCw, Check, X, ShieldCheck, Clock, Users, Plus, LayoutGrid, List, Monitor } from 'lucide-react'
 import { initializeFaceDetection, detectFaceInVideo } from '@/lib/mediapipe-face'
+import { extractFaceNetFromVideo, checkFaceNetHealth } from '@/lib/facenet-python-api'
+import { usePassiveLivenessDetection } from '@/hooks/usePassiveLivenessDetection'
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
@@ -42,11 +44,12 @@ export default function AttendancePage() {
   const searchParams = useSearchParams()
   const sectionId = params.sectionId as string
   const entryMethod = searchParams.get('entryMethod') || 'face' // Default to face if not specified
+  const urlToken = searchParams.get('token') // Verification token for password entry
 
   const [checkingRegistration, setCheckingRegistration] = useState(true)
   const [isRegistered, setIsRegistered] = useState(false)
-  const [faceVerified, setFaceVerified] = useState(entryMethod === 'password') // If password entry, skip face verification
-  const [passwordVerified, setPasswordVerified] = useState(entryMethod === 'password')
+  const [faceVerified, setFaceVerified] = useState(false) // Always require verification, will be set true after successful verification
+  const [passwordVerified, setPasswordVerified] = useState(false) // Will be set true after successful password verification
   const [showStudentRegModal, setShowStudentRegModal] = useState(false)
   const [showFaceRecognitionModal, setShowFaceRecognitionModal] = useState(false)
   const [showFaceVerificationModal, setShowFaceVerificationModal] = useState(false)
@@ -62,16 +65,45 @@ export default function AttendancePage() {
     }
 
     if (!loading && user) {
-      // Only check face registration if using face entry method
-      if (entryMethod === 'face') {
+      // Verify password entry token if using password method
+      if (entryMethod === 'password') {
+        const storedToken = sessionStorage.getItem(`class-access-${sectionId}`)
+        if (storedToken && storedToken === urlToken) {
+          // Valid token, mark as password verified
+          setPasswordVerified(true)
+          setFaceVerified(true) // Allow access
+          setCheckingRegistration(false)
+          // Clear the token to prevent reuse
+          sessionStorage.removeItem(`class-access-${sectionId}`)
+        } else {
+          // Invalid or missing token, redirect back
+          console.error('Invalid or missing password verification token')
+          router.push('/professor')
+          return
+        }
+      } else if (entryMethod === 'face') {
+        // Only check face registration if using face entry method
         checkFaceRegistration()
       } else {
-        // For password entry method, skip face registration check
+        // Unknown entry method, default to face
         setCheckingRegistration(false)
       }
       fetchTodayAttendanceRecords()
     }
-  }, [user, loading, router, entryMethod])
+  }, [user, loading, router, entryMethod, urlToken, sectionId])
+
+  // Check Python FaceNet server health
+  useEffect(() => {
+    const checkServer = async () => {
+      const healthy = await checkFaceNetHealth()
+      if (!healthy) {
+        console.warn('⚠️ Python FaceNet server not responding. Start: python facenet-fast-server.py')
+      } else {
+        console.log('✅ Python FaceNet server is healthy')
+      }
+    }
+    checkServer()
+  }, [])
 
   // Listen for student registration events to auto-refresh attendance list
   useEffect(() => {
@@ -197,7 +229,7 @@ export default function AttendancePage() {
         professorId={user?.id || ''}
         professorName={`${user?.firstName} ${user?.lastName}`}
         onComplete={handleRegistrationComplete}
-        onSkip={() => setIsRegistered(true)}
+        onCancel={() => router.push('/professor')}
       />
     )
   }
@@ -208,7 +240,12 @@ export default function AttendancePage() {
       <FaceVerificationModal
         professorId={user?.id || ''}
         professorName={`${user?.firstName} ${user?.lastName}`}
-        onVerificationSuccess={() => setFaceVerified(true)}
+        onVerificationSuccess={() => {
+          setFaceVerified(true)
+          // Store verification in session to prevent bypass
+          sessionStorage.setItem(`face-verified-${sectionId}`, 'true')
+        }}
+        onCancel={() => router.push('/professor')}
       />
     )
   }
@@ -777,29 +814,38 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
       if (!videoRef.current || isCapturing) return
 
       try {
-        const result = await detectFaceInVideo(videoRef.current)
+        // Extract embedding via Python server (512D)
+        const pythonResult = await extractFaceNetFromVideo(videoRef.current)
 
-        if (result.detected && result.descriptor && result.boundingBox) {
+        if (pythonResult.detected && pythonResult.embedding) {
           setFaceDetected(true)
-          const descriptor = new Float32Array(result.descriptor)
+          const descriptor = new Float32Array(pythonResult.embedding)
           setFaceDescriptor(descriptor)
           
           // IMPORTANT: Save to ref IMMEDIATELY when detected (not just during capture)
           savedFaceDescriptorRef.current = descriptor
           console.log('✅ Face detected! Descriptor length:', descriptor.length, '- Saved to ref')
+          console.log('   Confidence:', pythonResult.confidence?.toFixed(3))
           
-          // Update bounding box for canvas drawing
-          const video = videoRef.current
-          const box = result.boundingBox as any
-          setBoundingBox({
-            x: box.xCenter ? (box.xCenter - box.width / 2) * video.videoWidth : box.x * video.videoWidth,
-            y: box.yCenter ? (box.yCenter - box.height / 2) * video.videoHeight : box.y * video.videoHeight,
-            width: box.width * video.videoWidth,
-            height: box.height * video.videoHeight
+          // REAL-TIME CHECK: Verify if face already exists in database
+          const matchResponse = await fetch('/api/attendance/match-face', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ faceDescriptor: Array.from(descriptor) })
           })
+          const matchData = await matchResponse.json()
           
-          // Recognize face
-          recognizeFace(descriptor)
+          if (matchData.success && matchData.matched) {
+            setRecognizedName(`${matchData.student.first_name} ${matchData.student.last_name}`)
+            setRecognitionConfidence(matchData.confidence)
+            console.log(`⚠️ Face already registered: ${matchData.student.first_name} ${matchData.student.last_name}`)
+          } else {
+            setRecognizedName('New Student')
+            setRecognitionConfidence(null)
+            console.log('✅ New face detected - not in database')
+          }
+          
+          setBoundingBox(null) // Remove bounding box since Python server doesn't provide it
           
           // Auto-capture logic - ULTRA LENIENT
           consecutiveFaceDetectionsRef.current += 1
@@ -1302,6 +1348,9 @@ function AttendanceRecognitionModal({ sectionId, isOpen, onClose, onStudentMarke
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const detectionIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const attendanceMarkedRef = useRef<boolean>(false) // Track if attendance already marked
+  const lastRecognitionAttemptRef = useRef<number>(0) // Timestamp of last recognition attempt
+  const recognitionCooldownRef = useRef<boolean>(false) // Cooldown after failed recognition
 
   useEffect(() => {
     const loadModels = async () => {
@@ -1354,13 +1403,18 @@ function AttendanceRecognitionModal({ sectionId, isOpen, onClose, onStudentMarke
     const playPromise = videoRef.current.play()
     if (playPromise !== undefined) {
       playPromise.catch(err => {
-        console.error('Autoplay failed, retrying...', err)
-        // Retry with a small delay
-        setTimeout(() => {
-          if (videoRef.current && streamRef.current) {
-            videoRef.current.play().catch(e => console.error('Retry failed:', e))
-          }
-        }, 100)
+        // Ignore play interruption errors (normal when component unmounts)
+        if (err.name !== 'AbortError') {
+          console.error('Autoplay failed, retrying...', err)
+          // Retry with a small delay
+          setTimeout(() => {
+            if (videoRef.current && streamRef.current) {
+              videoRef.current.play().catch(e => {
+                if (e.name !== 'AbortError') console.error('Retry failed:', e)
+              })
+            }
+          }, 100)
+        }
       })
     }
 
@@ -1369,6 +1423,11 @@ function AttendanceRecognitionModal({ sectionId, isOpen, onClose, onStudentMarke
 
     // Cleanup function
     return () => {
+      // Pause video to prevent play() promise errors
+      if (videoRef.current) {
+        videoRef.current.pause()
+        videoRef.current.srcObject = null
+      }
       if (detectionIntervalRef.current) {
         clearInterval(detectionIntervalRef.current)
       }
@@ -1390,34 +1449,50 @@ function AttendanceRecognitionModal({ sectionId, isOpen, onClose, onStudentMarke
     if (!videoRef.current || !modelsLoaded) return
 
     detectionIntervalRef.current = setInterval(async () => {
-      if (!videoRef.current || isProcessing) return
+      // CRITICAL: Check flags at the start of every interval
+      if (!videoRef.current || isProcessing || attendanceMarkedRef.current || recognitionCooldownRef.current) {
+        return
+      }
 
       try {
-        const result = await detectFaceInVideo(videoRef.current)
+        // Extract embedding via Python server (512D)
+        const pythonResult = await extractFaceNetFromVideo(videoRef.current)
 
-        if (result.detected && result.descriptor) {
+        if (pythonResult.detected && pythonResult.embedding) {
           setFaceDetected(true)
-          const descriptor = new Float32Array(result.descriptor)
+          const descriptor = new Float32Array(pythonResult.embedding)
           setFaceDescriptor(descriptor)
+          
+          console.log('✅ Face detected! Confidence:', pythonResult.confidence?.toFixed(3))
 
-          // Auto-match face when detected
-          if (!isProcessing) {
+          // IMMEDIATE MATCH - No debouncing, just cooldown after failures
+          if (!isProcessing && !attendanceMarkedRef.current && !recognitionCooldownRef.current) {
+            // Stop interval BEFORE processing to prevent multiple calls
+            if (detectionIntervalRef.current) {
+              clearInterval(detectionIntervalRef.current)
+              detectionIntervalRef.current = null
+            }
+            
             await matchAndMarkAttendance(descriptor)
           }
         } else {
           setFaceDetected(false)
-          setRecognitionError(null)
         }
       } catch (error) {
-        // Face detection error
         console.error('Face detection error:', error)
       }
-    }, 500)
+    }, 800) // Increased to 800ms to reduce API spam
   }
 
   const matchAndMarkAttendance = async (descriptor: Float32Array) => {
-    if (isProcessing || recognizingStudent) return
+    if (isProcessing || recognizingStudent || attendanceMarkedRef.current) {
+      console.log('⏭️ Skipping - already processing or marked')
+      return
+    }
+    
+    console.log('🔍 Matching face...')
     setIsProcessing(true)
+    attendanceMarkedRef.current = true // Set immediately to prevent any duplicates
 
     try {
       // Match face
@@ -1432,15 +1507,30 @@ function AttendanceRecognitionModal({ sectionId, isOpen, onClose, onStudentMarke
       const matchData = await matchResponse.json()
 
       if (!matchData.success || !matchData.matched) {
-        setRecognitionError('Face not recognized. Try again.')
+        console.log('❌ Face not recognized')
+        setRecognitionError('Face not recognized. Please try again.')
         setIsProcessing(false)
+        attendanceMarkedRef.current = false // Reset so user can try again
+        
+        // Set cooldown after failed recognition (2 seconds)
+        recognitionCooldownRef.current = true
+        setTimeout(() => {
+          recognitionCooldownRef.current = false
+          setRecognitionError(null)
+          // Restart detection interval for retry
+          if (!detectionIntervalRef.current && showCamera) {
+            startFaceDetection()
+          }
+        }, 2000)
+        
         return
       }
 
       const student = matchData.student
+      console.log('✅ Student matched:', student.firstName, student.lastName)
       setRecognizingStudent(student)
 
-      // Mark attendance (backend will create/use today's session automatically)
+      // Mark attendance
       const markResponse = await fetch('/api/attendance/mark', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1454,22 +1544,58 @@ function AttendanceRecognitionModal({ sectionId, isOpen, onClose, onStudentMarke
       const markData = await markResponse.json()
 
       if (markData.success) {
+        console.log('✅ Attendance marked successfully!')
         setRecognitionError(null)
-        // Wait for records to be refetched, then close modal
+        
+        // Stop camera immediately
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach(track => track.stop())
+          streamRef.current = null
+        }
+        
+        // Wait for records refresh
         await onStudentMarked()
-        // Small delay to ensure data is merged before closing
+        
+        // Close modal
         setTimeout(() => {
+          setShowCamera(false)
           onClose()
+          
+          // Reset states for next use
           setRecognizingStudent(null)
           setIsProcessing(false)
-        }, 500)
+          attendanceMarkedRef.current = false
+          lastRecognitionAttemptRef.current = 0
+        }, 1500)
       } else {
+        console.log('❌ Failed to mark attendance')
         setRecognitionError('Failed to mark attendance')
         setIsProcessing(false)
+        attendanceMarkedRef.current = false
+        
+        recognitionCooldownRef.current = true
+        setTimeout(() => {
+          recognitionCooldownRef.current = false
+          setRecognitionError(null)
+          if (!detectionIntervalRef.current && showCamera) {
+            startFaceDetection()
+          }
+        }, 2000)
       }
     } catch (error: any) {
+      console.error('❌ Error:', error)
       setRecognitionError(error.message || 'Error processing attendance')
       setIsProcessing(false)
+      attendanceMarkedRef.current = false
+      
+      recognitionCooldownRef.current = true
+      setTimeout(() => {
+        recognitionCooldownRef.current = false
+        setRecognitionError(null)
+        if (!detectionIntervalRef.current && showCamera) {
+          startFaceDetection()
+        }
+      }, 2000)
     }
   }
 
@@ -1616,13 +1742,18 @@ function FaceRegistrationModal({ professorId, professorName, onComplete, onSkip 
     const playPromise = videoRef.current.play()
     if (playPromise !== undefined) {
       playPromise.catch(err => {
-        console.error('Autoplay failed, retrying...', err)
-        // Retry with a small delay
-        setTimeout(() => {
-          if (videoRef.current && streamRef.current) {
-            videoRef.current.play().catch(e => console.error('Retry failed:', e))
-          }
-        }, 100)
+        // Ignore play interruption errors (normal when component unmounts)
+        if (err.name !== 'AbortError') {
+          console.error('Autoplay failed, retrying...', err)
+          // Retry with a small delay
+          setTimeout(() => {
+            if (videoRef.current && streamRef.current) {
+              videoRef.current.play().catch(e => {
+                if (e.name !== 'AbortError') console.error('Retry failed:', e)
+              })
+            }
+          }, 100)
+        }
       })
     }
 
@@ -1631,6 +1762,11 @@ function FaceRegistrationModal({ professorId, professorName, onComplete, onSkip 
 
     // Cleanup function
     return () => {
+      // Pause video to prevent play() promise errors
+      if (videoRef.current) {
+        videoRef.current.pause()
+        videoRef.current.srcObject = null
+      }
       if (captureTimeoutRef.current) clearTimeout(captureTimeoutRef.current)
       if (detectionIntervalRef.current) clearInterval(detectionIntervalRef.current)
     }
@@ -1645,9 +1781,18 @@ function FaceRegistrationModal({ professorId, professorName, onComplete, onSkip 
       try {
         const result = await detectFaceInVideo(videoRef.current)
 
-        if (result.detected && result.descriptor) {
+        if (result.detected) {
           setFaceDetected(true)
-          setFaceDescriptor(new Float32Array(result.descriptor))
+          
+          // Extract embedding via Python server (128D)
+          const pythonResult = await extractFaceNetFromVideo(videoRef.current)
+          if (pythonResult.detected && pythonResult.embedding) {
+            setFaceDescriptor(new Float32Array(pythonResult.embedding))
+            console.log('✅ Python FaceNet embedding:', pythonResult.embedding.length, 'dimensions')
+            console.log('   Confidence:', pythonResult.confidence?.toFixed(3))
+          } else {
+            console.log('⚠️ Python extraction failed:', pythonResult.error)
+          }
         } else {
           setFaceDetected(false)
           setFaceDescriptor(null)
@@ -1887,9 +2032,11 @@ interface FaceVerificationModalProps {
   professorId: string
   professorName: string
   onVerificationSuccess: () => void
+  onCancel?: () => void
 }
 
-function FaceVerificationModal({ professorId, professorName, onVerificationSuccess }: FaceVerificationModalProps) {
+function FaceVerificationModal({ professorId, professorName, onVerificationSuccess, onCancel }: FaceVerificationModalProps) {
+  const router = useRouter()
   const [capturedImage, setCapturedImage] = useState<string | null>(null)
   const [isVerifying, setIsVerifying] = useState(false)
   const [showCamera, setShowCamera] = useState(false)
@@ -1898,10 +2045,17 @@ function FaceVerificationModal({ professorId, professorName, onVerificationSucce
   const [faceDescriptor, setFaceDescriptor] = useState<Float32Array | null>(null)
   const [verificationMessage, setVerificationMessage] = useState('')
   const [verificationStatus, setVerificationStatus] = useState<'idle' | 'scanning' | 'success' | 'failed'>('idle')
+  const [capturedDescriptors, setCapturedDescriptors] = useState<Float32Array[]>([])
+  const [requireMultipleCaptures, setRequireMultipleCaptures] = useState(true)
+  const REQUIRED_CAPTURES = 3 // Require 3 different captures to ensure liveness
   
+  const { livenessScore, livenessMetrics, updateLivenessScore, resetLiveness } = usePassiveLivenessDetection()
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const detectionIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const capturedDescriptorsRef = useRef<Float32Array[]>([]) // Ref to avoid stale state in interval
+  const verificationCooldownRef = useRef<boolean>(false) // Cooldown after failed verification
+  const lastVerificationAttemptRef = useRef<number>(0) // Timestamp of last verification attempt
 
   useEffect(() => {
     const loadModels = async () => {
@@ -1926,18 +2080,28 @@ function FaceVerificationModal({ professorId, professorName, onVerificationSucce
     const playPromise = videoRef.current.play()
     if (playPromise !== undefined) {
       playPromise.catch(err => {
-        console.error('Autoplay failed, retrying...', err)
-        setTimeout(() => {
-          if (videoRef.current && streamRef.current) {
-            videoRef.current.play().catch(e => console.error('Retry failed:', e))
-          }
-        }, 100)
+        // Ignore play interruption errors (normal when component unmounts)
+        if (err.name !== 'AbortError') {
+          console.error('Autoplay failed, retrying...', err)
+          setTimeout(() => {
+            if (videoRef.current && streamRef.current) {
+              videoRef.current.play().catch(e => {
+                if (e.name !== 'AbortError') console.error('Retry failed:', e)
+              })
+            }
+          }, 100)
+        }
       })
     }
 
     startFaceDetection()
 
     return () => {
+      // Pause video to prevent play() promise errors
+      if (videoRef.current) {
+        videoRef.current.pause()
+        videoRef.current.srcObject = null
+      }
       if (detectionIntervalRef.current) clearInterval(detectionIntervalRef.current)
     }
   }, [showCamera])
@@ -1946,17 +2110,82 @@ function FaceVerificationModal({ professorId, professorName, onVerificationSucce
     if (!videoRef.current || !modelsLoaded) return
 
     detectionIntervalRef.current = setInterval(async () => {
-      if (!videoRef.current || isVerifying) return
+      if (!videoRef.current || isVerifying || verificationCooldownRef.current) return
 
       try {
         const result = await detectFaceInVideo(videoRef.current)
 
-        if (result.detected && result.descriptor) {
+        if (result.detected) {
           setFaceDetected(true)
-          setFaceDescriptor(new Float32Array(result.descriptor))
-          // Auto-verify when face is detected
-          if (!isVerifying) {
-            await performFaceVerification(new Float32Array(result.descriptor))
+          
+          // Extract embedding via Python server (512D)
+          const pythonResult = await extractFaceNetFromVideo(videoRef.current)
+          
+          if (pythonResult.detected && pythonResult.embedding) {
+            const descriptor = new Float32Array(pythonResult.embedding)
+            setFaceDescriptor(descriptor)
+            
+            // REAL-TIME VERIFICATION: Check if this face matches BEFORE counting the capture
+            const response = await fetch('/api/professor/face-registration/verify', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                professorId,
+                faceDescriptor: Array.from(descriptor)
+              })
+            })
+
+            const verifyData = await response.json()
+            const isMatch = verifyData.success && verifyData.verified
+            console.log(`🔍 Real-time check: ${isMatch ? '✅ MATCH' : '❌ NO MATCH'} (${(verifyData.similarity * 100).toFixed(2)}%)`)
+            
+            // Only capture if face is verified
+            if (isMatch) {
+              const currentDescriptors = capturedDescriptorsRef.current
+              const isDifferentCapture = currentDescriptors.length === 0 || 
+                currentDescriptors.every(prev => {
+                  let diff = 0
+                  for (let i = 0; i < 512; i++) {
+                    diff += Math.abs(descriptor[i] - prev[i])
+                  }
+                  const isDiff = diff > 0.5
+                  if (!isDiff) {
+                    console.log('⏭️ Skipping similar capture (diff:', diff.toFixed(2), ')')
+                  }
+                  return isDiff
+                })
+              
+              if (isDifferentCapture && currentDescriptors.length < REQUIRED_CAPTURES) {
+                console.log(`✅ Valid capture ${currentDescriptors.length + 1}/${REQUIRED_CAPTURES} (Similarity: ${(verifyData.similarity * 100).toFixed(2)}%)`)
+                console.log(`   Confidence: ${pythonResult.confidence?.toFixed(3)}`)
+                
+                const updatedDescriptors = [...currentDescriptors, descriptor]
+                capturedDescriptorsRef.current = updatedDescriptors
+                setCapturedDescriptors(updatedDescriptors)
+                
+                if (updatedDescriptors.length >= REQUIRED_CAPTURES && !isVerifying) {
+                  console.log('🎯 All captures verified! Completing authentication...')
+                  await performFaceVerification(updatedDescriptors)
+                }
+              }
+            } else {
+              // Wrong face detected - reset captures and add cooldown
+              if (capturedDescriptorsRef.current.length > 0) {
+                console.log('🚨 Different face detected - resetting captures')
+                setCapturedDescriptors([])
+                capturedDescriptorsRef.current = []
+              }
+              
+              // Set cooldown to prevent rapid API spam on wrong faces (1.5 seconds)
+              verificationCooldownRef.current = true
+              setVerificationMessage('Face not recognized. Please show your registered face.')
+              setTimeout(() => {
+                verificationCooldownRef.current = false
+                setVerificationMessage('')
+              }, 1500)
+            }
+          } else {
+            console.log('⚠️ Python extraction failed:', pythonResult.error)
           }
         } else {
           setFaceDetected(false)
@@ -1964,61 +2193,91 @@ function FaceVerificationModal({ professorId, professorName, onVerificationSucce
       } catch (error) {
         console.error('Face detection error:', error)
       }
-    }, 300)
+    }, 700) // Increased to 700ms to reduce API calls while staying responsive
   }
 
-  const performFaceVerification = async (detectedDescriptor: Float32Array) => {
+  const performFaceVerification = async (descriptors: Float32Array[]) => {
     try {
       setIsVerifying(true)
+      setVerificationStatus('scanning')
       
-      // Validate descriptor - should be 128D from FaceNet embeddings
-      if (!detectedDescriptor || detectedDescriptor.length !== 128) {
-        console.error('❌ Invalid face descriptor:', detectedDescriptor?.length, '(expected 128)')
+      // Validate we have enough captures
+      if (descriptors.length < REQUIRED_CAPTURES) {
+        console.error('❌ Not enough captures:', descriptors.length, '(expected', REQUIRED_CAPTURES, ')')
         setVerificationStatus('failed')
-        setVerificationMessage('Face detection failed. Please try again.')
+        setVerificationMessage(`Please hold still. Capturing ${descriptors.length}/${REQUIRED_CAPTURES}...`)
         setTimeout(() => {
           setVerificationStatus('idle')
           setVerificationMessage('')
-        }, 2000)
+        }, 1500)
         setIsVerifying(false)
         return
       }
 
-      console.log('🎯 Attempting face verification:')
-      console.log('   - Descriptor length:', detectedDescriptor.length)
-      console.log('   - Descriptor sample:', Array.from(detectedDescriptor.slice(0, 5)))
+      // Validate all descriptors are correct length (keras-facenet 512D)
+      for (const descriptor of descriptors) {
+        if (!descriptor || descriptor.length !== 512) {
+          console.error('❌ Invalid face descriptor:', descriptor?.length, '(expected 512)')
+          setVerificationStatus('failed')
+          setVerificationMessage('Face detection failed. Please try again.')
+          setCapturedDescriptors([])
+          capturedDescriptorsRef.current = []
+          setTimeout(() => {
+            setVerificationStatus('idle')
+            setVerificationMessage('')
+          }, 2000)
+          setIsVerifying(false)
+          return
+        }
+      }
       
-      setVerificationStatus('scanning')
-      const response = await fetch('/api/professor/face-registration/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          professorId,
-          faceDescriptor: Array.from(detectedDescriptor)
-        })
-      })
-
-      const data = await response.json()
-      console.log('📨 Verification response:', data)
-
-      if (data.success && data.verified) {
-        setVerificationStatus('success')
-        setVerificationMessage('Face verified successfully! Accessing class...')
-        setTimeout(() => {
-          onVerificationSuccess()
-        }, 1500)
-      } else {
+      // CRITICAL: Check that captures are sufficiently different
+      const similarities = []
+      for (let i = 0; i < descriptors.length - 1; i++) {
+        for (let j = i + 1; j < descriptors.length; j++) {
+          let similarity = 0
+          for (let k = 0; k < 512; k++) {
+            similarity += Math.abs(descriptors[i][k] - descriptors[j][k])
+          }
+          similarities.push(similarity)
+        }
+      }
+      const avgDifference = similarities.reduce((a, b) => a + b, 0) / similarities.length
+      
+      console.log('📸 Capture diversity check:', avgDifference.toFixed(4), '(min required: 0.5)')
+      
+      if (avgDifference < 0.5) {
+        console.error('🚨 SECURITY ALERT: Captures are too similar - possible photo attack')
         setVerificationStatus('failed')
-        setVerificationMessage(data.message || 'Face verification failed. Please try again.')
+        setVerificationMessage('Suspicious activity detected. Please move your head naturally during capture.')
+        setCapturedDescriptors([])
+        capturedDescriptorsRef.current = []
         setTimeout(() => {
           setVerificationStatus('idle')
           setVerificationMessage('')
-        }, 2000)
+        }, 3000)
+        setIsVerifying(false)
+        return
       }
+
+      // Since all captures were already verified in real-time, we just need to confirm
+      console.log('🎯 All', descriptors.length, 'captures already verified in real-time')
+      console.log(`   - Capture diversity: ${avgDifference.toFixed(4)} ✅`)
+
+      setVerificationStatus('success')
+      setVerificationMessage('Live face verified! Accessing class...')
+      
+      // Stop camera and cleanup resources
+      stopCamera()
+      
+      setTimeout(() => {
+        onVerificationSuccess()
+      }, 1500)
     } catch (error) {
       console.error('Verification error:', error)
       setVerificationStatus('failed')
       setVerificationMessage('Verification error. Please try again.')
+      setCapturedDescriptors([])
       setTimeout(() => {
         setVerificationStatus('idle')
         setVerificationMessage('')
@@ -2060,6 +2319,18 @@ function FaceVerificationModal({ professorId, professorName, onVerificationSucce
       clearInterval(detectionIntervalRef.current)
     }
     setFaceDetected(false)
+    setCapturedDescriptors([])
+    capturedDescriptorsRef.current = [] // Reset ref
+    resetLiveness()
+  }
+
+  const handleCancel = () => {
+    stopCamera()
+    if (onCancel) {
+      onCancel()
+    } else {
+      router.push('/professor')
+    }
   }
 
   return (
@@ -2076,10 +2347,18 @@ function FaceVerificationModal({ professorId, professorName, onVerificationSucce
         <CardContent className="space-y-4">
           {!showCamera ? (
             <div className="text-center space-y-4">
-              <p className="text-sm text-gray-600">Your face must be live (move your head) to verify. Photos will be rejected.</p>
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-left">
+                <p className="text-sm font-semibold text-amber-900 mb-2">🔒 Security Notice:</p>
+                <ul className="text-xs text-amber-800 space-y-1 list-disc list-inside">
+                  <li>System will capture 3 different frames</li>
+                  <li>Move your head slightly during capture</li>
+                  <li>Photos and static images will be rejected</li>
+                  <li>All captures must match your registered face</li>
+                </ul>
+              </div>
               <Button onClick={startCamera} className="w-full gap-2" disabled={!modelsLoaded}>
                 <Camera className="w-4 h-4" />
-                {modelsLoaded ? 'Start Face Verification' : 'Loading Models...'}
+                {modelsLoaded ? 'Start Live Verification' : 'Loading Models...'}
               </Button>
             </div>
           ) : (
@@ -2129,9 +2408,25 @@ function FaceVerificationModal({ professorId, professorName, onVerificationSucce
                 )}
 
                 <div className="absolute top-4 inset-x-0 flex flex-col items-center pointer-events-none gap-2">
-                  {faceDetected && (
+                  {/* Capture Progress */}
+                  {capturedDescriptors.length < REQUIRED_CAPTURES && faceDetected && verificationStatus === 'idle' && (
+                    <div className="bg-blue-600/90 text-white text-sm font-medium px-4 py-2 rounded-full backdrop-blur-md flex items-center gap-2">
+                      <Camera className="w-4 h-4" /> 
+                      Capturing {capturedDescriptors.length}/{REQUIRED_CAPTURES}
+                    </div>
+                  )}
+                  
+                  {/* Captures Complete - Verifying */}
+                  {capturedDescriptors.length >= REQUIRED_CAPTURES && verificationStatus === 'scanning' && (
+                    <div className="bg-amber-600/90 text-white text-sm font-medium px-4 py-2 rounded-full backdrop-blur-md flex items-center gap-2">
+                      <Loader2 className="w-4 h-4 animate-spin" /> Verifying Captures...
+                    </div>
+                  )}
+                  
+                  {/* Verification Success */}
+                  {verificationStatus === 'success' && (
                     <div className="bg-emerald-600/90 text-white text-sm font-medium px-4 py-2 rounded-full backdrop-blur-md flex items-center gap-2">
-                      <Check className="w-4 h-4" /> Face Detected
+                      <Check className="w-4 h-4" /> Verified! Redirecting...
                     </div>
                   )}
                 </div>
@@ -2139,7 +2434,7 @@ function FaceVerificationModal({ professorId, professorName, onVerificationSucce
 
               <div className="flex gap-2">
                 <Button 
-                  onClick={stopCamera}
+                  onClick={handleCancel}
                   variant="outline"
                   className="w-full"
                   disabled={isVerifying}

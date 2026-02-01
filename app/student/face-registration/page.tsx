@@ -4,7 +4,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState, useRef } from 'react'
 import { Camera, ArrowLeft } from 'lucide-react'
-import { initializeFaceDetection, detectFaceInVideo } from '@/lib/mediapipe-face'
+import { extractFaceNetFromVideo, checkFaceNetHealth } from '@/lib/facenet-python-api'
 
 export default function StudentFaceRegistrationPage() {
   const { user, loading } = useAuth()
@@ -122,21 +122,19 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
   const consecutiveFaceDetectionsRef = useRef<number>(0)
   const savedFaceDescriptorRef = useRef<Float32Array | null>(null) // Permanent storage for captured descriptor
 
-  // Load MediaPipe models
+  // Check Python FaceNet server health
   useEffect(() => {
-    const loadModels = async () => {
-      try {
-        const loaded = await initializeFaceDetection()
-        setModelsLoaded(loaded)
-        if (loaded) {
-          console.log('✅ MediaPipe models loaded for Student Face Registration')
-        }
-      } catch (error) {
-        console.error('Error loading MediaPipe:', error)
-        alert('Failed to load facial recognition models. Please refresh the page.')
+    const checkServer = async () => {
+      const healthy = await checkFaceNetHealth()
+      if (!healthy) {
+        console.warn('⚠️ Python FaceNet server not responding')
+        alert('Python FaceNet server is not running. Please start: python facenet-optimized-server.py')
+      } else {
+        console.log('✅ Python FaceNet server is healthy')
+        setModelsLoaded(true)
       }
     }
-    loadModels()
+    checkServer()
   }, [])
 
   useEffect(() => {
@@ -263,29 +261,21 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
       if (!videoRef.current || isCapturing) return
 
       try {
-        const result = await detectFaceInVideo(videoRef.current)
+        // Extract embedding via Python server (512D)
+        const result = await extractFaceNetFromVideo(videoRef.current)
 
-        if (result.detected && result.descriptor && result.boundingBox) {
+        if (result.detected && result.embedding) {
           setFaceDetected(true)
-          const descriptor = new Float32Array(result.descriptor)
+          const descriptor = new Float32Array(result.embedding)
           setFaceDescriptor(descriptor)
           
           // IMPORTANT: Save to ref IMMEDIATELY when detected (not just during capture)
           savedFaceDescriptorRef.current = descriptor
           console.log('✅ Face detected! Descriptor length:', descriptor.length, '- Saved to ref immediately')
-          
-          // Convert normalized coordinates to pixel coordinates
-          const video = videoRef.current
-          const box = result.boundingBox
-          const x = (box.xCenter - box.width / 2) * video.videoWidth
-          const y = (box.yCenter - box.height / 2) * video.videoHeight
-          const width = box.width * video.videoWidth
-          const height = box.height * video.videoHeight
-          
-          setBoundingBox({ x, y, width, height })
+          console.log('   Confidence:', result.confidence?.toFixed(3))
 
           // Perform face recognition
-          recognizeFace(result.descriptor)
+          recognizeFace(result.embedding)
 
           // Track consecutive face detections for stability
           consecutiveFaceDetectionsRef.current += 1

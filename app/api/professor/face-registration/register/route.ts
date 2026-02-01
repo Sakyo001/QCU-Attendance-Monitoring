@@ -27,13 +27,13 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Validate face descriptor (FaceNet provides 128-dimension embeddings for identity recognition)
-    if (!faceDescriptor || !Array.isArray(faceDescriptor) || faceDescriptor.length !== 128) {
+    // Validate face descriptor (keras-facenet provides 512-dimension embeddings)
+    if (!faceDescriptor || !Array.isArray(faceDescriptor) || faceDescriptor.length !== 512) {
       console.error('❌ Invalid face descriptor:', {
         exists: !!faceDescriptor,
         isArray: Array.isArray(faceDescriptor),
         length: faceDescriptor?.length,
-        expected: 128
+        expected: 512
       })
       return NextResponse.json(
         { error: 'Invalid face descriptor. Please recapture your photo.' },

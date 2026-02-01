@@ -122,8 +122,11 @@ export default function ProfessorDashboard() {
 
   const handlePasswordVerified = () => {
     setShowPasswordModal(false)
+    // Set a verification token in session storage
+    const verificationToken = `verified-${selectedSectionId}-${Date.now()}`
+    sessionStorage.setItem(`class-access-${selectedSectionId}`, verificationToken)
     // Navigate to attendance page with entry method parameter
-    router.push(`/professor/attendance/${selectedSectionId}?entryMethod=password`)
+    router.push(`/professor/attendance/${selectedSectionId}?entryMethod=password&token=${verificationToken}`)
   }
 
   const handleFaceRecognitionClick = () => {

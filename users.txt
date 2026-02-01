@@ -1,19 +1,24 @@
 🎉 Test Users Created
-Admin Portal
+
+Unified Login Portal: http://localhost:3000/login
+
+Admin Credentials
 Email: admin@university.edu
 Password: Admin@123456
-Portal: http://localhost:3000/admin/login
+Role: Admin/Registrar
 
-Professor/Faculty Portal
+Professor/Faculty Credentials
 Email: professor@university.edu (Professor John Doe)
 Password: Prof@123456
-Portal: http://localhost:3000/professor/login
+Role: Faculty
 
 Email: adviser@university.edu (Adviser Jane Smith)
 Password: Adviser@123456
-Portal: http://localhost:3000/professor/login
+Role: Faculty
 
-Student Portal
+Student Credentials
 Email: student@university.edu
 Password: Student@123456
-Portal: http://localhost:3000/student/login
+Role: Student
+
+Note: Use the same login page for all roles. The system will automatically detect your role and redirect you to the appropriate dashboard.

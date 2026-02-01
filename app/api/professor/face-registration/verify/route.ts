@@ -26,6 +26,13 @@ function cosineSimilarity(a: number[], b: number[]): number {
   return dotProduct / (magnitudeA * magnitudeB)
 }
 
+// Calculate descriptor variance to detect static/synthetic faces
+function calculateVariance(descriptor: number[]): number {
+  const mean = descriptor.reduce((sum, val) => sum + val, 0) / descriptor.length
+  const variance = descriptor.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / descriptor.length
+  return variance
+}
+
 export async function POST(request: Request) {
   try {
     const supabase = getSupabaseAdmin()
@@ -78,11 +85,28 @@ export async function POST(request: Request) {
       ? storedDescriptor
       : Object.values(storedDescriptor as Record<string, number>)
 
-    // Validate descriptor lengths (FaceNet uses 128-dimensional embeddings)
-    if (inputArray.length !== 128 || storedArray.length !== 128) {
-      console.error(`❌ Invalid descriptor length: input=${inputArray.length}, stored=${storedArray.length}, expected=128`)
+    // Validate descriptor lengths (keras-facenet uses 512 dimensions)
+    if (inputArray.length !== 512 || storedArray.length !== 512) {
+      console.error(`❌ Invalid descriptor length: input=${inputArray.length}, stored=${storedArray.length}, expected=512`)
       return NextResponse.json(
         { success: false, verified: false, message: 'Invalid face descriptor format' },
+        { status: 400 }
+      )
+    }
+
+    // Anti-spoofing: Check descriptor variance
+    // Real faces have natural variance in embeddings
+    // Static photos or manipulated data may have abnormal variance
+    const inputVariance = calculateVariance(inputArray)
+    const storedVariance = calculateVariance(storedArray)
+    
+    const MIN_VARIANCE = 0.001 // Too low = suspicious (possibly synthetic)
+    const MAX_VARIANCE = 10.0  // Too high = suspicious (possibly corrupted)
+    
+    if (inputVariance < MIN_VARIANCE || inputVariance > MAX_VARIANCE) {
+      console.warn(`🚨 SUSPICIOUS: Input descriptor variance out of range: ${inputVariance.toFixed(6)}`)
+      return NextResponse.json(
+        { success: false, verified: false, message: 'Face verification failed. Please ensure proper lighting and face the camera.' },
         { status: 400 }
       )
     }
@@ -90,22 +114,32 @@ export async function POST(request: Request) {
     // Calculate similarity using cosine similarity
     const similarity = cosineSimilarity(inputArray, storedArray)
     
-    // Threshold for FaceNet embeddings - requires 60% similarity
-    // FaceNet embeddings are more discriminative than raw landmarks
-    // Lower threshold (0.6) is acceptable because embeddings capture unique identity features
-    const SIMILARITY_THRESHOLD = 0.6
+    // FaceNet threshold - same as student attendance (70%)
+    // FaceNet embeddings are designed for face recognition and are highly discriminative
+    // 70% threshold provides excellent accuracy while preventing false positives
+    const SIMILARITY_THRESHOLD = 0.70
     const verified = similarity >= SIMILARITY_THRESHOLD
 
     console.log(`🔐 Face verification for professor ${professorId}:`)
-    console.log(`   - Similarity: ${similarity.toFixed(4)} (${(similarity * 100).toFixed(2)}%)`)
-    console.log(`   - Threshold: ${SIMILARITY_THRESHOLD} (${(SIMILARITY_THRESHOLD * 100).toFixed(0)}%)`)
-    console.log(`   - Verified: ${verified ? '✅ YES' : '❌ NO'}`)
+    console.log(`   - Cosine similarity: ${similarity.toFixed(4)} (${(similarity * 100).toFixed(2)}%) [threshold: ${(SIMILARITY_THRESHOLD * 100).toFixed(0)}%]`)
+    console.log(`   - VERIFIED: ${verified ? '✅ YES' : '❌ NO'}`)
+    console.log(`   - Input variance: ${inputVariance.toFixed(6)}`)
+    console.log(`   - Stored variance: ${storedVariance.toFixed(6)}`)
     console.log(`   - Input descriptor sample: [${inputArray.slice(0, 5).map(n => n.toFixed(3)).join(', ')}...]`)
     console.log(`   - Stored descriptor sample: [${storedArray.slice(0, 5).map(n => n.toFixed(3)).join(', ')}...]`)
     
-    // Additional check: if similarity is too high (>0.98), might be the exact same image
+    // Security checks
     if (similarity > 0.98) {
       console.warn(`⚠️ Very high similarity detected (${similarity.toFixed(4)}) - possible photo reuse`)
+    }
+    
+    // Log all failed attempts for security monitoring
+    if (!verified) {
+      if (similarity < 0.3) {
+        console.warn(`🚨 SECURITY ALERT: Very low similarity (${similarity.toFixed(4)}) - completely different person`)
+      } else {
+        console.warn(`🚨 SECURITY ALERT: Failed verification - similarity: ${similarity.toFixed(4)} (required: ${SIMILARITY_THRESHOLD})`)
+      }
     }
 
     if (verified) {
@@ -116,10 +150,18 @@ export async function POST(request: Request) {
         similarity
       })
     } else {
+      // Provide helpful feedback based on similarity
+      let message = 'Face does not match registration. Please try again.'
+      if (similarity < 0.3) {
+        message = 'Face not recognized. Ensure you are the registered professor.'
+      } else if (similarity >= 0.5 && similarity < SIMILARITY_THRESHOLD) {
+        message = 'Face partially matched. Please ensure good lighting and face the camera directly.'
+      }
+      
       return NextResponse.json({
         success: true,
         verified: false,
-        message: 'Face does not match registration. Please try again.',
+        message,
         similarity
       })
     }

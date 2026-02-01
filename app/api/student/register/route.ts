@@ -28,8 +28,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'First name, last name, student ID, and email are required' }, { status: 400 })
     }
 
-    // Validate face descriptor
-    if (!faceDescriptor || !Array.isArray(faceDescriptor) || faceDescriptor.length !== 128) {
+    // Validate face descriptor (keras-facenet uses 512 dimensions)
+    if (!faceDescriptor || !Array.isArray(faceDescriptor) || faceDescriptor.length !== 512) {
       console.error('❌ Invalid face descriptor:', {
         exists: !!faceDescriptor,
         isArray: Array.isArray(faceDescriptor),
