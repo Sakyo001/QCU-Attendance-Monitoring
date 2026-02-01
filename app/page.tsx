@@ -25,7 +25,7 @@ export default function Home() {
             <div className="bg-primary/10 p-2 rounded-lg">
               <Zap className="w-5 h-5 text-primary" />
             </div>
-            <span className="font-bold text-xl tracking-tight">EduScan</span>
+            <span className="font-bold text-xl tracking-tight">VeriFace</span>
           </div>
           <div className="flex items-center gap-4">
              <Link href="/login" className="text-muted-foreground hover:text-foreground transition-colors">
@@ -101,7 +101,7 @@ export default function Home() {
       <section className="py-24 bg-muted/40 border-y border-border/50 relative overflow-hidden">
         <div className="container mx-auto px-4 md:px-6 relative z-10">
           <div className="text-center max-w-3xl mx-auto mb-16">
-            <h2 className="text-3xl font-bold mb-4">Why Choose EduScan?</h2>
+            <h2 className="text-3xl font-bold mb-4">Why Choose VeriFace?</h2>
             <p className="text-muted-foreground text-lg">Built with privacy and performance at its core.</p>
           </div>
           
@@ -231,10 +231,10 @@ export default function Home() {
              <div className="bg-primary/10 p-2 rounded-lg">
               <Zap className="w-4 h-4 text-primary" />
             </div>
-            <span className="font-semibold text-lg">EduScan</span>
+            <span className="font-semibold text-lg">VeriFace</span>
           </div>
           <p className="text-sm text-muted-foreground">
-            &copy; 2026 EduScan System. All rights reserved.
+            &copy; 2026 VeriFace System. All rights reserved.
           </p>
           <div className="flex gap-6 text-sm text-muted-foreground">
             <Link href="#" className="hover:text-primary transition-colors">Privacy</Link>
