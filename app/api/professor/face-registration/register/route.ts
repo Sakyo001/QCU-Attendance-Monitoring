@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { cookies } from 'next/headers'
-import { writeFileSync, mkdirSync } from 'fs'
+import { writeFile, mkdir, readdir } from 'fs/promises'
 import { join } from 'path'
-import { v4 as uuidv4 } from 'uuid'
+import { existsSync } from 'fs'
 import { createClient } from '@supabase/supabase-js'
 
 export async function POST(request: NextRequest) {
@@ -41,20 +41,46 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Save image locally
-    const imageId = uuidv4()
-    const imagesDir = join(process.cwd(), 'public', 'face-registrations')
-    mkdirSync(imagesDir, { recursive: true })
+    // Save image locally with incremental naming
+    let imageUrl = ''
+    if (faceData) {
+      try {
+        const base64Data = faceData.split(',')[1]
+        const buffer = Buffer.from(base64Data, 'base64')
+        
+        // Create directory if it doesn't exist
+        const faceRegDir = join(process.cwd(), 'public', 'face-registrations')
+        if (!existsSync(faceRegDir)) {
+          await mkdir(faceRegDir, { recursive: true })
+        }
 
-    // Convert base64 to buffer and save
-    const base64Data = faceData.replace(/^data:image\/\w+;base64,/, '')
-    const imageBuffer = Buffer.from(base64Data, 'base64')
-    const imageFileName = `${professorId}-${imageId}.jpg`
-    const imagePath = join(imagesDir, imageFileName)
-    writeFileSync(imagePath, imageBuffer)
+        // Determine the next available number for this professor
+        const baseFileName = `${firstName.toLowerCase()}.${lastName.toLowerCase()}.prof`
+        const existingFiles = await readdir(faceRegDir)
+        const userFiles = existingFiles.filter(file => file.startsWith(baseFileName))
+        
+        // Find the next number (001, 002, etc.)
+        let nextNumber = 1
+        if (userFiles.length > 0) {
+          const numbers = userFiles.map(file => {
+            const match = file.match(/(\d{3})\.(jpg|jpeg|png)$/i)
+            return match ? parseInt(match[1]) : 0
+          })
+          nextNumber = Math.max(...numbers) + 1
+        }
 
-    // Create image URL (public path)
-    const imageUrl = `/face-registrations/${imageFileName}`
+        const fileName = `${baseFileName}${String(nextNumber).padStart(3, '0')}.jpg`
+        const filePath = join(faceRegDir, fileName)
+        
+        await writeFile(filePath, buffer)
+        imageUrl = `/face-registrations/${fileName}`
+        
+        console.log('✅ Professor face image saved:', imageUrl)
+      } catch (fileError) {
+        console.error('File save error:', fileError)
+        // Continue even if file save fails
+      }
+    }
 
     // Create Supabase client with service role (bypass RLS for API routes)
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL

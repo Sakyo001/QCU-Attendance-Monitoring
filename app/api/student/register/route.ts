@@ -3,6 +3,7 @@ import { writeFile, mkdir, readdir } from 'fs/promises'
 import { join } from 'path'
 import { existsSync } from 'fs'
 import { getSupabaseAdmin } from '@/utils/supabase/admin'
+import bcrypt from 'bcryptjs'
 
 export async function POST(request: NextRequest) {
   try {
@@ -75,6 +76,9 @@ export async function POST(request: NextRequest) {
 
     const password = 'student123'
 
+    // Hash the password using bcrypt
+    const hashedPassword = await bcrypt.hash(password, 10)
+
     // Create Supabase Auth user
     const { data: authData, error: authError } = await supabase.auth.admin.createUser({
       email,
@@ -104,6 +108,7 @@ export async function POST(request: NextRequest) {
         role: 'student',
         email,
         first_name: firstName,
+        password_hash: hashedPassword,
         last_name: lastName,
         middle_name: middleInitial || null,
         student_id: studentId,
@@ -179,6 +184,7 @@ export async function POST(request: NextRequest) {
       })
 
       const insertPayload = {
+        student_id: userId,
         student_number: studentId,
         first_name: firstName,
         last_name: lastName,

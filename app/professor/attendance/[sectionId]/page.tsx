@@ -3,10 +3,11 @@
 import { useAuth } from '@/contexts/AuthContext'
 import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import { useEffect, useState, useRef } from 'react'
-import { ArrowLeft, Loader2, Camera, RefreshCw, Check, X, ShieldCheck, Clock, Users, Plus, LayoutGrid, List, Monitor } from 'lucide-react'
+import { ArrowLeft, Loader2, Camera, RefreshCw, Check, X, ShieldCheck, Clock, Users, Plus, LayoutGrid, List, Monitor, Edit2, Trash2 } from 'lucide-react'
 import { initializeFaceDetection, detectFaceInVideo } from '@/lib/mediapipe-face'
 import { extractFaceNetFromVideo, checkFaceNetHealth } from '@/lib/facenet-python-api'
 import { usePassiveLivenessDetection } from '@/hooks/usePassiveLivenessDetection'
+import { EditFaceModal } from './edit-face-modal'
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
@@ -44,7 +45,6 @@ export default function AttendancePage() {
   const searchParams = useSearchParams()
   const sectionId = params.sectionId as string
   const entryMethod = searchParams.get('entryMethod') || 'face' // Default to face if not specified
-  const urlToken = searchParams.get('token') // Verification token for password entry
 
   const [checkingRegistration, setCheckingRegistration] = useState(true)
   const [isRegistered, setIsRegistered] = useState(false)
@@ -56,7 +56,12 @@ export default function AttendancePage() {
   const [mergedAttendanceData, setMergedAttendanceData] = useState<any[]>([])
   const [loadingRecords, setLoadingRecords] = useState(true)
   const [viewMode, setViewMode] = useState<'list' | 'seat-plan'>('list')
+  const [activeTab, setActiveTab] = useState<'attendance' | 'faces'>('attendance') // Tab state
   const [newStudentNotification, setNewStudentNotification] = useState<string | null>(null)
+  const [registeredStudents, setRegisteredStudents] = useState<any[]>([])
+  const [selectedStudent, setSelectedStudent] = useState<any | null>(null)
+  const [showFaceEditModal, setShowFaceEditModal] = useState(false)
+  const [passwordTokenChecked, setPasswordTokenChecked] = useState(false) // Flag to prevent multiple checks
 
   useEffect(() => {
     if (!loading && (!user || (user.role !== 'professor' && (user.role as any) !== 'adviser'))) {
@@ -65,32 +70,65 @@ export default function AttendancePage() {
     }
 
     if (!loading && user) {
-      // Verify password entry token if using password method
-      if (entryMethod === 'password') {
-        const storedToken = sessionStorage.getItem(`class-access-${sectionId}`)
-        if (storedToken && storedToken === urlToken) {
-          // Valid token, mark as password verified
-          setPasswordVerified(true)
-          setFaceVerified(true) // Allow access
-          setCheckingRegistration(false)
-          // Clear the token to prevent reuse
-          sessionStorage.removeItem(`class-access-${sectionId}`)
-        } else {
-          // Invalid or missing token, redirect back
-          console.error('Invalid or missing password verification token')
-          router.push('/professor')
-          return
-        }
-      } else if (entryMethod === 'face') {
-        // Only check face registration if using face entry method
+      // Only check face registration if using face entry method
+      if (entryMethod === 'face') {
         checkFaceRegistration()
+      } else if (entryMethod === 'password') {
+        // Password token will be checked in separate useEffect to ensure client-side only
+        setCheckingRegistration(false)
       } else {
         // Unknown entry method, default to face
         setCheckingRegistration(false)
       }
       fetchTodayAttendanceRecords()
     }
-  }, [user, loading, router, entryMethod, urlToken, sectionId])
+  }, [user, loading, router, entryMethod, sectionId])
+
+  // Separate effect to verify password token (client-side only)
+  useEffect(() => {
+    // Skip if already checked or not on password entry method
+    if (passwordTokenChecked || entryMethod !== 'password' || typeof window === 'undefined') return
+
+    const storageKey = `password-verified-${sectionId}`
+    const storedToken = localStorage.getItem(storageKey)
+    console.log('🔐 Password token validation:')
+    console.log('  - Section ID:', sectionId)
+    console.log('  - Storage key:', storageKey)
+    console.log('  - Stored token:', storedToken)
+    console.log('  - Token exists:', !!storedToken)
+    
+    // Mark as checked FIRST to prevent multiple checks
+    setPasswordTokenChecked(true)
+    
+    if (storedToken) {
+      // Check if token is valid (not expired - valid for 2 hours)
+      const tokenTimestamp = parseInt(storedToken)
+      const currentTime = Date.now()
+      const tokenAgeMinutes = (currentTime - tokenTimestamp) / (1000 * 60)
+      const tokenValidDurationMinutes = 120 // 2 hours
+      
+      console.log(`⏱️ Token age: ${tokenAgeMinutes.toFixed(2)} minutes (valid for ${tokenValidDurationMinutes} minutes)`)
+      
+      if (tokenAgeMinutes < tokenValidDurationMinutes) {
+        // Valid token, mark as password verified
+        console.log('✅ Token validated successfully - within expiration window')
+        setPasswordVerified(true)
+        setFaceVerified(true) // Allow access
+        // Keep the token in storage - don't clear it, user can navigate and come back
+      } else {
+        // Token expired
+        console.error('❌ Password verification token has expired')
+        console.error(`   Token is ${tokenAgeMinutes.toFixed(2)} minutes old (max: ${tokenValidDurationMinutes} minutes)`)
+        localStorage.removeItem(storageKey)
+        router.push('/professor')
+      }
+    } else {
+      // Invalid or missing token, redirect back
+      console.error('❌ Invalid or missing password verification token')
+      console.error('   Please use the password verification modal to access this page')
+      router.push('/professor')
+    }
+  }, [passwordTokenChecked, entryMethod, sectionId, router])
 
   // Check Python FaceNet server health
   useEffect(() => {
@@ -182,6 +220,8 @@ export default function AttendancePage() {
           return (statusOrder[a.status as keyof typeof statusOrder] || 999) - (statusOrder[b.status as keyof typeof statusOrder] || 999)
         })
         setMergedAttendanceData(sorted)
+        // Also fetch registered students for the faces section
+        fetchRegisteredStudents()
       }
     } catch (error) {
       console.error('Error fetching records:', error)
@@ -196,7 +236,7 @@ export default function AttendancePage() {
       const data = await response.json()
       
       if (data.success) {
-        // This is now just for reference, the actual display uses mergedAttendanceData from records API
+        setRegisteredStudents(data.students || [])
         console.log('Registered students:', data.students?.length || 0)
       }
     } catch (error) {
@@ -324,36 +364,163 @@ export default function AttendancePage() {
           </Card>
         </div>
 
-        {/* Attendance List */}
-        <div className="space-y-4">
-          <div className="flex items-center justify-between px-1">
-             <div>
-               <h2 className="text-lg font-semibold tracking-tight">Attendance Log</h2>
-               <p className="text-xs text-muted-foreground mt-1">
-                 {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-               </p>
-             </div>
-             <div className="flex items-center bg-gray-100 rounded-lg p-1 border">
-               <Button 
-                 variant={viewMode === 'list' ? 'secondary' : 'ghost'} 
-                 size="sm" 
-                 onClick={() => setViewMode('list')}
-                 className="h-8 w-8 p-0"
-               >
-                 <List className="h-4 w-4" />
-               </Button>
-               <Button 
-                 variant={viewMode === 'seat-plan' ? 'secondary' : 'ghost'} 
-                 size="sm" 
-                 onClick={() => setViewMode('seat-plan')}
-                 className="h-8 w-8 p-0"
-               >
-                 <LayoutGrid className="h-4 w-4" />
-               </Button>
-             </div>
+        {/* Tab Navigation */}
+        <div className="flex items-center gap-2 border-b bg-white rounded-t-lg">
+          <button
+            onClick={() => setActiveTab('attendance')}
+            className={`px-4 py-3 font-medium text-sm border-b-2 transition-colors ${
+              activeTab === 'attendance'
+                ? 'border-emerald-600 text-emerald-700 bg-emerald-50/50'
+                : 'border-transparent text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            📋 Attendance Log
+          </button>
+          <button
+            onClick={() => setActiveTab('faces')}
+            className={`px-4 py-3 font-medium text-sm border-b-2 transition-colors ${
+              activeTab === 'faces'
+                ? 'border-emerald-600 text-emerald-700 bg-emerald-50/50'
+                : 'border-transparent text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            👤 Registered Faces
+          </button>
+        </div>
+
+        {/* Tab Content */}
+        {activeTab === 'faces' && (
+          <div className="bg-white rounded-b-lg border border-t-0 p-6 space-y-4">
+            <div className="px-1">
+              <h2 className="text-lg font-semibold tracking-tight">Registered Student Faces</h2>
+              <p className="text-xs text-muted-foreground mt-1">
+                Manage facial recognition data for all students
+              </p>
+            </div>
+            
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+              {registeredStudents.length === 0 ? (
+                <div className="col-span-full h-32 flex flex-col items-center justify-center text-gray-500 border-2 border-dashed rounded-lg bg-gray-50/50">
+                  <Users className="h-8 w-8 mb-2 opacity-20" />
+                  <p className="text-sm">No registered faces yet.</p>
+                </div>
+              ) : (
+                registeredStudents.map((student: any) => (
+                  <div key={student.id} className="bg-white border rounded-lg p-4 shadow-sm hover:shadow-md transition-shadow">
+                    {/* Student Avatar */}
+                    <div className="flex justify-center mb-3">
+                      <Avatar className="h-16 w-16 border-2 border-gray-200">
+                        <AvatarImage src={student.avatar_url || ''} />
+                        <AvatarFallback className="bg-emerald-100 text-emerald-700 font-bold">
+                          {student.first_name?.charAt(0) || ''}{student.last_name?.charAt(0) || ''}
+                        </AvatarFallback>
+                      </Avatar>
+                    </div>
+
+                    {/* Student Name */}
+                    <div className="text-center mb-3">
+                      <p className="text-sm font-semibold text-gray-900 truncate">
+                        {student.first_name} {student.last_name}
+                      </p>
+                      <p className="text-xs text-gray-500">{student.student_id || 'N/A'}</p>
+                    </div>
+
+                    {/* Registration Date */}
+                    <p className="text-xs text-gray-400 text-center mb-3">
+                      {new Date(student.registered_at).toLocaleDateString()}
+                    </p>
+
+                    {/* Action Buttons */}
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => {
+                          setSelectedStudent(student)
+                          setShowFaceEditModal(true)
+                        }}
+                        className="flex-1 text-xs px-2 py-1.5 bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 rounded transition-colors"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={async () => {
+                          if (confirm(`Delete facial data for ${student.first_name}?`)) {
+                            try {
+                              console.log('🗑️ Attempting to delete student:')
+                              console.log('   - Student ID field:', student.id)
+                              console.log('   - Student data keys:', Object.keys(student))
+                              console.log('   - Full student object:', student)
+                              
+                              const response = await fetch(`/api/professor/attendance/delete-face`, {
+                                method: 'DELETE',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ userId: student.id })
+                              })
+                              
+                              if (!response.ok) {
+                                const errorText = await response.text()
+                                console.error('❌ Delete failed with status:', response.status)
+                                console.error('   Response:', errorText)
+                                alert(`Failed to delete: ${response.status} ${response.statusText}`)
+                                return
+                              }
+                              
+                              const data = await response.json()
+                              if (data.success) {
+                                setNewStudentNotification(`Deleted face data for ${student.first_name}`)
+                                setTimeout(() => setNewStudentNotification(null), 3000)
+                                fetchRegisteredStudents()
+                              } else {
+                                alert('Failed to delete face data: ' + (data.error || 'Unknown error'))
+                              }
+                            } catch (error) {
+                              console.error('Error deleting face:', error)
+                              alert('Error deleting face data: ' + (error instanceof Error ? error.message : 'Unknown error'))
+                            }
+                          }
+                        }}
+                        className="flex-1 text-xs px-2 py-1.5 bg-red-50 text-red-700 hover:bg-red-100 border border-red-200 rounded transition-colors"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
-          
-          {viewMode === 'list' ? (
+        )}
+
+        {/* Attendance List */}
+        {activeTab === 'attendance' && (
+          <div className="bg-white rounded-b-lg border border-t-0 p-6 space-y-4">
+            <div className="flex items-center justify-between px-1">
+               <div>
+                 <h2 className="text-lg font-semibold tracking-tight">Attendance Log</h2>
+                 <p className="text-xs text-muted-foreground mt-1">
+                   {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+                 </p>
+               </div>
+               <div className="flex items-center bg-gray-100 rounded-lg p-1 border">
+                 <Button 
+                   variant={viewMode === 'list' ? 'secondary' : 'ghost'} 
+                   size="sm" 
+                   onClick={() => setViewMode('list')}
+                   className="h-8 w-8 p-0"
+                 >
+                   <List className="h-4 w-4" />
+                 </Button>
+                 <Button 
+                   variant={viewMode === 'seat-plan' ? 'secondary' : 'ghost'} 
+                   size="sm" 
+                   onClick={() => setViewMode('seat-plan')}
+                   className="h-8 w-8 p-0"
+                 >
+                   <LayoutGrid className="h-4 w-4" />
+                 </Button>
+               </div>
+            </div>
+            
+            {viewMode === 'list' ? (
             <div className="rounded-lg border bg-card text-card-foreground shadow-sm overflow-hidden">
              <Table>
                 <TableHeader>
@@ -479,7 +646,8 @@ export default function AttendancePage() {
               )}
             </div>
           )}
-        </div>
+          </div>
+        )}
       </main>
 
       {/* Student Registration Modal */}
@@ -504,6 +672,24 @@ export default function AttendancePage() {
           onClose={() => setShowFaceRecognitionModal(false)}
           onStudentMarked={async () => {
             await fetchTodayAttendanceRecords()
+          }}
+        />
+      )}
+
+      {/* Edit Face Modal */}
+      {showFaceEditModal && selectedStudent && (
+        <EditFaceModal
+          student={selectedStudent}
+          onClose={() => {
+            setShowFaceEditModal(false)
+            setSelectedStudent(null)
+          }}
+          onSuccess={() => {
+            setShowFaceEditModal(false)
+            setSelectedStudent(null)
+            setNewStudentNotification(`Updated face data for ${selectedStudent.first_name}`)
+            setTimeout(() => setNewStudentNotification(null), 3000)
+            fetchRegisteredStudents()
           }}
         />
       )}
@@ -575,6 +761,7 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
   const autoCaptureTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const savedFaceDescriptorRef = useRef<Float32Array | null>(null) // Permanent storage for captured descriptor
+  const lastRecognitionTimeRef = useRef<number>(0) // Throttle face recognition API calls
 
   // Validate email uniqueness
   useEffect(() => {
@@ -827,22 +1014,31 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
           console.log('✅ Face detected! Descriptor length:', descriptor.length, '- Saved to ref')
           console.log('   Confidence:', pythonResult.confidence?.toFixed(3))
           
-          // REAL-TIME CHECK: Verify if face already exists in database
-          const matchResponse = await fetch('/api/attendance/match-face', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ faceDescriptor: Array.from(descriptor) })
-          })
-          const matchData = await matchResponse.json()
+          // THROTTLED REAL-TIME CHECK: Only verify face every 2 seconds to prevent API overload
+          const now = Date.now()
+          const timeSinceLastRecognition = now - lastRecognitionTimeRef.current
+          const RECOGNITION_THROTTLE = 2000 // 2 seconds between recognition attempts
           
-          if (matchData.success && matchData.matched) {
-            setRecognizedName(`${matchData.student.first_name} ${matchData.student.last_name}`)
-            setRecognitionConfidence(matchData.confidence)
-            console.log(`⚠️ Face already registered: ${matchData.student.first_name} ${matchData.student.last_name}`)
-          } else {
-            setRecognizedName('New Student')
-            setRecognitionConfidence(null)
-            console.log('✅ New face detected - not in database')
+          if (timeSinceLastRecognition >= RECOGNITION_THROTTLE) {
+            lastRecognitionTimeRef.current = now
+            
+            // Verify if face already exists in database
+            const matchResponse = await fetch('/api/attendance/match-face', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ faceDescriptor: Array.from(descriptor) })
+            })
+            const matchData = await matchResponse.json()
+            
+            if (matchData.success && matchData.matched) {
+              setRecognizedName(`${matchData.student.first_name} ${matchData.student.last_name}`)
+              setRecognitionConfidence(matchData.confidence)
+              console.log(`⚠️ Face already registered: ${matchData.student.first_name} ${matchData.student.last_name}`)
+            } else {
+              setRecognizedName('New Student')
+              setRecognitionConfidence(null)
+              console.log('✅ New face detected - not in database')
+            }
           }
           
           setBoundingBox(null) // Remove bounding box since Python server doesn't provide it
@@ -1339,18 +1535,16 @@ interface AttendanceRecognitionModalProps {
 function AttendanceRecognitionModal({ sectionId, isOpen, onClose, onStudentMarked }: AttendanceRecognitionModalProps) {
   const [showCamera, setShowCamera] = useState(false)
   const [modelsLoaded, setModelsLoaded] = useState(false)
-  const [faceDetected, setFaceDetected] = useState(false)
-  const [faceDescriptor, setFaceDescriptor] = useState<Float32Array | null>(null)
-  const [recognizingStudent, setRecognizingStudent] = useState<any>(null)
+  const [detectedFaces, setDetectedFaces] = useState<any[]>([]) // Array of detected faces with boxes and names
   const [recognitionError, setRecognitionError] = useState<string | null>(null)
   const [isProcessing, setIsProcessing] = useState(false)
 
   const videoRef = useRef<HTMLVideoElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const detectionIntervalRef = useRef<NodeJS.Timeout | null>(null)
-  const attendanceMarkedRef = useRef<boolean>(false) // Track if attendance already marked
-  const lastRecognitionAttemptRef = useRef<number>(0) // Timestamp of last recognition attempt
-  const recognitionCooldownRef = useRef<boolean>(false) // Cooldown after failed recognition
+  const markedStudentsRef = useRef<Set<string>>(new Set()) // Track students already marked in this session
+  const animationFrameRef = useRef<number | null>(null)
 
   useEffect(() => {
     const loadModels = async () => {
@@ -1418,6 +1612,58 @@ function AttendanceRecognitionModal({ sectionId, isOpen, onClose, onStudentMarke
       })
     }
 
+    // Canvas drawing effect for real-time bounding boxes
+    const canvas = canvasRef.current
+    const video = videoRef.current
+    if (canvas && video) {
+      const ctx = canvas.getContext('2d')
+      if (ctx) {
+        const drawFrame = () => {
+          canvas.width = video.videoWidth
+          canvas.height = video.videoHeight
+          ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+          // Draw bounding boxes for all detected faces
+          detectedFaces.forEach(face => {
+            const { box, name, confidence, status } = face
+            
+            // Determine box color based on status
+            const color = status === 'marked' ? '#10b981' : status === 'recognized' ? '#3b82f6' : '#ef4444'
+            
+            // Draw box
+            ctx.strokeStyle = color
+            ctx.lineWidth = 3
+            ctx.strokeRect(box.x, box.y, box.width, box.height)
+            
+            // Draw name background
+            const text = name || 'Unknown'
+            const textWidth = ctx.measureText(text).width
+            const textHeight = 24
+            const padding = 8
+            
+            ctx.fillStyle = color
+            ctx.fillRect(box.x, box.y - textHeight - padding, textWidth + padding * 2, textHeight + padding)
+            
+            // Draw name text
+            ctx.fillStyle = '#ffffff'
+            ctx.font = 'bold 16px Arial'
+            ctx.fillText(text, box.x + padding, box.y - padding)
+            
+            // Draw confidence if available
+            if (confidence) {
+              ctx.fillStyle = color
+              ctx.font = '12px Arial'
+              ctx.fillText(`${(confidence * 100).toFixed(0)}%`, box.x, box.y + box.height + 15)
+            }
+          })
+
+          animationFrameRef.current = requestAnimationFrame(drawFrame)
+        }
+        
+        drawFrame()
+      }
+    }
+
     // Start face detection
     startFaceDetection()
 
@@ -1431,8 +1677,11 @@ function AttendanceRecognitionModal({ sectionId, isOpen, onClose, onStudentMarke
       if (detectionIntervalRef.current) {
         clearInterval(detectionIntervalRef.current)
       }
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current)
+      }
     }
-  }, [showCamera])
+  }, [showCamera, detectedFaces])
 
   const stopCamera = () => {
     if (streamRef.current) {
@@ -1440,59 +1689,59 @@ function AttendanceRecognitionModal({ sectionId, isOpen, onClose, onStudentMarke
       streamRef.current = null
     }
     if (detectionIntervalRef.current) clearInterval(detectionIntervalRef.current)
+    if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current)
     setShowCamera(false)
-    setFaceDetected(false)
-    setFaceDescriptor(null)
+    setDetectedFaces([])
+    markedStudentsRef.current.clear()
   }
 
   const startFaceDetection = async () => {
     if (!videoRef.current || !modelsLoaded) return
 
     detectionIntervalRef.current = setInterval(async () => {
-      // CRITICAL: Check flags at the start of every interval
-      if (!videoRef.current || isProcessing || attendanceMarkedRef.current || recognitionCooldownRef.current) {
-        return
-      }
+      if (!videoRef.current || isProcessing) return
 
       try {
         // Extract embedding via Python server (512D)
         const pythonResult = await extractFaceNetFromVideo(videoRef.current)
 
         if (pythonResult.detected && pythonResult.embedding) {
-          setFaceDetected(true)
-          const descriptor = new Float32Array(pythonResult.embedding)
-          setFaceDescriptor(descriptor)
+          // Verify video ref still exists after async call
+          if (!videoRef.current) return
           
-          console.log('✅ Face detected! Confidence:', pythonResult.confidence?.toFixed(3))
-
-          // IMMEDIATE MATCH - No debouncing, just cooldown after failures
-          if (!isProcessing && !attendanceMarkedRef.current && !recognitionCooldownRef.current) {
-            // Stop interval BEFORE processing to prevent multiple calls
-            if (detectionIntervalRef.current) {
-              clearInterval(detectionIntervalRef.current)
-              detectionIntervalRef.current = null
-            }
-            
-            await matchAndMarkAttendance(descriptor)
+          const descriptor = new Float32Array(pythonResult.embedding)
+          
+          // Create a default bounding box in center of video
+          const videoWidth = videoRef.current.videoWidth
+          const videoHeight = videoRef.current.videoHeight
+          const box = {
+            x: videoWidth * 0.25,
+            y: videoHeight * 0.15,
+            width: videoWidth * 0.5,
+            height: videoHeight * 0.7
           }
+          
+          // Match face against database
+          await matchAndMarkAttendance(descriptor, box)
         } else {
-          setFaceDetected(false)
+          // No faces detected, clear the display
+          if (pythonResult.error) {
+            console.log('⚠️ Python server:', pythonResult.error)
+          }
+          setDetectedFaces([])
         }
       } catch (error) {
         console.error('Face detection error:', error)
       }
-    }, 800) // Increased to 800ms to reduce API spam
+    }, 500) // Check every 500ms for real-time feel
   }
 
-  const matchAndMarkAttendance = async (descriptor: Float32Array) => {
-    if (isProcessing || recognizingStudent || attendanceMarkedRef.current) {
-      console.log('⏭️ Skipping - already processing or marked')
+  const matchAndMarkAttendance = async (descriptor: Float32Array, box: any) => {
+    if (isProcessing) {
       return
     }
     
-    console.log('🔍 Matching face...')
     setIsProcessing(true)
-    attendanceMarkedRef.current = true // Set immediately to prevent any duplicates
 
     try {
       // Match face
@@ -1507,29 +1756,40 @@ function AttendanceRecognitionModal({ sectionId, isOpen, onClose, onStudentMarke
       const matchData = await matchResponse.json()
 
       if (!matchData.success || !matchData.matched) {
-        console.log('❌ Face not recognized')
-        setRecognitionError('Face not recognized. Please try again.')
+        // Unknown face
+        setDetectedFaces([{
+          box,
+          name: 'Unknown',
+          confidence: null,
+          status: 'unknown'
+        }])
         setIsProcessing(false)
-        attendanceMarkedRef.current = false // Reset so user can try again
-        
-        // Set cooldown after failed recognition (2 seconds)
-        recognitionCooldownRef.current = true
-        setTimeout(() => {
-          recognitionCooldownRef.current = false
-          setRecognitionError(null)
-          // Restart detection interval for retry
-          if (!detectionIntervalRef.current && showCamera) {
-            startFaceDetection()
-          }
-        }, 2000)
-        
         return
       }
 
       const student = matchData.student
-      console.log('✅ Student matched:', student.firstName, student.lastName)
-      setRecognizingStudent(student)
+      
+      // Check if already marked in this session
+      if (markedStudentsRef.current.has(student.id)) {
+        // Already marked, show as green
+        setDetectedFaces([{
+          box,
+          name: `${student.first_name} ${student.last_name}`,
+          confidence: matchData.confidence,
+          status: 'marked'
+        }])
+        setIsProcessing(false)
+        return
+      }
 
+      // Show as recognized (blue)
+      setDetectedFaces([{
+        box,
+        name: `${student.first_name} ${student.last_name}`,
+        confidence: matchData.confidence,
+        status: 'recognized'
+      }])
+      
       // Mark attendance
       const markResponse = await fetch('/api/attendance/mark', {
         method: 'POST',
@@ -1544,58 +1804,38 @@ function AttendanceRecognitionModal({ sectionId, isOpen, onClose, onStudentMarke
       const markData = await markResponse.json()
 
       if (markData.success) {
-        console.log('✅ Attendance marked successfully!')
-        setRecognitionError(null)
+        console.log('✅ Attendance marked successfully for:', student.first_name)
         
-        // Stop camera immediately
-        if (streamRef.current) {
-          streamRef.current.getTracks().forEach(track => track.stop())
-          streamRef.current = null
-        }
+        // Add to marked students
+        markedStudentsRef.current.add(student.id)
         
-        // Wait for records refresh
+        // Show as marked (green)
+        setDetectedFaces([{
+          box,
+          name: `${student.first_name} ${student.last_name}`,
+          confidence: matchData.confidence,
+          status: 'marked'
+        }])
+        
+        // Refresh records
         await onStudentMarked()
         
-        // Close modal
+        // Continue scanning after a brief pause
         setTimeout(() => {
-          setShowCamera(false)
-          onClose()
-          
-          // Reset states for next use
-          setRecognizingStudent(null)
+          setDetectedFaces([])
           setIsProcessing(false)
-          attendanceMarkedRef.current = false
-          lastRecognitionAttemptRef.current = 0
         }, 1500)
       } else {
         console.log('❌ Failed to mark attendance')
         setRecognitionError('Failed to mark attendance')
         setIsProcessing(false)
-        attendanceMarkedRef.current = false
-        
-        recognitionCooldownRef.current = true
-        setTimeout(() => {
-          recognitionCooldownRef.current = false
-          setRecognitionError(null)
-          if (!detectionIntervalRef.current && showCamera) {
-            startFaceDetection()
-          }
-        }, 2000)
+        setDetectedFaces([])
       }
     } catch (error: any) {
       console.error('❌ Error:', error)
       setRecognitionError(error.message || 'Error processing attendance')
       setIsProcessing(false)
-      attendanceMarkedRef.current = false
-      
-      recognitionCooldownRef.current = true
-      setTimeout(() => {
-        recognitionCooldownRef.current = false
-        setRecognitionError(null)
-        if (!detectionIntervalRef.current && showCamera) {
-          startFaceDetection()
-        }
-      }, 2000)
+      setDetectedFaces([])
     }
   }
 
@@ -1608,7 +1848,7 @@ function AttendanceRecognitionModal({ sectionId, isOpen, onClose, onStudentMarke
           <div>
             <CardTitle>Mark Attendance</CardTitle>
             <CardDescription>
-              Face recognition in progress. {recognizingStudent ? 'Student recognized!' : 'Position your face in the camera.'}
+              Face recognition in progress. {detectedFaces.length > 0 && detectedFaces[0].status === 'marked' ? 'Student recognized!' : 'Position your face in the camera.'}
             </CardDescription>
           </div>
           <Button variant="ghost" size="sm" onClick={onClose} className="h-8 w-8 p-0">
@@ -1635,29 +1875,23 @@ function AttendanceRecognitionModal({ sectionId, isOpen, onClose, onStudentMarke
                   className="absolute inset-0 w-full h-full object-cover scale-x-[-1]"
                 />
                 
-                {recognizingStudent && (
-                  <div className="absolute inset-0 bg-emerald-500/20 flex items-center justify-center z-10">
-                    <div className="text-center">
-                      <Check className="h-16 w-16 text-emerald-400 mx-auto mb-2" />
-                      <p className="text-white font-semibold text-lg">{recognizingStudent.firstName} {recognizingStudent.lastName}</p>
-                      <p className="text-emerald-100 text-sm">Attendance marked successfully</p>
-                    </div>
+                {/* Canvas overlay for bounding boxes */}
+                <canvas
+                  ref={canvasRef}
+                  className="absolute inset-0 w-full h-full object-cover scale-x-[-1] pointer-events-none"
+                />
+
+                {recognitionError && (
+                  <div className="absolute bottom-4 left-4 right-4 flex items-center gap-2 bg-red-600 text-white px-3 py-2 rounded-lg text-sm">
+                    <X className="h-4 w-4" />
+                    {recognitionError}
                   </div>
                 )}
 
-                {recognitionError && !recognizingStudent && (
-                  <div className="absolute inset-0 bg-red-500/20 flex items-center justify-center z-10">
-                    <div className="text-center">
-                      <X className="h-12 w-12 text-red-400 mx-auto mb-2" />
-                      <p className="text-white font-semibold">{recognitionError}</p>
-                    </div>
-                  </div>
-                )}
-
-                {faceDetected && !recognizingStudent && (
-                  <div className="absolute bottom-4 left-4 right-4 flex items-center gap-2 bg-emerald-600 text-white px-3 py-2 rounded-lg text-sm">
+                {detectedFaces.length === 0 && !recognitionError && (
+                  <div className="absolute bottom-4 left-4 right-4 flex items-center gap-2 bg-gray-700/70 text-white px-3 py-2 rounded-lg text-sm">
                     <div className="h-2 w-2 bg-white rounded-full animate-pulse" />
-                    Face detected
+                    Scanning for faces...
                   </div>
                 )}
               </div>

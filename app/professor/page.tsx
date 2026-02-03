@@ -122,11 +122,22 @@ export default function ProfessorDashboard() {
 
   const handlePasswordVerified = () => {
     setShowPasswordModal(false)
-    // Set a verification token in session storage
-    const verificationToken = `verified-${selectedSectionId}-${Date.now()}`
-    sessionStorage.setItem(`class-access-${selectedSectionId}`, verificationToken)
+    // Set a verification token in local storage (persists across navigation)
+    const verificationToken = Date.now().toString()
+    const storageKey = `password-verified-${selectedSectionId}`
+    localStorage.setItem(storageKey, verificationToken)
+    console.log('🔑 Password verified, storing token:')
+    console.log('  - Section ID:', selectedSectionId)
+    console.log('  - Token:', verificationToken)
+    console.log('  - Storage key:', storageKey)
+    
+    // Verify the token was stored correctly
+    const verifyStored = localStorage.getItem(storageKey)
+    console.log('  - Verified stored:', verifyStored)
+    console.log('  - Match:', verifyStored === verificationToken)
+    
     // Navigate to attendance page with entry method parameter
-    router.push(`/professor/attendance/${selectedSectionId}?entryMethod=password&token=${verificationToken}`)
+    router.push(`/professor/attendance/${selectedSectionId}?entryMethod=password`)
   }
 
   const handleFaceRecognitionClick = () => {

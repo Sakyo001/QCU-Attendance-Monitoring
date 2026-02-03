@@ -30,9 +30,15 @@ export async function GET(request: NextRequest) {
       }, { status: 500 })
     }
 
-    const registeredStudents = students || []
+    // Rename student_number to student_id for frontend consistency
+    const registeredStudents = (students || []).map(student => ({
+      ...student,
+      student_id: student.student_number
+    }))
 
     console.log('✅ Found registered students for section:', registeredStudents.length)
+    console.log('📦 Sample student data:', registeredStudents[0])
+    console.log('📦 Student keys:', registeredStudents[0] ? Object.keys(registeredStudents[0]) : 'N/A')
 
     return NextResponse.json({
       success: true,

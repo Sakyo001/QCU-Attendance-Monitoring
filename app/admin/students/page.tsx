@@ -3,7 +3,7 @@
 import { useAuth } from '@/contexts/AuthContext'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { Plus, Edit, Trash2, Mail, ArrowLeft, UserCheck } from 'lucide-react'
+import { Plus, Edit, Trash2, Mail, ArrowLeft, ChevronDown, ChevronUp, BookOpen } from 'lucide-react'
 import { createClient } from '@/utils/supabase/client'
 import Swal from 'sweetalert2'
 
@@ -16,12 +16,27 @@ interface Student {
   is_active: boolean
 }
 
+interface StudentWithSection extends Student {
+  section_code?: string
+  section_id?: string
+}
+
+interface SectionGroup {
+  section_code: string
+  section_id: string
+  students: StudentWithSection[]
+  total: number
+  active: number
+}
+
 export default function StudentsPage() {
   const { user, loading } = useAuth()
   const router = useRouter()
-  const [students, setStudents] = useState<Student[]>([])
+  const [students, setStudents] = useState<StudentWithSection[]>([])
+  const [sectionGroups, setSectionGroups] = useState<SectionGroup[]>([])
   const [loadingStudents, setLoadingStudents] = useState(true)
   const [showModal, setShowModal] = useState(false)
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set())
   const supabase = createClient()
 
   useEffect(() => {
@@ -50,6 +65,97 @@ export default function StudentsPage() {
       const data = await response.json()
       console.log('Students fetched:', data?.length || 0, 'members')
       setStudents(data || [])
+
+      // Group students by section
+      const groupedBySectionId = new Map<string, StudentWithSection[]>()
+      const sectionInfo = new Map<string, { code: string; id: string }>()
+
+      // Fetch all student section enrollments
+      for (const student of data) {
+        try {
+          const { data: sectionData } = await supabase
+            .from('attendance_records')
+            .select('section_id')
+            .eq('student_number', student.student_id)
+            .limit(1)
+
+          let sectionId = sectionData?.[0]?.section_id
+
+          if (!sectionId) {
+            const { data: faceRegData } = await supabase
+              .from('student_face_registrations')
+              .select('section_id')
+              .eq('student_number', student.student_id)
+              .limit(1)
+
+            sectionId = faceRegData?.[0]?.section_id
+          }
+
+          if (sectionId) {
+            // Get section code
+            const { data: sectionData } = await supabase
+              .from('sections')
+              .select('id, section_code')
+              .eq('id', sectionId.toString())
+              .single()
+
+            if (sectionData) {
+              sectionInfo.set(sectionId, {
+                id: sectionData.id,
+                code: sectionData.section_code
+              })
+
+              if (!groupedBySectionId.has(sectionId)) {
+                groupedBySectionId.set(sectionId, [])
+              }
+
+              groupedBySectionId.get(sectionId)!.push({
+                ...student,
+                section_id: sectionId,
+                section_code: sectionData.section_code
+              })
+            }
+          } else {
+            // Unassigned students
+            if (!groupedBySectionId.has('unassigned')) {
+              groupedBySectionId.set('unassigned', [])
+            }
+            groupedBySectionId.get('unassigned')!.push({
+              ...student,
+              section_code: 'Unassigned'
+            })
+          }
+        } catch (err) {
+          console.error('Error fetching section for student:', student.student_id, err)
+          // Add to unassigned if error
+          if (!groupedBySectionId.has('unassigned')) {
+            groupedBySectionId.set('unassigned', [])
+          }
+          groupedBySectionId.get('unassigned')!.push({
+            ...student,
+            section_code: 'Unassigned'
+          })
+        }
+      }
+
+      // Convert to array and sort
+      const groups: SectionGroup[] = Array.from(groupedBySectionId.entries())
+        .map(([sectionId, groupStudents]) => ({
+          section_code: sectionInfo.get(sectionId)?.code || 'Unassigned',
+          section_id: sectionId,
+          students: groupStudents,
+          total: groupStudents.length,
+          active: groupStudents.filter(s => s.is_active).length
+        }))
+        .sort((a, b) => {
+          if (a.section_id === 'unassigned') return 1
+          if (b.section_id === 'unassigned') return -1
+          return a.section_code.localeCompare(b.section_code)
+        })
+
+      setSectionGroups(groups)
+      // Expand first 3 sections by default
+      setExpandedSections(new Set(groups.slice(0, 3).map(g => g.section_id)))
     } catch (error) {
       console.error('Exception in fetchStudents:', error)
     } finally {
@@ -279,10 +385,14 @@ export default function StudentsPage() {
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
           <div className="bg-white rounded-lg shadow p-6">
             <div className="text-sm font-medium text-gray-600">Total Students</div>
             <div className="text-3xl font-bold text-gray-900 mt-2">{students.length}</div>
+          </div>
+          <div className="bg-white rounded-lg shadow p-6">
+            <div className="text-sm font-medium text-gray-600">Total Sections</div>
+            <div className="text-3xl font-bold text-blue-600 mt-2">{sectionGroups.length}</div>
           </div>
           <div className="bg-white rounded-lg shadow p-6">
             <div className="text-sm font-medium text-gray-600">Active</div>
@@ -291,26 +401,22 @@ export default function StudentsPage() {
             </div>
           </div>
           <div className="bg-white rounded-lg shadow p-6">
-            <div className="text-sm font-medium text-gray-600">Face Registered</div>
-            <div className="text-3xl font-bold text-blue-600 mt-2">
-              {students.length}
+            <div className="text-sm font-medium text-gray-600">Unassigned</div>
+            <div className="text-3xl font-bold text-orange-600 mt-2">
+              {sectionGroups.find(g => g.section_id === 'unassigned')?.total || 0}
             </div>
           </div>
         </div>
 
-        {/* Students Table */}
-        <div className="bg-white rounded-lg shadow overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <h2 className="text-lg font-semibold text-gray-900">All Students</h2>
-          </div>
-
+        {/* Students by Section */}
+        <div className="space-y-4">
           {loadingStudents ? (
-            <div className="p-8 text-center">
+            <div className="bg-white rounded-lg shadow p-8 text-center">
               <div className="w-8 h-8 border-4 border-violet-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
               <p className="mt-2 text-gray-600">Loading students...</p>
             </div>
           ) : students.length === 0 ? (
-            <div className="p-8 text-center">
+            <div className="bg-white rounded-lg shadow p-8 text-center">
               <p className="text-gray-600">No students added yet</p>
               <button
                 onClick={() => setShowModal(true)}
@@ -320,78 +426,99 @@ export default function StudentsPage() {
               </button>
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Name
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Student ID
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Email
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Status
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {students.map((student) => (
-                    <tr key={student.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm font-medium text-gray-900">
-                          {student.first_name} {student.last_name}
+            sectionGroups.map((group) => (
+              <div key={group.section_id} className="bg-white rounded-lg shadow overflow-hidden">
+                {/* Section Header */}
+                <button
+                  onClick={() => {
+                    const newExpanded = new Set(expandedSections)
+                    if (newExpanded.has(group.section_id)) {
+                      newExpanded.delete(group.section_id)
+                    } else {
+                      newExpanded.add(group.section_id)
+                    }
+                    setExpandedSections(newExpanded)
+                  }}
+                  className={`w-full px-6 py-4 flex items-center justify-between hover:bg-gray-50 transition-colors ${
+                    group.section_id === 'unassigned' ? 'bg-orange-50' : 'bg-gray-50'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={`p-2 rounded-lg ${
+                      group.section_id === 'unassigned' 
+                        ? 'bg-orange-100' 
+                        : 'bg-blue-100'
+                    }`}>
+                      <BookOpen className={`w-5 h-5 ${
+                        group.section_id === 'unassigned' 
+                          ? 'text-orange-600' 
+                          : 'text-blue-600'
+                      }`} />
+                    </div>
+                    <div className="text-left">
+                      <h3 className="font-semibold text-gray-900">{group.section_code}</h3>
+                      <p className="text-xs text-gray-600">{group.total} students • {group.active} active</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-gray-600">{group.total}</span>
+                    {expandedSections.has(group.section_id) ? (
+                      <ChevronUp className="w-5 h-5 text-gray-400" />
+                    ) : (
+                      <ChevronDown className="w-5 h-5 text-gray-400" />
+                    )}
+                  </div>
+                </button>
+
+                {/* Students List */}
+                {expandedSections.has(group.section_id) && (
+                  <div className="divide-y divide-gray-200 border-t border-gray-200">
+                    {group.students.map((student) => (
+                      <div 
+                        key={student.id}
+                        className="px-6 py-4 hover:bg-gray-50 transition-colors flex items-center justify-between"
+                      >
+                        <div className="flex-1">
+                          <p className="font-medium text-gray-900">
+                            {student.first_name} {student.last_name}
+                          </p>
+                          <p className="text-sm text-gray-600">{student.student_id}</p>
+                          <p className="text-xs text-gray-500 flex items-center gap-1 mt-1">
+                            <Mail className="w-3 h-3" />
+                            {student.email}
+                          </p>
                         </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {student.student_id}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex items-center gap-2 text-sm text-gray-900">
-                          <Mail className="w-3 h-3 text-gray-400" />
-                          {student.email}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span
-                          className={`px-2 py-1 text-xs font-medium rounded-full ${
+                        <div className="flex items-center gap-4">
+                          <span className={`px-2 py-1 text-xs font-medium rounded-full ${
                             student.is_active
                               ? 'bg-green-100 text-green-800'
                               : 'bg-red-100 text-red-800'
-                          }`}
-                        >
-                          {student.is_active ? 'Face Registered' : 'Not Registered'}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                        <div className="flex items-center gap-2">
-                          <button 
-                            onClick={() => handleEdit(student)}
-                            className="text-violet-600 hover:text-violet-900 transition-colors"
-                            title="Edit student"
-                          >
-                            <Edit className="w-4 h-4" />
-                          </button>
-                          <button 
-                            onClick={() => handleDelete(student)}
-                            className="text-red-600 hover:text-red-900 transition-colors"
-                            title="Delete student"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          }`}>
+                            {student.is_active ? 'Active' : 'Inactive'}
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <button 
+                              onClick={() => handleEdit(student as Student)}
+                              className="text-violet-600 hover:text-violet-900 transition-colors p-1"
+                              title="Edit student"
+                            >
+                              <Edit className="w-4 h-4" />
+                            </button>
+                            <button 
+                              onClick={() => handleDelete(student as Student)}
+                              className="text-red-600 hover:text-red-900 transition-colors p-1"
+                              title="Delete student"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
                         </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))
           )}
         </div>
       </main>

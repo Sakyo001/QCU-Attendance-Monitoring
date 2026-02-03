@@ -3,7 +3,7 @@
 import { useAuth } from '@/contexts/AuthContext'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { Users, GraduationCap, BookOpen, BarChart3, LogOut, TrendingUp, Clock, CheckCircle, XCircle, AlertCircle } from 'lucide-react'
+import { Users, GraduationCap, BookOpen, BarChart3, LogOut, TrendingUp, Clock, CheckCircle, XCircle, AlertCircle, Calendar } from 'lucide-react'
 
 interface DashboardStats {
   totalStudents: number
@@ -294,6 +294,17 @@ export default function AdminDashboard() {
                 <div className="text-left">
                   <div className="font-medium text-gray-900">View Reports</div>
                   <div className="text-sm text-gray-600">Attendance analytics</div>
+                </div>
+              </button>
+              
+              <button 
+                onClick={() => router.push('/admin/schedules')}
+                className="flex items-center gap-3 p-4 border border-gray-200 rounded-lg hover:border-violet-500 hover:bg-violet-50 transition-all"
+              >
+                <Calendar className="w-5 h-5 text-violet-600" />
+                <div className="text-left">
+                  <div className="font-medium text-gray-900">Manage Schedule</div>
+                  <div className="text-sm text-gray-600">Create class schedules</div>
                 </div>
               </button>
             </div>

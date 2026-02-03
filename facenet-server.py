@@ -82,7 +82,7 @@ async def root():
         "status": "running"
     }
 
-@app.post("/health")
+@app.get("/health")
 async def health_check():
     return {"status": "healthy", "model": "keras-facenet"}
 

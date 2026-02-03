@@ -139,9 +139,9 @@ export async function POST(request: NextRequest) {
         matched: true,
         student: {
           id: bestMatch.id,
-          firstName: bestMatch.first_name,
-          lastName: bestMatch.last_name,
-          studentNumber: bestMatch.student_number
+          first_name: bestMatch.first_name,
+          last_name: bestMatch.last_name,
+          student_number: bestMatch.student_number
         },
         confidence: bestSimilarity
       })
