@@ -852,6 +852,8 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
+    let animationId: number
+
     const drawFrame = () => {
       canvas.width = video.videoWidth
       canvas.height = video.videoHeight
@@ -860,13 +862,25 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
       if (boundingBox) {
         const { x, y, width, height } = boundingBox
         
-        // Draw bounding box
-        ctx.strokeStyle = '#10b981'
-        ctx.lineWidth = 3
+        // Determine color based on recognition status
+        const isNewStudent = recognizedName === 'New Student'
+        const isAlreadyRegistered = recognizedName && recognizedName !== 'New Student' && recognitionConfidence !== null
+        
+        const boxColor = isNewStudent ? '#10b981' : // Green for new student
+                         isAlreadyRegistered ? '#f59e0b' : // Amber for already registered
+                         '#3b82f6' // Blue while detecting
+        
+        // Draw glow effect
+        ctx.shadowColor = boxColor
+        ctx.shadowBlur = 20
+        ctx.strokeStyle = boxColor
+        ctx.lineWidth = 4
         ctx.strokeRect(x, y, width, height)
+        ctx.shadowBlur = 0
         
         // Draw corner markers
-        const cornerLength = 30
+        const cornerLength = 35
+        ctx.lineWidth = 5
         ctx.lineCap = 'round'
         
         // Top-left
@@ -897,31 +911,57 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
         ctx.lineTo(x + width, y + height - cornerLength)
         ctx.stroke()
         
-        // Draw name label if recognized
+        // Draw label with recognition status
         if (recognizedName) {
-          const labelText = recognitionConfidence !== null 
-            ? `${recognizedName} (${Math.round(recognitionConfidence * 100)}%)`
-            : recognizedName
+          const isWarning = isAlreadyRegistered
+          const labelText = isAlreadyRegistered 
+            ? `⚠️ ${recognizedName} (${Math.round(recognitionConfidence! * 100)}%)`
+            : isNewStudent 
+              ? '✓ New Student - Ready to Register'
+              : recognizedName
           
-          ctx.font = '18px sans-serif'
+          ctx.font = 'bold 16px system-ui, sans-serif'
           const textWidth = ctx.measureText(labelText).width
-          const padding = 10
-          const labelHeight = 30
+          const padding = 12
+          const labelHeight = 32
           
-          // Background
-          ctx.fillStyle = 'rgba(16, 185, 129, 0.9)'
-          ctx.fillRect(x, y - labelHeight - 5, textWidth + padding * 2, labelHeight)
+          // Background with rounded corners
+          const bgColor = isNewStudent ? 'rgba(16, 185, 129, 0.95)' : 
+                          isWarning ? 'rgba(245, 158, 11, 0.95)' : 
+                          'rgba(59, 130, 246, 0.95)'
           
-          // Text
+          ctx.fillStyle = bgColor
+          ctx.beginPath()
+          const labelX = x
+          const labelY = y - labelHeight - 8
+          const labelWidth = textWidth + padding * 2
+          const radius = 6
+          ctx.roundRect(labelX, labelY, labelWidth, labelHeight, radius)
+          ctx.fill()
+          
+          // Save context state before flipping text
+          ctx.save()
+          
+          // Flip horizontally to counteract the CSS scale-x-[-1] on canvas
+          ctx.scale(-1, 1)
+          
+          // Text (adjust x-coordinate for flipped coordinate system)
           ctx.fillStyle = 'white'
-          ctx.fillText(labelText, x + padding, y - 12)
+          ctx.fillText(labelText, -(labelX + padding + textWidth), labelY + 22)
+          
+          // Restore context state
+          ctx.restore()
         }
       }
 
-      requestAnimationFrame(drawFrame)
+      animationId = requestAnimationFrame(drawFrame)
     }
 
     drawFrame()
+
+    return () => {
+      if (animationId) cancelAnimationFrame(animationId)
+    }
   }, [showCamera, boundingBox, recognizedName, recognitionConfidence])
 
   useEffect(() => {
@@ -1001,9 +1041,36 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
       if (!videoRef.current || isCapturing) return
 
       try {
-        // Extract embedding via Python server (512D)
-        const pythonResult = await extractFaceNetFromVideo(videoRef.current)
+        // Run MediaPipe detection (for bounding box) and Python FaceNet (for embedding) in parallel
+        const [mediapipeResult, pythonResult] = await Promise.all([
+          detectFaceInVideo(videoRef.current!),
+          extractFaceNetFromVideo(videoRef.current!)
+        ])
 
+        // Use MediaPipe for bounding box (more reliable for UI)
+        if (mediapipeResult.detected && mediapipeResult.boundingBox && videoRef.current) {
+          const video = videoRef.current
+          const { xCenter, yCenter, width, height } = mediapipeResult.boundingBox
+          
+          // Convert normalized coordinates (0-1) to pixel coordinates
+          const pixelX = (xCenter - width / 2) * video.videoWidth
+          const pixelY = (yCenter - height / 2) * video.videoHeight
+          const pixelWidth = width * video.videoWidth
+          const pixelHeight = height * video.videoHeight
+          
+          // Add padding for better visual appearance
+          const padding = 40
+          setBoundingBox({
+            x: Math.max(0, pixelX - padding),
+            y: Math.max(0, pixelY - padding),
+            width: Math.min(video.videoWidth - pixelX + padding, pixelWidth + padding * 2),
+            height: Math.min(video.videoHeight - pixelY + padding, pixelHeight + padding * 2)
+          })
+        } else {
+          setBoundingBox(null)
+        }
+
+        // Use Python FaceNet for embedding (better for recognition)
         if (pythonResult.detected && pythonResult.embedding) {
           setFaceDetected(true)
           const descriptor = new Float32Array(pythonResult.embedding)
@@ -1011,14 +1078,13 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
           
           // IMPORTANT: Save to ref IMMEDIATELY when detected (not just during capture)
           savedFaceDescriptorRef.current = descriptor
-          console.log('✅ Face detected! Descriptor length:', descriptor.length, '- Saved to ref')
-          console.log('   Confidence:', pythonResult.confidence?.toFixed(3))
           
-          // THROTTLED REAL-TIME CHECK: Only verify face every 2 seconds to prevent API overload
+          // THROTTLED REAL-TIME CHECK: Only verify face every 1.5 seconds to prevent API overload
           const now = Date.now()
           const timeSinceLastRecognition = now - lastRecognitionTimeRef.current
-          const RECOGNITION_THROTTLE = 2000 // 2 seconds between recognition attempts
+          const RECOGNITION_THROTTLE = 1500 // 1.5 seconds between recognition attempts
           
+          let isNewStudent = false
           if (timeSinceLastRecognition >= RECOGNITION_THROTTLE) {
             lastRecognitionTimeRef.current = now
             
@@ -1033,25 +1099,31 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
             if (matchData.success && matchData.matched) {
               setRecognizedName(`${matchData.student.first_name} ${matchData.student.last_name}`)
               setRecognitionConfidence(matchData.confidence)
-              console.log(`⚠️ Face already registered: ${matchData.student.first_name} ${matchData.student.last_name}`)
+              isNewStudent = false
             } else {
               setRecognizedName('New Student')
               setRecognitionConfidence(null)
-              console.log('✅ New face detected - not in database')
+              isNewStudent = true
             }
+          } else {
+            // Use cached recognition result
+            isNewStudent = recognizedName === 'New Student'
           }
           
-          setBoundingBox(null) // Remove bounding box since Python server doesn't provide it
-          
-          // Auto-capture logic - ULTRA LENIENT
+          // Auto-capture logic - ONLY for NEW students (not already registered)
           consecutiveFaceDetectionsRef.current += 1
           
-          if (autoCapture && !isCapturing && consecutiveFaceDetectionsRef.current >= 1) {
+          // Only auto-capture if this is a new student
+          const shouldAutoCapture = autoCapture && !isCapturing && 
+                                    consecutiveFaceDetectionsRef.current >= 1 &&
+                                    (isNewStudent || recognizedName === 'New Student')
+          
+          if (shouldAutoCapture) {
             if (!faceStableStartRef.current) {
               faceStableStartRef.current = Date.now()
             }
             
-            const CAPTURE_DELAY = 1200 // 1.2 seconds
+            const CAPTURE_DELAY = 1500 // 1.5 seconds to give time to see the status
             const elapsed = Date.now() - faceStableStartRef.current
             const remaining = Math.max(0, CAPTURE_DELAY - elapsed)
             const countdownValue = Math.ceil(remaining / 1000)
@@ -1061,10 +1133,13 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
             if (elapsed >= CAPTURE_DELAY) {
               capturePhoto()
             }
+          } else if (!isNewStudent && recognizedName && recognizedName !== 'New Student') {
+            // Already registered - reset countdown and don't auto-capture
+            faceStableStartRef.current = null
+            setCaptureCountdown(null)
           }
         } else {
           setFaceDetected(false)
-          setBoundingBox(null)
           setRecognizedName(null)
           setRecognitionConfidence(null)
           
@@ -1449,7 +1524,7 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
               )}
 
               {showCamera && (
-                <div className="relative rounded-lg overflow-hidden bg-black" style={{ height: '500px' }}>
+                <div className="relative rounded-xl overflow-hidden bg-black shadow-2xl" style={{ height: '500px' }}>
                   <video
                     ref={videoRef}
                     autoPlay
@@ -1464,26 +1539,49 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
                     className="absolute inset-0 w-full h-full object-cover pointer-events-none transform scale-x-[-1]"
                   />
 
-                  {/* Status indicators */}
+                  {/* Real-time status indicators */}
                   <div className="absolute top-4 inset-x-0 flex flex-col items-center pointer-events-none gap-2">
-                    <div className="bg-black/80 text-white text-sm font-medium px-4 py-2 rounded-full backdrop-blur-md">
-                      {autoCapture ? '⚡ Instant Auto-Capture Mode' : '📍 Look at camera'}
+                    {/* Mode indicator */}
+                    <div className={`text-white text-sm font-medium px-4 py-2 rounded-full backdrop-blur-md flex items-center gap-2 ${
+                      recognizedName === 'New Student' ? 'bg-emerald-600/90' :
+                      recognizedName && recognizedName !== 'New Student' ? 'bg-amber-600/90' :
+                      'bg-black/80'
+                    }`}>
+                      {faceDetected ? (
+                        <>
+                          <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
+                          Real-time Face Recognition Active
+                        </>
+                      ) : (
+                        '📷 Position your face in the camera'
+                      )}
                     </div>
                     
-                    {faceDetected && captureCountdown !== null && captureCountdown > 0 && (
-                      <div className="bg-emerald-600 text-white text-xs font-bold px-3 py-1.5 rounded-full backdrop-blur-md animate-pulse">
-                        Capturing...
+                    {/* Capture countdown */}
+                    {faceDetected && recognizedName === 'New Student' && captureCountdown !== null && captureCountdown > 0 && (
+                      <div className="bg-emerald-600 text-white text-sm font-bold px-4 py-2 rounded-full backdrop-blur-md animate-pulse flex items-center gap-2">
+                        <Camera className="w-4 h-4" />
+                        Auto-capturing in {captureCountdown}s...
                       </div>
                     )}
                     
+                    {/* Warning for already registered */}
+                    {recognizedName && recognizedName !== 'New Student' && recognitionConfidence !== null && (
+                      <div className="bg-amber-500 text-white text-sm font-medium px-4 py-2 rounded-full backdrop-blur-md flex items-center gap-2">
+                        <ShieldCheck className="w-4 h-4" />
+                        This face is already registered!
+                      </div>
+                    )}
+                    
+                    {/* No face detected warning */}
                     {!faceDetected && (
-                      <div className="bg-red-600/90 text-white text-xs px-3 py-1.5 rounded-full backdrop-blur-md">
-                        No face detected
+                      <div className="bg-red-600/90 text-white text-xs px-3 py-1.5 rounded-full backdrop-blur-md mt-2">
+                        No face detected - look at the camera
                       </div>
                     )}
                   </div>
 
-                  {/* Cancel button only */}
+                  {/* Bottom controls */}
                   <div className="absolute bottom-4 inset-x-0 flex justify-center gap-4 px-4 z-10">
                     <Button type="button" variant="destructive" size="sm" onClick={stopCamera}>
                       Cancel

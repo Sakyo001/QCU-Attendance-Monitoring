@@ -3,7 +3,7 @@
 import { useAuth } from '@/contexts/AuthContext'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { BookOpen, Users, Calendar, LogOut, Clock, MapPin, Play } from 'lucide-react'
+import { BookOpen, Users, Calendar, LogOut, Clock, MapPin, Play, BarChart3, Monitor } from 'lucide-react'
 import { createClient } from '@/utils/supabase/client'
 import { ClassAccessModal } from '@/components/class-access-modal'
 import { PasswordVerificationModal } from '@/components/password-verification-modal'
@@ -43,17 +43,17 @@ export default function ProfessorDashboard() {
   const [selectedScheduleId, setSelectedScheduleId] = useState<string>('')
 
   useEffect(() => {
-    if (!loading && (!user || (user.role !== 'professor' && (user.role as any) !== 'adviser'))) {
-      router.push('/professor/login')
-      return
-    }
-    
-    if (!loading && user) {
+    // Authentication check
+    if (!loading) {
+      if (!user || (user.role !== 'professor' && (user.role as any) !== 'adviser')) {
+        router.push('/professor/login')
+        return
+      }
+      
+      // User is authenticated, fetch sections
       fetchSections()
-    } else if (!loading && !user) {
-      setLoadingSections(false)
     }
-  }, [user, loading, router])
+  }, [user, loading])
 
   const fetchSections = async () => {
     console.log('Fetching classrooms for user:', user?.id, user?.email)
@@ -197,6 +197,13 @@ export default function ProfessorDashboard() {
             </div>
             <div className="flex items-center gap-3">
               <button
+                onClick={() => router.push('/professor/reports')}
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                <BarChart3 className="w-4 h-4" />
+                Reports
+              </button>
+              <button
                 onClick={() => setShowCreateModal(true)}
                 className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors"
               >
@@ -291,7 +298,7 @@ export default function ProfessorDashboard() {
                     </div>
 
                     {/* Card Content */}
-                    <div className="p-4 flex-grow space-y-4">
+                    <div className="p-4 grow space-y-4">
                       <div className="flex items-start space-x-3 p-2 rounded-lg hover:bg-gray-50 transition-colors">
                         <Calendar className="w-5 h-5 text-gray-400 mt-0.5" />
                         <div>
@@ -320,7 +327,15 @@ export default function ProfessorDashboard() {
                     </div>
 
                     {/* Card Footer */}
-                    <div className="p-4 border-t border-gray-100 flex justify-end bg-gray-50/50">
+                    <div className="p-4 border-t border-gray-100 flex justify-end gap-2 bg-gray-50/50">
+                      <button
+                        onClick={() => router.push(`/kiosk?sectionId=${classroom.section_id}&scheduleId=${classroom.id}`)}
+                        className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 bg-violet-600 text-white hover:bg-violet-700 hover:shadow-md"
+                        title="Launch attendance kiosk for this class"
+                      >
+                        <Monitor className="w-4 h-4" />
+                        Kiosk
+                      </button>
                       <button
                         onClick={() => handleStartSession(classroom.section_id, classroom.id)}
                         className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${

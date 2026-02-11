@@ -3,7 +3,7 @@
 import { useAuth } from '@/contexts/AuthContext'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { Plus, Edit, Trash2, Mail, ArrowLeft, ChevronDown, ChevronUp, BookOpen } from 'lucide-react'
+import { Plus, Edit, Trash2, Mail, ArrowLeft, ChevronDown, ChevronUp, BookOpen, Search, ChevronsDown, ChevronsUp } from 'lucide-react'
 import { createClient } from '@/utils/supabase/client'
 import Swal from 'sweetalert2'
 
@@ -34,9 +34,11 @@ export default function StudentsPage() {
   const router = useRouter()
   const [students, setStudents] = useState<StudentWithSection[]>([])
   const [sectionGroups, setSectionGroups] = useState<SectionGroup[]>([])
+  const [filteredGroups, setFilteredGroups] = useState<SectionGroup[]>([])
   const [loadingStudents, setLoadingStudents] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set())
+  const [searchQuery, setSearchQuery] = useState('')
   const supabase = createClient()
 
   useEffect(() => {
@@ -54,80 +56,57 @@ export default function StudentsPage() {
   const fetchStudents = async () => {
     try {
       setLoadingStudents(true)
-      const response = await fetch('/api/admin/students')
+      
+      // Get all sections first
+      const { data: allSections } = await supabase
+        .from('sections')
+        .select('id, section_code')
+        .order('section_code')
+
+      console.log('📚 Sections loaded:', allSections?.length || 0)
+
+      const sectionsMap = new Map(
+        allSections?.map(s => [s.id, s.section_code]) || []
+      )
+
+      // Fetch students with sections from API (bypasses RLS)
+      const response = await fetch('/api/admin/students-with-sections')
+      
       if (!response.ok) {
         const error = await response.json()
-        console.error('Students fetch error:', error)
+        console.error('❌ Students fetch error:', error)
         setLoadingStudents(false)
         return
       }
 
-      const data = await response.json()
-      console.log('Students fetched:', data?.length || 0, 'members')
-      setStudents(data || [])
+      const studentsWithSections: StudentWithSection[] = await response.json()
+
+      if (!studentsWithSections || studentsWithSections.length === 0) {
+        console.warn('⚠️ No students found')
+        setSectionGroups([])
+        setFilteredGroups([])
+        setStudents([])
+        setLoadingStudents(false)
+        return
+      }
+
+      console.log('✅ Students loaded:', studentsWithSections.length)
+      setStudents(studentsWithSections)
 
       // Group students by section
       const groupedBySectionId = new Map<string, StudentWithSection[]>()
-      const sectionInfo = new Map<string, { code: string; id: string }>()
 
-      // Fetch all student section enrollments
-      for (const student of data) {
-        try {
-          const { data: sectionData } = await supabase
-            .from('attendance_records')
-            .select('section_id')
-            .eq('student_number', student.student_id)
-            .limit(1)
+      for (const student of studentsWithSections) {
+        const sectionId = student.section_id
+        const sectionCode = sectionId ? sectionsMap.get(sectionId) : undefined
 
-          let sectionId = sectionData?.[0]?.section_id
-
-          if (!sectionId) {
-            const { data: faceRegData } = await supabase
-              .from('student_face_registrations')
-              .select('section_id')
-              .eq('student_number', student.student_id)
-              .limit(1)
-
-            sectionId = faceRegData?.[0]?.section_id
+        if (sectionId && sectionCode) {
+          if (!groupedBySectionId.has(sectionId)) {
+            groupedBySectionId.set(sectionId, [])
           }
-
-          if (sectionId) {
-            // Get section code
-            const { data: sectionData } = await supabase
-              .from('sections')
-              .select('id, section_code')
-              .eq('id', sectionId.toString())
-              .single()
-
-            if (sectionData) {
-              sectionInfo.set(sectionId, {
-                id: sectionData.id,
-                code: sectionData.section_code
-              })
-
-              if (!groupedBySectionId.has(sectionId)) {
-                groupedBySectionId.set(sectionId, [])
-              }
-
-              groupedBySectionId.get(sectionId)!.push({
-                ...student,
-                section_id: sectionId,
-                section_code: sectionData.section_code
-              })
-            }
-          } else {
-            // Unassigned students
-            if (!groupedBySectionId.has('unassigned')) {
-              groupedBySectionId.set('unassigned', [])
-            }
-            groupedBySectionId.get('unassigned')!.push({
-              ...student,
-              section_code: 'Unassigned'
-            })
-          }
-        } catch (err) {
-          console.error('Error fetching section for student:', student.student_id, err)
-          // Add to unassigned if error
+          groupedBySectionId.get(sectionId)!.push(student)
+        } else {
+          // Unassigned students
           if (!groupedBySectionId.has('unassigned')) {
             groupedBySectionId.set('unassigned', [])
           }
@@ -141,9 +120,13 @@ export default function StudentsPage() {
       // Convert to array and sort
       const groups: SectionGroup[] = Array.from(groupedBySectionId.entries())
         .map(([sectionId, groupStudents]) => ({
-          section_code: sectionInfo.get(sectionId)?.code || 'Unassigned',
+          section_code: sectionId === 'unassigned' 
+            ? 'Unassigned' 
+            : sectionsMap.get(sectionId) || 'Unknown',
           section_id: sectionId,
-          students: groupStudents,
+          students: groupStudents.sort((a, b) => 
+            a.first_name.localeCompare(b.first_name)
+          ),
           total: groupStudents.length,
           active: groupStudents.filter(s => s.is_active).length
         }))
@@ -153,16 +136,53 @@ export default function StudentsPage() {
           return a.section_code.localeCompare(b.section_code)
         })
 
+      console.log('✅ Grouped into', groups.length, 'sections')
       setSectionGroups(groups)
+      setFilteredGroups(groups)
       // Expand first 3 sections by default
       setExpandedSections(new Set(groups.slice(0, 3).map(g => g.section_id)))
     } catch (error) {
-      console.error('Exception in fetchStudents:', error)
+      console.error('❌ Exception in fetchStudents:', error)
     } finally {
       setLoadingStudents(false)
     }
   }
+  // Filter students based on search query
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setFilteredGroups(sectionGroups)
+      return
+    }
 
+    const query = searchQuery.toLowerCase()
+    const filtered = sectionGroups
+      .map(group => ({
+        ...group,
+        students: group.students.filter(student => 
+          student.first_name.toLowerCase().includes(query) ||
+          student.last_name.toLowerCase().includes(query) ||
+          student.email.toLowerCase().includes(query) ||
+          student.student_id.toLowerCase().includes(query) ||
+          group.section_code.toLowerCase().includes(query)
+        )
+      }))
+      .filter(group => group.students.length > 0)
+      .map(group => ({
+        ...group,
+        total: group.students.length,
+        active: group.students.filter(s => s.is_active).length
+      }))
+
+    setFilteredGroups(filtered)
+  }, [searchQuery, sectionGroups])
+
+  const expandAll = () => {
+    setExpandedSections(new Set(filteredGroups.map(g => g.section_id)))
+  }
+
+  const collapseAll = () => {
+    setExpandedSections(new Set())
+  }
   const handleEdit = async (student: Student) => {
     const { value: formValues } = await Swal.fire({
       title: 'Edit Student',
@@ -408,6 +428,40 @@ export default function StudentsPage() {
           </div>
         </div>
 
+        {/* Search and Controls */}
+        <div className="bg-white rounded-lg shadow p-4 mb-6">
+          <div className="flex items-center gap-4">
+            <div className="flex-1 relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Search students by name, ID, email, or section..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent"
+              />
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={expandAll}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors flex items-center gap-2"
+                title="Expand all sections"
+              >
+                <ChevronsDown className="w-4 h-4" />
+                Expand All
+              </button>
+              <button
+                onClick={collapseAll}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors flex items-center gap-2"
+                title="Collapse all sections"
+              >
+                <ChevronsUp className="w-4 h-4" />
+                Collapse All
+              </button>
+            </div>
+          </div>
+        </div>
+
         {/* Students by Section */}
         <div className="space-y-4">
           {loadingStudents ? (
@@ -425,9 +479,24 @@ export default function StudentsPage() {
                 Add your first student
               </button>
             </div>
+          ) : filteredGroups.length === 0 ? (
+            <div className="bg-white rounded-lg shadow p-8 text-center">
+              <p className="text-gray-600">No students found matching "{searchQuery}"</p>
+              <button
+                onClick={() => setSearchQuery('')}
+                className="mt-4 text-violet-600 hover:text-violet-700 font-medium"
+              >
+                Clear search
+              </button>
+            </div>
           ) : (
-            sectionGroups.map((group) => (
-              <div key={group.section_id} className="bg-white rounded-lg shadow overflow-hidden">
+            filteredGroups.map((group) => (
+              <div 
+                key={group.section_id} 
+                className={`bg-white rounded-lg shadow overflow-hidden transition-all ${
+                  expandedSections.has(group.section_id) ? 'ring-2 ring-violet-500 ring-opacity-50' : ''
+                }`}
+              >
                 {/* Section Header */}
                 <button
                   onClick={() => {
@@ -440,7 +509,9 @@ export default function StudentsPage() {
                     setExpandedSections(newExpanded)
                   }}
                   className={`w-full px-6 py-4 flex items-center justify-between hover:bg-gray-50 transition-colors ${
-                    group.section_id === 'unassigned' ? 'bg-orange-50' : 'bg-gray-50'
+                    group.section_id === 'unassigned' 
+                      ? expandedSections.has(group.section_id) ? 'bg-orange-100' : 'bg-orange-50'
+                      : expandedSections.has(group.section_id) ? 'bg-violet-50' : 'bg-gray-50'
                   }`}
                 >
                   <div className="flex items-center gap-3">
@@ -456,8 +527,19 @@ export default function StudentsPage() {
                       }`} />
                     </div>
                     <div className="text-left">
-                      <h3 className="font-semibold text-gray-900">{group.section_code}</h3>
-                      <p className="text-xs text-gray-600">{group.total} students • {group.active} active</p>
+                      <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+                        {group.section_code}
+                        {group.section_id === 'unassigned' && (
+                          <span className="text-xs font-normal text-orange-600">(No Section Assigned)</span>
+                        )}
+                      </h3>
+                      <p className="text-xs text-gray-600">
+                        {group.total} {group.total === 1 ? 'student' : 'students'} • 
+                        <span className="text-green-600 font-medium"> {group.active} active</span>
+                        {group.total - group.active > 0 && (
+                          <span className="text-red-600"> • {group.total - group.active} inactive</span>
+                        )}
+                      </p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">

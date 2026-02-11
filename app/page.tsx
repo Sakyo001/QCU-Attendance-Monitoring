@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { ShieldCheck, UserCheck, GraduationCap, Github, ArrowRight, Zap, Lock, BarChart3, ChevronRight } from "lucide-react";
+import { ShieldCheck, GraduationCap, Github, ArrowRight, Zap, Lock, BarChart3, ChevronRight } from "lucide-react";
 
 export default function Home() {
   return (
@@ -9,8 +9,8 @@ export default function Home() {
       
       {/* Dynamic Background */}
       <div className="fixed inset-0 -z-10 bg-background">
-        <div className="absolute inset-0 bg-[linear-gradient(to_right,#80808012_1px,transparent_1px),linear-gradient(to_bottom,#80808012_1px,transparent_1px)] bg-[size:24px_24px]" />
-        <div className="absolute top-0 left-0 right-0 h-[500px] bg-gradient-to-b from-primary/5 to-transparent" />
+        <div className="absolute inset-0 bg-[linear-gradient(to_right,#80808012_1px,transparent_1px),linear-gradient(to_bottom,#80808012_1px,transparent_1px)] bg-size-[24px_24px]" />
+        <div className="absolute top-0 left-0 right-0 h-125 bg-linear-to-b from-primary/5 to-transparent" />
         
         {/* Animated Blobs */}
         <div className="absolute top-20 left-1/4 w-72 h-72 bg-purple-500/30 rounded-full blur-[100px] animate-blob filter mix-blend-multiply opacity-70" />
@@ -28,10 +28,10 @@ export default function Home() {
             <span className="font-bold text-xl tracking-tight">VeriFace</span>
           </div>
           <div className="flex items-center gap-4">
-             <Link href="/login" className="text-muted-foreground hover:text-foreground transition-colors">
+             <Link href="https://github.com" className="text-muted-foreground hover:text-foreground transition-colors">
               <Github className="w-5 h-5" />
              </Link>
-             <Link href="/login">
+             <Link href="#portals">
                <Button variant="default" size="sm" className="hidden sm:flex rounded-full">
                  Access Portal
                </Button>
@@ -51,9 +51,9 @@ export default function Home() {
             v1.0 System Live
           </div>
           
-          <h1 className="text-5xl md:text-7xl font-bold tracking-tight mb-8 bg-clip-text text-transparent bg-gradient-to-b from-foreground to-foreground/70">
+          <h1 className="text-5xl md:text-7xl font-bold tracking-tight mb-8 bg-clip-text text-transparent bg-linear-to-b from-foreground to-foreground/70">
             Next-Gen Attendance <br />
-            <span className="bg-gradient-to-r from-primary via-violet-500 to-blue-500 bg-clip-text text-transparent">
+            <span className="bg-linear-to-r from-primary via-violet-500 to-blue-500 bg-clip-text text-transparent">
               Facial Recognition
             </span>
           </h1>
@@ -64,7 +64,7 @@ export default function Home() {
           </p>
           
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-            <Link href="/login">
+            <Link href="#portals">
               <Button size="lg" className="rounded-full text-lg h-14 px-8 shadow-xl shadow-primary/20 hover:shadow-primary/40 transition-all hover:scale-105">
                 Get Started
                 <ArrowRight className="ml-2 w-5 h-5" />
@@ -147,14 +147,14 @@ export default function Home() {
             </p>
           </div>
 
-          <div className="grid md:grid-cols-3 gap-8 max-w-6xl mx-auto">
+          <div className="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto">
             {/* Admin Portal Card */}
-            <Link href="/login" className="transform hover:-translate-y-2 transition-all duration-300">
+            <Link href="/admin/login" className="transform hover:-translate-y-2 transition-all duration-300">
                <div className="group relative bg-background rounded-3xl p-1 h-full shadow-lg hover:shadow-2xl hover:shadow-primary/20 transition-all duration-500">
-                 <div className="absolute inset-0 bg-gradient-to-r from-primary to-blue-600 rounded-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-500 blur-xl -z-10" />
+                 <div className="absolute inset-0 bg-linear-to-r from-primary to-blue-600 rounded-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-500 blur-xl -z-10" />
                  <div className="bg-card h-full rounded-[20px] p-8 flex flex-col items-center text-center border overflow-hidden relative">
                     {/* Hover Glow */}
-                    <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-primary to-transparent opacity-0 group-hover:opacity-100 transition-all duration-500" />
+                    <div className="absolute top-0 left-0 w-full h-1 bg-linear-to-r from-transparent via-primary to-transparent opacity-0 group-hover:opacity-100 transition-all duration-500" />
                     
                     <div className="w-20 h-20 bg-primary/5 rounded-full flex items-center justify-center mb-6 group-hover:bg-primary/10 transition-colors">
                       <ShieldCheck className="w-10 h-10 text-primary" />
@@ -174,46 +174,22 @@ export default function Home() {
             </Link>
 
             {/* Professor Portal Card */}
-            <Link href="/login" className="transform hover:-translate-y-2 transition-all duration-300">
+            <Link href="/professor/login" className="transform hover:-translate-y-2 transition-all duration-300">
              <div className="group relative bg-background rounded-3xl p-1 h-full shadow-lg hover:shadow-2xl hover:shadow-violet-600/20 transition-all duration-500">
-                 <div className="absolute inset-0 bg-gradient-to-r from-violet-600 to-fuchsia-600 rounded-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-500 blur-xl -z-10" />
+                 <div className="absolute inset-0 bg-linear-to-r from-violet-600 to-fuchsia-600 rounded-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-500 blur-xl -z-10" />
                  <div className="bg-card h-full rounded-[20px] p-8 flex flex-col items-center text-center border overflow-hidden relative">
-                    <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-violet-600 to-transparent opacity-0 group-hover:opacity-100 transition-all duration-500" />
+                    <div className="absolute top-0 left-0 w-full h-1 bg-linear-to-r from-transparent via-violet-600 to-transparent opacity-0 group-hover:opacity-100 transition-all duration-500" />
                     
                     <div className="w-20 h-20 bg-violet-50 rounded-full flex items-center justify-center mb-6 group-hover:bg-violet-100 dark:bg-violet-900/20 transition-colors">
                       <GraduationCap className="w-10 h-10 text-violet-600" />
                     </div>
                     <h3 className="text-2xl font-bold mb-2">Faculty</h3>
                     <p className="text-muted-foreground mb-8 text-sm leading-relaxed">
-                      Manage sections, track student attendance, and monitor class performance efficiently.
+                      Manage sections, track student attendance, view reports and launch attendance kiosk.
                     </p>
                     <div className="mt-auto w-full">
                       <Button className="w-full rounded-full group-hover:text-violet-600 group-hover:border-violet-200 transition-all duration-300" variant="outline">
                         Faculty Login
-                        <ChevronRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />
-                      </Button>
-                    </div>
-                 </div>
-               </div>
-            </Link>
-
-            {/* Student Portal Card */}
-             <Link href="/login" className="transform hover:-translate-y-2 transition-all duration-300">
-               <div className="group relative bg-background rounded-3xl p-1 h-full shadow-lg hover:shadow-2xl hover:shadow-emerald-600/20 transition-all duration-500">
-                 <div className="absolute inset-0 bg-gradient-to-r from-emerald-500 to-teal-500 rounded-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-500 blur-xl -z-10" />
-                 <div className="bg-card h-full rounded-[20px] p-8 flex flex-col items-center text-center border overflow-hidden relative">
-                     <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-emerald-600 to-transparent opacity-0 group-hover:opacity-100 transition-all duration-500" />
-
-                    <div className="w-20 h-20 bg-emerald-50 rounded-full flex items-center justify-center mb-6 group-hover:bg-emerald-100 dark:bg-emerald-900/20 transition-colors">
-                      <UserCheck className="w-10 h-10 text-emerald-600" />
-                    </div>
-                    <h3 className="text-2xl font-bold mb-2">Student</h3>
-                    <p className="text-muted-foreground mb-8 text-sm leading-relaxed">
-                      View your attendance history, check class schedules, and manage your profile.
-                    </p>
-                    <div className="mt-auto w-full">
-                       <Button className="w-full rounded-full group-hover:text-emerald-600 group-hover:border-emerald-200 transition-all duration-300" variant="outline">
-                        Student Login
                         <ChevronRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />
                       </Button>
                     </div>

@@ -45,10 +45,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           await fetchUser(session.user.id)
         } else {
           console.log('No active session found')
-          // Check if we still have cached user - if not, set loading false
+          // Check if we still have cached user
           const cachedUser = localStorage.getItem('authUser')
           if (!cachedUser) {
             setUser(null)
+            setLoading(false)
+          } else {
+            // We have a cached user (likely from face login), keep it and ensure loading is false
+            console.log('Using cached user from face login')
             setLoading(false)
           }
         }
@@ -166,6 +170,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.log('AuthContext signIn: Redirecting to role page:', result.user.role)
         
         // Force immediate redirect based on role
+        // Students go to a minimal page since they use the kiosk for attendance
         const targetPath = result.user.role === 'admin' ? '/admin' 
           : result.user.role === 'professor' ? '/professor' 
           : '/student'
@@ -207,6 +212,56 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     window.location.href = '/'
   }
 
+  const signInWithId = async (userId: string) => {
+    try {
+      console.log('AuthContext signInWithId: Starting for user ID:', userId)
+      
+      // Call API endpoint that uses service role to fetch user (bypasses RLS)
+      const response = await fetch('/api/auth/signin-with-id', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId })
+      })
+
+      const data = await response.json()
+
+      if (!response.ok || data.error) {
+        console.error('AuthContext signInWithId: API error', data.error)
+        setLoading(false)
+        return { user: null, error: new Error(data.error || 'Failed to sign in') }
+      }
+
+      if (!data.user) {
+        console.error('AuthContext signInWithId: No user in response')
+        setLoading(false)
+        return { user: null, error: new Error('User not found') }
+      }
+
+      // Map API response to AuthUser
+      const mappedUser: AuthUser = {
+        id: data.user.id,
+        email: data.user.email || '',
+        role: data.user.role,
+        firstName: data.user.firstName,
+        lastName: data.user.lastName,
+        studentId: data.user.studentId,
+        employeeId: data.user.employeeId
+      }
+
+      setUser(mappedUser)
+      setLoading(false)
+      localStorage.setItem('authUser', JSON.stringify(mappedUser))
+      
+      console.log('AuthContext signInWithId: User logged in successfully', mappedUser)
+      
+      return { user: mappedUser, error: null }
+    } catch (error) {
+      console.error('AuthContext signInWithId: Error', error)
+      setLoading(false)
+      return { user: null, error: error as Error }
+    }
+  }
+
   const refreshUser = async () => {
     const { data: { user: authUser } } = await supabase.auth.getUser()
     if (authUser) {
@@ -215,7 +270,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, loading, signIn, signOut, signUp, refreshUser }}>
+    <AuthContext.Provider value={{ user, loading, signIn, signInWithId, signOut, signUp, refreshUser }}>
       {children}
     </AuthContext.Provider>
   )

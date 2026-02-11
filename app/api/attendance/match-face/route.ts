@@ -43,14 +43,15 @@ export async function POST(request: NextRequest) {
   try {
     const supabase = getSupabaseAdmin()
     const body = await request.json()
-    const { faceDescriptor } = body
+    const { faceDescriptor, sectionId } = body
 
     console.log('🔍 Face matching request received:', {
       hasFaceDescriptor: !!faceDescriptor,
       descriptorType: typeof faceDescriptor,
       descriptorIsArray: Array.isArray(faceDescriptor),
       descriptorLength: Array.isArray(faceDescriptor) ? faceDescriptor.length : 'N/A',
-      format: Array.isArray(faceDescriptor) && faceDescriptor.length === 128 ? 'FaceNet (128D)' : 'Unknown'
+      format: Array.isArray(faceDescriptor) && faceDescriptor.length === 128 ? 'FaceNet (128D)' : 'Unknown',
+      sectionId: sectionId || 'ALL'
     })
 
     if (!faceDescriptor) {
@@ -60,11 +61,19 @@ export async function POST(request: NextRequest) {
       }, { status: 400 })
     }
 
-    // Get all students with face descriptors from student_face_registrations
-    const { data: students, error: fetchError } = await supabase
+    // Get students with face descriptors - filter by section if sectionId is provided
+    let query = supabase
       .from('student_face_registrations')
-      .select('id, student_number, first_name, last_name, face_descriptor, is_active')
+      .select('id, student_number, first_name, last_name, face_descriptor, is_active, section_id')
       .eq('is_active', true)
+    
+    // Filter by section if sectionId is provided
+    if (sectionId) {
+      query = query.eq('section_id', sectionId)
+      console.log('🎯 Filtering by section:', sectionId)
+    }
+    
+    const { data: students, error: fetchError } = await query
 
     if (fetchError) {
       console.error('❌ Error fetching student face data:', fetchError)
@@ -74,11 +83,11 @@ export async function POST(request: NextRequest) {
       }, { status: 400 })
     }
 
-    console.log('📊 Found', students?.length || 0, 'registered students with face descriptors')
+    console.log('📊 Found', students?.length || 0, sectionId ? `registered students in section ${sectionId}` : 'registered students (all sections)')
 
     if (!students || students.length === 0) {
       return NextResponse.json({ 
-        error: 'No registered student faces found',
+        error: sectionId ? 'No registered student faces found in this section' : 'No registered student faces found',
         matched: false
       }, { status: 404 })
     }

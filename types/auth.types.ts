@@ -36,6 +36,7 @@ export interface AuthContextType {
   user: AuthUser | null
   loading: boolean
   signIn: (credentials: LoginCredentials) => Promise<AuthResponse>
+  signInWithId: (userId: string) => Promise<AuthResponse>
   signOut: () => Promise<void>
   signUp: (data: SignUpData) => Promise<AuthResponse>
   refreshUser: () => Promise<void>
