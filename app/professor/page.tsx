@@ -2,11 +2,10 @@
 
 import { useAuth } from '@/contexts/AuthContext'
 import { useRouter } from 'next/navigation'
-import { useEffect, useState } from 'react'
-import { BookOpen, Users, Calendar, LogOut, Clock, MapPin, Play, BarChart3, Monitor } from 'lucide-react'
+import { useEffect, useState, useRef } from 'react'
+import { BookOpen, Users, Calendar, LogOut, Clock, MapPin, Play, BarChart3 } from 'lucide-react'
 import { createClient } from '@/utils/supabase/client'
 import { ClassAccessModal } from '@/components/class-access-modal'
-import { PasswordVerificationModal } from '@/components/password-verification-modal'
 
 interface Section {
   id: string
@@ -38,9 +37,9 @@ export default function ProfessorDashboard() {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [todayClasses, setTodayClasses] = useState(0)
   const [showClassAccessModal, setShowClassAccessModal] = useState(false)
-  const [showPasswordModal, setShowPasswordModal] = useState(false)
   const [selectedSectionId, setSelectedSectionId] = useState<string>('')
   const [selectedScheduleId, setSelectedScheduleId] = useState<string>('')
+  const hasFetchedRef = useRef(false)
 
   useEffect(() => {
     // Authentication check
@@ -50,8 +49,11 @@ export default function ProfessorDashboard() {
         return
       }
       
-      // User is authenticated, fetch sections
-      fetchSections()
+      // User is authenticated, fetch sections only once
+      if (!hasFetchedRef.current && user.id) {
+        hasFetchedRef.current = true
+        fetchSections()
+      }
     }
   }, [user, loading])
 
@@ -113,31 +115,6 @@ export default function ProfessorDashboard() {
     setSelectedSectionId(sectionId)
     setSelectedScheduleId(scheduleId)
     setShowClassAccessModal(true)
-  }
-
-  const handlePasswordClick = () => {
-    setShowClassAccessModal(false)
-    setShowPasswordModal(true)
-  }
-
-  const handlePasswordVerified = () => {
-    setShowPasswordModal(false)
-    // Set a verification token in local storage (persists across navigation)
-    const verificationToken = Date.now().toString()
-    const storageKey = `password-verified-${selectedSectionId}`
-    localStorage.setItem(storageKey, verificationToken)
-    console.log('🔑 Password verified, storing token:')
-    console.log('  - Section ID:', selectedSectionId)
-    console.log('  - Token:', verificationToken)
-    console.log('  - Storage key:', storageKey)
-    
-    // Verify the token was stored correctly
-    const verifyStored = localStorage.getItem(storageKey)
-    console.log('  - Verified stored:', verifyStored)
-    console.log('  - Match:', verifyStored === verificationToken)
-    
-    // Navigate to attendance page with entry method parameter
-    router.push(`/professor/attendance/${selectedSectionId}?entryMethod=password`)
   }
 
   const handleFaceRecognitionClick = () => {
@@ -329,14 +306,6 @@ export default function ProfessorDashboard() {
                     {/* Card Footer */}
                     <div className="p-4 border-t border-gray-100 flex justify-end gap-2 bg-gray-50/50">
                       <button
-                        onClick={() => router.push(`/kiosk?sectionId=${classroom.section_id}&scheduleId=${classroom.id}`)}
-                        className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 bg-violet-600 text-white hover:bg-violet-700 hover:shadow-md"
-                        title="Launch attendance kiosk for this class"
-                      >
-                        <Monitor className="w-4 h-4" />
-                        Kiosk
-                      </button>
-                      <button
                         onClick={() => handleStartSession(classroom.section_id, classroom.id)}
                         className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
                           isToday 
@@ -370,17 +339,8 @@ export default function ProfessorDashboard() {
       <ClassAccessModal
         isOpen={showClassAccessModal}
         onClose={() => setShowClassAccessModal(false)}
-        onPasswordClick={handlePasswordClick}
         onFaceRecognitionClick={handleFaceRecognitionClick}
         professorName={`${user?.firstName} ${user?.lastName}`}
-      />
-
-      {/* Password Verification Modal */}
-      <PasswordVerificationModal
-        isOpen={showPasswordModal}
-        onClose={() => setShowPasswordModal(false)}
-        onVerified={handlePasswordVerified}
-        professorId={user?.id || ''}
       />
     </div>
   )

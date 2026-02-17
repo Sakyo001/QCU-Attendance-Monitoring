@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { Cloud, Sun, CloudRain, Snowflake, Wind, Calendar, Bell, BarChart3, Clock, Users, Zap, GraduationCap, TrendingUp, Megaphone } from 'lucide-react'
+import { Cloud, Sun, CloudRain, Snowflake, Wind, Calendar, Bell, BarChart3, Clock, Users, Zap, GraduationCap, TrendingUp, Megaphone, ChevronLeft, ChevronRight } from 'lucide-react'
 
 interface Announcement {
   id: string
@@ -121,6 +121,22 @@ export default function IdleDisplayPage() {
     router.push(`/kiosk?sectionId=${sectionId}&scheduleId=${scheduleId}`)
   }, [router, sectionId, scheduleId])
 
+  // Manual slide navigation
+  const goToNextSlide = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation()
+    setCurrentSlide(prev => (prev + 1) % totalSlides)
+  }, [])
+
+  const goToPrevSlide = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation()
+    setCurrentSlide(prev => (prev - 1 + totalSlides) % totalSlides)
+  }, [])
+
+  const goToSlide = useCallback((index: number, e: React.MouseEvent) => {
+    e.stopPropagation()
+    setCurrentSlide(index)
+  }, [])
+
   const getWeatherIcon = () => {
     const condition = weather.condition.toLowerCase()
     if (condition.includes('rain')) return <CloudRain className="w-12 h-12" />
@@ -139,26 +155,26 @@ export default function IdleDisplayPage() {
 
   return (
     <div 
-      className="min-h-screen bg-linear-to-br from-gray-950 via-gray-900 to-gray-950 text-white cursor-pointer select-none overflow-hidden"
+      className="min-h-screen bg-linear-to-br from-gray-50 via-white to-gray-100 cursor-pointer select-none overflow-hidden"
       onClick={handleWakeUp}
     >
       {/* Animated Background */}
       <div className="fixed inset-0 -z-10">
-        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-primary/10 rounded-full blur-[120px] animate-blob" />
-        <div className="absolute top-1/3 right-1/4 w-96 h-96 bg-blue-500/10 rounded-full blur-[120px] animate-blob animation-delay-2000" />
-        <div className="absolute bottom-1/4 left-1/3 w-96 h-96 bg-violet-500/10 rounded-full blur-[120px] animate-blob animation-delay-4000" />
+        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-emerald-200/30 rounded-full blur-[120px] animate-blob" />
+        <div className="absolute top-1/3 right-1/4 w-96 h-96 bg-blue-200/30 rounded-full blur-[120px] animate-blob animation-delay-2000" />
+        <div className="absolute bottom-1/4 left-1/3 w-96 h-96 bg-violet-200/30 rounded-full blur-[120px] animate-blob animation-delay-4000" />
       </div>
 
       {/* Top Bar */}
       <div className="flex items-center justify-between px-8 py-6">
         <div className="flex items-center gap-3">
-          <div className="bg-primary/20 p-2.5 rounded-xl">
-            <Zap className="w-6 h-6 text-primary" />
+          <div className="bg-emerald-500 p-2.5 rounded-xl shadow-lg shadow-emerald-500/20">
+            <Zap className="w-6 h-6 text-white" />
           </div>
-          <span className="text-xl font-bold tracking-tight">VeriFace</span>
+          <span className="text-xl font-bold tracking-tight text-gray-800">VeriFace</span>
         </div>
-        <div className="flex items-center gap-2 text-sm text-gray-400">
-          <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+        <div className="flex items-center gap-2 text-sm text-gray-600">
+          <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse shadow-lg shadow-green-500/50" />
           <span>System Active</span>
         </div>
       </div>
@@ -167,8 +183,8 @@ export default function IdleDisplayPage() {
       <div className="flex flex-col items-center justify-center min-h-[calc(100vh-160px)] px-8">
         {/* Clock & Greeting */}
         <div className="text-center mb-12">
-          <p className="text-2xl text-gray-400 font-light mb-2">{getGreeting()}</p>
-          <p className="text-8xl font-bold font-mono tabular-nums tracking-tight">
+          <p className="text-2xl text-gray-600 font-light mb-2">{getGreeting()}</p>
+          <p className="text-8xl font-bold font-mono tabular-nums tracking-tight text-gray-800">
             {currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
           </p>
           <p className="text-xl text-gray-500 mt-3">
@@ -182,28 +198,28 @@ export default function IdleDisplayPage() {
           {currentSlide === 0 && (
             <div className="animate-in fade-in slide-in-from-right duration-500">
               <div className="flex items-center gap-3 mb-6">
-                <Megaphone className="w-6 h-6 text-yellow-400" />
-                <h2 className="text-xl font-semibold text-gray-300">Announcements</h2>
+                <Megaphone className="w-6 h-6 text-amber-500" />
+                <h2 className="text-xl font-semibold text-gray-800">Announcements</h2>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {SAMPLE_ANNOUNCEMENTS.map((ann, idx) => (
                   <div
                     key={ann.id}
-                    className={`p-5 rounded-2xl border backdrop-blur-sm transition-all duration-500 ${
+                    className={`p-5 rounded-2xl border backdrop-blur-sm transition-all duration-500 shadow-lg ${
                       idx === activeAnnouncementIndex
-                        ? 'border-primary/50 bg-primary/10 scale-[1.02] shadow-xl shadow-primary/10'
-                        : 'border-gray-800 bg-gray-900/50'
+                        ? 'border-emerald-300 bg-emerald-50/80 scale-[1.02] shadow-emerald-200/50'
+                        : 'border-gray-200 bg-white/80'
                     }`}
                   >
                     <div className="flex items-start gap-3">
                       <div className={`w-2 h-2 rounded-full mt-2 shrink-0 ${
-                        ann.type === 'warning' ? 'bg-yellow-400' :
-                        ann.type === 'event' ? 'bg-blue-400' : 'bg-green-400'
+                        ann.type === 'warning' ? 'bg-amber-500' :
+                        ann.type === 'event' ? 'bg-blue-500' : 'bg-green-500'
                       }`} />
                       <div>
-                        <h3 className="font-semibold text-white text-sm">{ann.title}</h3>
-                        <p className="text-xs text-gray-400 mt-1 leading-relaxed">{ann.message}</p>
-                        <p className="text-xs text-gray-600 mt-2">{new Date(ann.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
+                        <h3 className="font-semibold text-gray-800 text-sm">{ann.title}</h3>
+                        <p className="text-xs text-gray-600 mt-1 leading-relaxed">{ann.message}</p>
+                        <p className="text-xs text-gray-400 mt-2">{new Date(ann.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
                       </div>
                     </div>
                   </div>
@@ -216,8 +232,8 @@ export default function IdleDisplayPage() {
           {currentSlide === 1 && (
             <div className="animate-in fade-in slide-in-from-right duration-500">
               <div className="flex items-center gap-3 mb-6">
-                <Calendar className="w-6 h-6 text-blue-400" />
-                <h2 className="text-xl font-semibold text-gray-300">Upcoming Events</h2>
+                <Calendar className="w-6 h-6 text-blue-500" />
+                <h2 className="text-xl font-semibold text-gray-800">Upcoming Events</h2>
               </div>
               <div className="space-y-3">
                 {CALENDAR_EVENTS.map((event, idx) => {
@@ -226,20 +242,24 @@ export default function IdleDisplayPage() {
                   return (
                     <div
                       key={idx}
-                      className="flex items-center gap-4 p-4 rounded-2xl border border-gray-800 bg-gray-900/40 hover:bg-gray-900/60 transition"
+                      className="flex items-center gap-4 p-4 rounded-2xl border border-gray-200 bg-white/80 hover:bg-white shadow-lg hover:shadow-xl transition"
                     >
-                      <div className={`${event.color} w-14 h-14 rounded-xl flex flex-col items-center justify-center text-white`}>
+                      <div className={`${event.color} w-14 h-14 rounded-xl flex flex-col items-center justify-center text-white shadow-lg`}>
                         <span className="text-xs font-medium">{eventDate.toLocaleDateString('en-US', { month: 'short' })}</span>
                         <span className="text-lg font-bold leading-none">{eventDate.getDate()}</span>
                       </div>
                       <div className="flex-1">
-                        <h3 className="font-semibold text-white">{event.title}</h3>
+                        <h3 className="font-semibold text-gray-800">{event.title}</h3>
                         <p className="text-sm text-gray-500">
                           {eventDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
                         </p>
                       </div>
                       <div className="text-right">
-                        <span className={`text-sm font-medium ${daysUntil <= 3 ? 'text-red-400' : daysUntil <= 7 ? 'text-yellow-400' : 'text-gray-400'}`}>
+                        <span className={`text-sm font-medium ${
+                          daysUntil <= 3 ? 'text-red-500' : 
+                          daysUntil <= 7 ? 'text-amber-500' : 
+                          'text-gray-500'
+                        }`}>
                           {daysUntil > 0 ? `${daysUntil} days` : daysUntil === 0 ? 'Today!' : 'Passed'}
                         </span>
                       </div>
@@ -254,35 +274,35 @@ export default function IdleDisplayPage() {
           {currentSlide === 2 && (
             <div className="animate-in fade-in slide-in-from-right duration-500">
               <div className="flex items-center gap-3 mb-6">
-                <BarChart3 className="w-6 h-6 text-emerald-400" />
-                <h2 className="text-xl font-semibold text-gray-300">Today&apos;s Analytics</h2>
+                <BarChart3 className="w-6 h-6 text-emerald-500" />
+                <h2 className="text-xl font-semibold text-gray-800">Today&apos;s Analytics</h2>
               </div>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="bg-gray-900/60 border border-gray-800 rounded-2xl p-6 text-center">
-                  <Users className="w-8 h-8 text-blue-400 mx-auto mb-3" />
-                  <p className="text-4xl font-bold text-white">{attendanceStats.total}</p>
+                <div className="bg-white/80 border border-gray-200 rounded-2xl p-6 text-center shadow-lg">
+                  <Users className="w-8 h-8 text-blue-500 mx-auto mb-3" />
+                  <p className="text-4xl font-bold text-gray-800">{attendanceStats.total}</p>
                   <p className="text-sm text-gray-500 mt-1">Total Students</p>
                 </div>
-                <div className="bg-gray-900/60 border border-green-500/20 rounded-2xl p-6 text-center">
-                  <TrendingUp className="w-8 h-8 text-green-400 mx-auto mb-3" />
-                  <p className="text-4xl font-bold text-green-400">{attendanceStats.present}</p>
+                <div className="bg-white/80 border border-green-200 rounded-2xl p-6 text-center shadow-lg">
+                  <TrendingUp className="w-8 h-8 text-green-500 mx-auto mb-3" />
+                  <p className="text-4xl font-bold text-green-500">{attendanceStats.present}</p>
                   <p className="text-sm text-gray-500 mt-1">Present</p>
                 </div>
-                <div className="bg-gray-900/60 border border-yellow-500/20 rounded-2xl p-6 text-center">
-                  <Clock className="w-8 h-8 text-yellow-400 mx-auto mb-3" />
-                  <p className="text-4xl font-bold text-yellow-400">{attendanceStats.late}</p>
+                <div className="bg-white/80 border border-amber-200 rounded-2xl p-6 text-center shadow-lg">
+                  <Clock className="w-8 h-8 text-amber-500 mx-auto mb-3" />
+                  <p className="text-4xl font-bold text-amber-500">{attendanceStats.late}</p>
                   <p className="text-sm text-gray-500 mt-1">Late</p>
                 </div>
-                <div className="bg-gray-900/60 border border-red-500/20 rounded-2xl p-6 text-center">
-                  <GraduationCap className="w-8 h-8 text-red-400 mx-auto mb-3" />
-                  <p className="text-4xl font-bold text-red-400">{attendanceStats.absent}</p>
+                <div className="bg-white/80 border border-red-200 rounded-2xl p-6 text-center shadow-lg">
+                  <GraduationCap className="w-8 h-8 text-red-500 mx-auto mb-3" />
+                  <p className="text-4xl font-bold text-red-500">{attendanceStats.absent}</p>
                   <p className="text-sm text-gray-500 mt-1">Absent</p>
                 </div>
               </div>
               {attendanceStats.total > 0 && (
-                <div className="mt-6 bg-gray-900/60 border border-gray-800 rounded-2xl p-6">
-                  <p className="text-sm text-gray-400 mb-3">Attendance Rate</p>
-                  <div className="w-full bg-gray-800 rounded-full h-4 overflow-hidden">
+                <div className="mt-6 bg-white/80 border border-gray-200 rounded-2xl p-6 shadow-lg">
+                  <p className="text-sm text-gray-600 mb-3">Attendance Rate</p>
+                  <div className="w-full bg-gray-200 rounded-full h-4 overflow-hidden">
                     <div 
                       className="h-full rounded-full bg-linear-to-r from-green-500 via-emerald-500 to-teal-500 transition-all duration-1000"
                       style={{ width: `${((attendanceStats.present + attendanceStats.late) / attendanceStats.total * 100).toFixed(0)}%` }}
@@ -301,45 +321,45 @@ export default function IdleDisplayPage() {
             <div className="animate-in fade-in slide-in-from-right duration-500">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {/* Weather Card */}
-                <div className="bg-linear-to-br from-blue-500/20 to-cyan-500/10 border border-blue-500/20 rounded-2xl p-8">
+                <div className="bg-linear-to-br from-blue-50 to-cyan-50 border border-blue-200 rounded-2xl p-8 shadow-lg">
                   <div className="flex items-center gap-3 mb-4">
-                    <Cloud className="w-6 h-6 text-blue-400" />
-                    <h2 className="text-lg font-semibold text-gray-300">Weather</h2>
+                    <Cloud className="w-6 h-6 text-blue-500" />
+                    <h2 className="text-lg font-semibold text-gray-800">Weather</h2>
                   </div>
                   <div className="flex items-center gap-6">
-                    <div className="text-blue-300">
+                    <div className="text-blue-500">
                       {getWeatherIcon()}
                     </div>
                     <div>
-                      <p className="text-5xl font-bold text-white">{weather.temp}°C</p>
-                      <p className="text-gray-400 mt-1">{weather.condition}</p>
+                      <p className="text-5xl font-bold text-gray-800">{weather.temp}°C</p>
+                      <p className="text-gray-600 mt-1">{weather.condition}</p>
                       <p className="text-sm text-gray-500">Humidity: {weather.humidity}%</p>
                     </div>
                   </div>
                 </div>
 
                 {/* Quick Tips */}
-                <div className="bg-linear-to-br from-violet-500/20 to-purple-500/10 border border-violet-500/20 rounded-2xl p-8">
+                <div className="bg-linear-to-br from-violet-50 to-purple-50 border border-violet-200 rounded-2xl p-8 shadow-lg">
                   <div className="flex items-center gap-3 mb-4">
-                    <Bell className="w-6 h-6 text-violet-400" />
-                    <h2 className="text-lg font-semibold text-gray-300">Quick Tips</h2>
+                    <Bell className="w-6 h-6 text-violet-500" />
+                    <h2 className="text-lg font-semibold text-gray-800">Quick Tips</h2>
                   </div>
                   <div className="space-y-3">
                     <div className="flex items-start gap-3">
-                      <span className="w-6 h-6 rounded-full bg-violet-500/20 text-violet-400 flex items-center justify-center text-xs font-bold shrink-0">1</span>
-                      <p className="text-sm text-gray-400">Stand in front of the camera for automatic attendance</p>
+                      <span className="w-6 h-6 rounded-full bg-violet-200 text-violet-600 flex items-center justify-center text-xs font-bold shrink-0">1</span>
+                      <p className="text-sm text-gray-600">Stand in front of the camera for automatic attendance</p>
                     </div>
                     <div className="flex items-start gap-3">
-                      <span className="w-6 h-6 rounded-full bg-violet-500/20 text-violet-400 flex items-center justify-center text-xs font-bold shrink-0">2</span>
-                      <p className="text-sm text-gray-400">Ensure good lighting and face the camera directly</p>
+                      <span className="w-6 h-6 rounded-full bg-violet-200 text-violet-600 flex items-center justify-center text-xs font-bold shrink-0">2</span>
+                      <p className="text-sm text-gray-600">Ensure good lighting and face the camera directly</p>
                     </div>
                     <div className="flex items-start gap-3">
-                      <span className="w-6 h-6 rounded-full bg-violet-500/20 text-violet-400 flex items-center justify-center text-xs font-bold shrink-0">3</span>
-                      <p className="text-sm text-gray-400">Attendance locks 30 minutes after class starts</p>
+                      <span className="w-6 h-6 rounded-full bg-violet-200 text-violet-600 flex items-center justify-center text-xs font-bold shrink-0">3</span>
+                      <p className="text-sm text-gray-600">Attendance locks 30 minutes after class starts</p>
                     </div>
                     <div className="flex items-start gap-3">
-                      <span className="w-6 h-6 rounded-full bg-violet-500/20 text-violet-400 flex items-center justify-center text-xs font-bold shrink-0">4</span>
-                      <p className="text-sm text-gray-400">Contact your professor for attendance summary</p>
+                      <span className="w-6 h-6 rounded-full bg-violet-200 text-violet-600 flex items-center justify-center text-xs font-bold shrink-0">4</span>
+                      <p className="text-sm text-gray-600">Contact your professor for attendance summary</p>
                     </div>
                   </div>
                 </div>
@@ -348,20 +368,45 @@ export default function IdleDisplayPage() {
           )}
         </div>
 
-        {/* Slide Indicators */}
-        <div className="flex items-center gap-2 mt-8">
-          {Array.from({ length: totalSlides }).map((_, idx) => (
-            <div
-              key={idx}
-              className={`h-1.5 rounded-full transition-all duration-500 ${
-                idx === currentSlide ? 'w-8 bg-primary' : 'w-2 bg-gray-700'
-              }`}
-            />
-          ))}
+        {/* Carousel Navigation */}
+        <div className="flex items-center gap-6 mt-8">
+          {/* Previous Button */}
+          <button
+            onClick={goToPrevSlide}
+            className="p-3 rounded-full bg-white/80 border border-gray-300 hover:bg-white hover:border-gray-400 transition-all shadow-lg hover:shadow-xl"
+            aria-label="Previous slide"
+          >
+            <ChevronLeft className="w-5 h-5 text-gray-700" />
+          </button>
+
+          {/* Slide Indicators */}
+          <div className="flex items-center gap-2">
+            {Array.from({ length: totalSlides }).map((_, idx) => (
+              <button
+                key={idx}
+                onClick={(e) => goToSlide(idx, e)}
+                className={`h-2 rounded-full transition-all duration-500 ${
+                  idx === currentSlide 
+                    ? 'w-8 bg-emerald-500 shadow-lg shadow-emerald-500/50' 
+                    : 'w-2 bg-gray-300 hover:bg-gray-400'
+                }`}
+                aria-label={`Go to slide ${idx + 1}`}
+              />
+            ))}
+          </div>
+
+          {/* Next Button */}
+          <button
+            onClick={goToNextSlide}
+            className="p-3 rounded-full bg-white/80 border border-gray-300 hover:bg-white hover:border-gray-400 transition-all shadow-lg hover:shadow-xl"
+            aria-label="Next slide"
+          >
+            <ChevronRight className="w-5 h-5 text-gray-700" />
+          </button>
         </div>
 
         {/* Wake up hint */}
-        <p className="text-gray-700 text-sm mt-8 animate-pulse">
+        <p className="text-gray-400 text-sm mt-8 animate-pulse">
           Tap anywhere or step in front of the camera to start
         </p>
       </div>

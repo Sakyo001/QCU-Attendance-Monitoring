@@ -26,7 +26,7 @@ export default function ProfessorLoginPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const detectionIntervalRef = useRef<NodeJS.Timeout | null>(null)
-  const lastMatchTimeRef = useRef<number>(0)
+  const isMatchingRef = useRef<boolean>(false)
 
   // Load MediaPipe models
   useEffect(() => {
@@ -212,14 +212,13 @@ export default function ProfessorLoginPage() {
           setBoundingBox(null)
         }
 
-        // Face matching
+        // Face matching - Real-time without throttle
         if (pythonResult.detected && pythonResult.embedding) {
           setFaceDetected(true)
           
-          // Throttle face matching to every 1.5 seconds
-          const now = Date.now()
-          if (now - lastMatchTimeRef.current >= 1500 && matchStatus !== 'matched') {
-            lastMatchTimeRef.current = now
+          // Prevent concurrent requests and stop if already matched or loading
+          if (!isMatchingRef.current && matchStatus !== 'matched' && !isLoading) {
+            isMatchingRef.current = true
             setMatchStatus('scanning')
             
             try {
@@ -240,34 +239,39 @@ export default function ProfessorLoginPage() {
                 
                 // Login the professor
                 setIsLoading(true)
+                stopCamera()
                 
                 try {
                   const result = await signInWithId(data.professor.id)
                   if (result.error) {
                     setError(result.error.message)
                     setMatchStatus('not-found')
+                    isMatchingRef.current = false
                   } else {
-                    // Redirect will be handled by AuthContext
-                    router.push('/professor')
+                    // Wait for auth state to settle and camera to fully stop
+                    await new Promise(resolve => setTimeout(resolve, 800))
+                    // Use replace to prevent back navigation issues
+                    router.replace('/professor')
                   }
                 } catch (err) {
                   setError('Login failed. Please try again.')
                   setMatchStatus('not-found')
+                  isMatchingRef.current = false
                 } finally {
                   setIsLoading(false)
                 }
               } else {
                 setMatchStatus('not-found')
-                // Reset after 2 seconds
+                isMatchingRef.current = false
+                // Reset after 1.5 seconds
                 setTimeout(() => {
-                  if (matchStatus !== 'matched') {
-                    setMatchStatus('idle')
-                  }
-                }, 2000)
+                  setMatchStatus('idle')
+                }, 1500)
               }
             } catch (err) {
               console.error('Face match error:', err)
               setMatchStatus('idle')
+              isMatchingRef.current = false
             }
           }
         } else {
@@ -325,6 +329,7 @@ export default function ProfessorLoginPage() {
     setFaceDetected(false)
     setMatchStatus('idle')
     setMatchedProfessor(null)
+    isMatchingRef.current = false
   }
 
   return (

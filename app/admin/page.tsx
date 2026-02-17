@@ -2,7 +2,7 @@
 
 import { useAuth } from '@/contexts/AuthContext'
 import { useRouter } from 'next/navigation'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { Users, GraduationCap, BookOpen, BarChart3, LogOut, TrendingUp, Clock, CheckCircle, XCircle, AlertCircle, Calendar } from 'lucide-react'
 
 interface DashboardStats {
@@ -49,6 +49,7 @@ export default function AdminDashboard() {
     recentActivity: []
   })
   const [loadingStats, setLoadingStats] = useState(true)
+  const hasFetchedRef = useRef(false)
 
   useEffect(() => {
     if (!loading && (!user || user.role !== 'admin')) {
@@ -57,7 +58,8 @@ export default function AdminDashboard() {
   }, [user, loading, router])
 
   useEffect(() => {
-    if (user) {
+    if (user && user.id && !hasFetchedRef.current) {
+      hasFetchedRef.current = true
       fetchStats()
     }
   }, [user])

@@ -1,12 +1,11 @@
 'use client'
 
 import { useState } from 'react'
-import { X, Lock, Camera } from 'lucide-react'
+import { X, Camera } from 'lucide-react'
 
 interface ClassAccessModalProps {
   isOpen: boolean
   onClose: () => void
-  onPasswordClick: () => void
   onFaceRecognitionClick: () => void
   isLoading?: boolean
   professorName: string
@@ -15,7 +14,6 @@ interface ClassAccessModalProps {
 export function ClassAccessModal({                      
   isOpen,
   onClose,
-  onPasswordClick,
   onFaceRecognitionClick,
   isLoading = false,
   professorName
@@ -29,7 +27,7 @@ export function ClassAccessModal({
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-2xl font-bold text-gray-900">Access Class</h2>
-            <p className="text-sm text-gray-600 mt-1">Choose your authentication method</p>
+            <p className="text-sm text-gray-600 mt-1">Verify your identity to continue</p>
           </div>
           <button
             onClick={onClose}
@@ -48,25 +46,6 @@ export function ClassAccessModal({
 
         {/* Authentication Options */}
         <div className="grid grid-cols-1 gap-4">
-          {/* Password Option */}
-          <button
-            onClick={onPasswordClick}
-            disabled={isLoading}
-            className="relative group flex items-start gap-4 p-4 border-2 border-gray-200 rounded-lg hover:border-emerald-500 hover:bg-emerald-50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <div className="flex-shrink-0">
-              <div className="flex items-center justify-center h-12 w-12 rounded-lg bg-emerald-100 group-hover:bg-emerald-200 transition-colors">
-                <Lock className="h-6 w-6 text-emerald-600" />
-              </div>
-            </div>
-            <div className="text-left">
-              <p className="font-semibold text-gray-900">Password</p>
-              <p className="text-sm text-gray-600 mt-0.5">
-                Enter your professor password to access the class
-              </p>
-            </div>
-          </button>
-
           {/* Face Registration Option */}
           <button
             onClick={onFaceRecognitionClick}

@@ -5,13 +5,13 @@ import { getSupabaseAdmin } from '@/utils/supabase/admin'
 /**
  * Determine attendance status based on class start time.
  * - Within 20 minutes of start (grace period) → 'present'
- * - After 20 minutes → 'late'
- * - After 60 minutes → locked (no more marking allowed)
+ * - 20-30 minutes → 'late'
+ * - After 30 minutes → locked (no more marking allowed)
  * 
- * Example: If class starts at 6:00 AM:
- * - 6:00-6:20 AM → Present
- * - 6:21-7:00 AM → Late
- * - 7:01+ AM → Locked
+ * Example: If class starts at 8:00 AM:
+ * - 8:00-8:20 AM → Present
+ * - 8:21-8:30 AM → Late
+ * - 8:30+ AM → Locked
  */
 function getAttendanceStatus(startTime: string | null, dayOfWeek: string | null): { status: 'present' | 'late'; locked: boolean } {
   if (!startTime || !dayOfWeek) {
@@ -35,13 +35,11 @@ function getAttendanceStatus(startTime: string | null, dayOfWeek: string | null)
   const diffMinutes = diffMs / (1000 * 60)
 
   // Grace Period: 20 minutes after class start (students marked as 'present')
-  // For example: if class starts at 6:00 AM, students arriving from 6:00-6:20 are 'present'
   const GRACE_PERIOD = 20
   // Late threshold: After 20 minutes, students marked as 'late'
-  // For example: if class starts at 6:00 AM, students arriving at 6:21+ are 'late'
   const LATE_THRESHOLD = 20
-  // Lock threshold: Keep attendance open for late marking (can adjust separately if needed)
-  const LOCK_THRESHOLD = 60 // Allow late marking for up to 60 minutes
+  // Lock threshold: After 30 minutes, attendance is locked
+  const LOCK_THRESHOLD = 30
 
   if (diffMinutes < 0) {
     // Before class starts — mark as present (early arrival)
@@ -102,11 +100,11 @@ export async function POST(request: NextRequest) {
 
     // If locked, reject the attendance marking
     if (locked) {
-      console.log('🔒 Attendance locked — 60+ minutes past class start')
+      console.log('🔒 Attendance locked — 30+ minutes past class start')
       return NextResponse.json({
         success: false,
         locked: true,
-        message: 'Attendance recording is locked (60+ minutes past class start time)'
+        message: 'Attendance recording is locked (30+ minutes past class start time)'
       })
     }
 

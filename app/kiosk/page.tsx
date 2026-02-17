@@ -2,151 +2,180 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { Camera, CheckCircle, XCircle, Clock, AlertTriangle, Loader2, Volume2, VolumeX, ArrowLeft } from 'lucide-react'
-import { extractFaceNetFromVideo, checkFaceNetHealth } from '@/lib/facenet-python-api'
-import { initializeFaceDetection } from '@/lib/mediapipe-face'
+import { Camera, CheckCircle, XCircle, Clock, AlertTriangle, Loader2, Volume2, VolumeX, Users, Lock, GraduationCap, BookOpen, Scan } from 'lucide-react'
+import { extractFaceNetFromVideo, checkFaceNetHealth, loadSessionEncodings, clearSessionEncodings, RealtimeRecognizer } from '@/lib/facenet-python-api'
+import type { DetectedFace, RecognizedFace, RecognitionResult } from '@/lib/facenet-python-api'
+import { initializeFaceDetection, detectFaceInVideo } from '@/lib/mediapipe-face'
 
-interface RecognizedStudent {
+// ============ Types ============
+
+interface ProfessorInfo {
   id: string
-  first_name: string
-  last_name: string
-  student_number: string
-  confidence: number
-  status: 'present' | 'late' | 'locked'
-  timestamp: string
+  firstName: string
+  lastName: string
+  email: string
+  role: string
+  employeeId: string
 }
+
+interface ScheduleInfo {
+  id: string
+  sectionId: string
+  sectionCode: string
+  room: string
+  dayOfWeek: string
+  startTime: string
+  endTime: string
+  totalStudents: number
+  semester?: string
+  academicYear?: string
+}
+
+interface EnrolledStudent {
+  id: string
+  studentNumber: string
+  firstName: string
+  lastName: string
+  status: 'present' | 'late' | 'absent' | 'pending'
+  checkedInAt: string | null
+  confidence: number | null
+}
+
+type KioskPhase = 'professor-scan' | 'schedule-select' | 'attendance-active' | 'attendance-locked'
+
+// ============ Component ============
 
 export default function AttendanceKioskPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const sectionId = searchParams.get('sectionId') || ''
-  const scheduleId = searchParams.get('scheduleId') || ''
+  
+  // --- Phase state ---
+  const [phase, setPhase] = useState<KioskPhase>('professor-scan')
 
+  // --- Professor scan state ---
+  const [professor, setProfessor] = useState<ProfessorInfo | null>(null)
+  const [schedules, setSchedules] = useState<ScheduleInfo[]>([])
+  const [selectedSchedule, setSelectedSchedule] = useState<ScheduleInfo | null>(null)
+
+  // --- Camera & detection ---
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const scanIntervalRef = useRef<NodeJS.Timeout | null>(null)
-  const idleTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const isMatchingRef = useRef<boolean>(false)
+  const hasMarkedAbsentRef = useRef<boolean>(false)
 
-  const [isReady, setIsReady] = useState(false)
-  const [isScanning, setIsScanning] = useState(false)
+  // --- General state ---
   const [serverHealthy, setServerHealthy] = useState(false)
+  const [modelsLoaded, setModelsLoaded] = useState(false)
   const [currentTime, setCurrentTime] = useState(new Date())
-  const [recentRecognitions, setRecentRecognitions] = useState<RecognizedStudent[]>([])
-  const [scanStatus, setScanStatus] = useState<'idle' | 'scanning' | 'matched' | 'no-match' | 'already-marked' | 'locked'>('idle')
-  const [statusMessage, setStatusMessage] = useState('')
-  const [attendanceLocked, setAttendanceLocked] = useState(false)
-  const [classInfo, setClassInfo] = useState<any>(null)
-  const [totalPresent, setTotalPresent] = useState(0)
-  const [totalLate, setTotalLate] = useState(0)
-  const [totalStudents, setTotalStudents] = useState(0)
-  const [idleSeconds, setIdleSeconds] = useState(0)
   const [soundEnabled, setSoundEnabled] = useState(true)
 
-  const IDLE_TIMEOUT = 60 // seconds before showing idle screen
+  // --- Professor scan UI ---
+  const [professorScanStatus, setProfessorScanStatus] = useState<'idle' | 'scanning' | 'matched' | 'not-found'>('idle')
+  const [faceDetected, setFaceDetected] = useState(false)
+  const [boundingBox, setBoundingBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null)
 
-  // Clock update
+  // --- Attendance state ---
+  const [scanStatus, setScanStatus] = useState<'idle' | 'scanning' | 'matched' | 'no-match' | 'already-marked' | 'locked'>('idle')
+  const [statusMessage, setStatusMessage] = useState('')
+  const [enrolledStudents, setEnrolledStudents] = useState<EnrolledStudent[]>([])
+  const [stats, setStats] = useState({ present: 0, late: 0, absent: 0, pending: 0, total: 0 })
+  const [attendanceLocked, setAttendanceLocked] = useState(false)
+  const [lockTimeRemaining, setLockTimeRemaining] = useState('')
+
+  // --- Multi-face state ---
+  const [detectedFaces, setDetectedFaces] = useState<DetectedFace[]>([])
+  const [faceMatchResults, setFaceMatchResults] = useState<Array<{ box: DetectedFace['box']; name: string; status: 'matched' | 'no-match' | 'already-marked' }>>([])
+  const attendanceCanvasRef = useRef<HTMLCanvasElement>(null)
+  const recognizerRef = useRef<RealtimeRecognizer | null>(null)
+  const markedStudentIdsRef = useRef<Set<string>>(new Set())
+  const markingStudentIdsRef = useRef<Set<string>>(new Set())
+  const lastActivityRef = useRef<number>(Date.now())
+  const inactivityTimerRef = useRef<NodeJS.Timeout | null>(null)
+
+  // ============ Effects ============
+
+  // Clock
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000)
     return () => clearInterval(timer)
   }, [])
 
-  // Check server health
+  // Inactivity detection - redirect to idle after 1 minute of no activity
   useEffect(() => {
-    const check = async () => {
+    const checkInactivity = () => {
+      const now = Date.now()
+      const inactiveTime = now - lastActivityRef.current
+      const ONE_MINUTE = 60000 // 60 seconds
+
+      if (inactiveTime >= ONE_MINUTE) {
+        // Get current params to pass to idle page
+        const sectionId = searchParams.get('sectionId') || selectedSchedule?.sectionId || ''
+        const scheduleId = searchParams.get('scheduleId') || selectedSchedule?.id || ''
+        
+        // Redirect to idle page
+        router.push(`/kiosk/idle?sectionId=${sectionId}&scheduleId=${scheduleId}`)
+      }
+    }
+
+    // Check every 5 seconds
+    const interval = setInterval(checkInactivity, 5000)
+    
+    return () => clearInterval(interval)
+  }, [router, searchParams, selectedSchedule])
+
+  // Reset activity on user interaction
+  useEffect(() => {
+    const resetActivity = () => {
+      lastActivityRef.current = Date.now()
+    }
+
+    // Listen for user interactions
+    window.addEventListener('mousemove', resetActivity)
+    window.addEventListener('mousedown', resetActivity)
+    window.addEventListener('keydown', resetActivity)
+    window.addEventListener('touchstart', resetActivity)
+    window.addEventListener('scroll', resetActivity)
+
+    return () => {
+      window.removeEventListener('mousemove', resetActivity)
+      window.removeEventListener('mousedown', resetActivity)
+      window.removeEventListener('keydown', resetActivity)
+      window.removeEventListener('touchstart', resetActivity)
+      window.removeEventListener('scroll', resetActivity)
+    }
+  }, [])
+
+  // Check server health + load models
+  useEffect(() => {
+    const init = async () => {
+      const [healthy, loaded] = await Promise.all([
+        checkFaceNetHealth(),
+        initializeFaceDetection()
+      ])
+      setServerHealthy(healthy)
+      setModelsLoaded(loaded)
+    }
+    init()
+    const interval = setInterval(async () => {
       const healthy = await checkFaceNetHealth()
       setServerHealthy(healthy)
-      if (!healthy) {
-        console.warn('⚠️ FaceNet server not responding')
-      }
-    }
-    check()
-    const interval = setInterval(check, 30000)
+    }, 30000)
     return () => clearInterval(interval)
   }, [])
 
-  // Fetch class info and check lock status
-  useEffect(() => {
-    if (!sectionId) return
-    
-    const fetchClassInfo = async () => {
-      try {
-        const res = await fetch(`/api/attendance/class-info?sectionId=${sectionId}&scheduleId=${scheduleId}`)
-        const data = await res.json()
-        if (data.success) {
-          setClassInfo(data.classInfo)
-          setAttendanceLocked(data.locked)
-          setTotalStudents(data.totalStudents || 0)
-        }
-      } catch (err) {
-        console.error('Failed to fetch class info:', err)
-      }
-    }
-    fetchClassInfo()
-    const interval = setInterval(fetchClassInfo, 60000) // re-check every minute
-    return () => clearInterval(interval)
-  }, [sectionId, scheduleId])
-
-  // Fetch today's stats
-  useEffect(() => {
-    if (!sectionId) return
-
-    const fetchStats = async () => {
-      try {
-        const res = await fetch(`/api/attendance/today-stats?sectionId=${sectionId}`)
-        const data = await res.json()
-        if (data.success) {
-          setTotalPresent(data.present || 0)
-          setTotalLate(data.late || 0)
-        }
-      } catch (err) {
-        console.error('Failed to fetch stats:', err)
-      }
-    }
-    fetchStats()
-    const interval = setInterval(fetchStats, 10000)
-    return () => clearInterval(interval)
-  }, [sectionId])
-
-  // Idle timer
-  useEffect(() => {
-    const idleTimer = setInterval(() => {
-      setIdleSeconds(prev => prev + 1)
-    }, 1000)
-    return () => clearInterval(idleTimer)
-  }, [])
-
-  // Reset idle on any recognition activity
-  const resetIdle = useCallback(() => {
-    setIdleSeconds(0)
-  }, [])
-
-  // Initialize camera
+  // Initialize camera on mount
   useEffect(() => {
     const initCamera = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: 640, height: 480, facingMode: 'user' }
+          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }
         })
-        
-        // Check if component is still mounted and stream is valid
-        if (!streamRef.current && stream.active) {
-          streamRef.current = stream
-          if (videoRef.current) {
-            videoRef.current.srcObject = stream
-            const playPromise = videoRef.current.play()
-            if (playPromise !== undefined) {
-              playPromise.catch(err => {
-                // Handle AbortError from interrupted play request
-                if (err.name === 'AbortError') {
-                  console.warn('⚠️ Play request was interrupted (navigating away)')
-                } else {
-                  console.error('Camera play error:', err)
-                }
-              })
-            }
-          }
-          setIsReady(true)
+        streamRef.current = stream
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream
+          videoRef.current.play().catch(() => {})
         }
       } catch (err) {
         console.error('Camera error:', err)
@@ -155,132 +184,380 @@ export default function AttendanceKioskPage() {
     initCamera()
 
     return () => {
-      // Stop all camera tracks when component unmounts
       if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => {
-          track.stop()
-        })
+        streamRef.current.getTracks().forEach(t => t.stop())
         streamRef.current = null
       }
-      // Pause video and clear source
-      if (videoRef.current) {
-        videoRef.current.pause()
-        videoRef.current.srcObject = null
-      }
-      // Clear scanning interval
       if (scanIntervalRef.current) {
         clearInterval(scanIntervalRef.current)
       }
-      setIsReady(false)
     }
   }, [])
 
-  // Continuous face scanning
+  // Ensure video element always has the stream attached (handles phase transitions)
   useEffect(() => {
-    if (!isReady || !serverHealthy || attendanceLocked) return
+    if (videoRef.current && streamRef.current && videoRef.current.srcObject !== streamRef.current) {
+      videoRef.current.srcObject = streamRef.current
+      videoRef.current.play().catch(() => {})
+    }
+  }, [phase])
 
-    const scanFace = async () => {
-      if (!videoRef.current || isScanning) return
+  // ============ Phase 1: Professor Face Scan ============
 
-      setIsScanning(true)
+  useEffect(() => {
+    if (phase !== 'professor-scan' || !serverHealthy || !modelsLoaded) return
+
+    const scanProfessor = async () => {
+      if (!videoRef.current || isMatchingRef.current) return
+
       try {
-        // Extract face embedding from video
-        const embedding = await extractFaceNetFromVideo(videoRef.current)
-        
-        if (!embedding.detected || !embedding.embedding) {
-          setScanStatus('idle')
-          setIsScanning(false)
-          return
-        }
+        const [mediapipeResult, pythonResult] = await Promise.all([
+          detectFaceInVideo(videoRef.current!),
+          extractFaceNetFromVideo(videoRef.current!)
+        ])
 
-        setScanStatus('scanning')
-
-        // Match face against registered students in this section only
-        const matchRes = await fetch('/api/attendance/match-face', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            faceDescriptor: embedding.embedding,
-            sectionId: sectionId // Only match students enrolled in this section
+        // Update bounding box
+        if (mediapipeResult.detected && mediapipeResult.boundingBox && videoRef.current) {
+          const video = videoRef.current
+          const { xCenter, yCenter, width, height } = mediapipeResult.boundingBox
+          const pixelX = (xCenter - width / 2) * video.videoWidth
+          const pixelY = (yCenter - height / 2) * video.videoHeight
+          const pixelWidth = width * video.videoWidth
+          const pixelHeight = height * video.videoHeight
+          const padding = 40
+          setBoundingBox({
+            x: Math.max(0, pixelX - padding),
+            y: Math.max(0, pixelY - padding),
+            width: Math.min(video.videoWidth - pixelX + padding, pixelWidth + padding * 2),
+            height: Math.min(video.videoHeight - pixelY + padding, pixelHeight + padding * 2)
           })
-        })
-        const matchData = await matchRes.json()
-
-        if (!matchData.matched) {
-          setScanStatus('no-match')
-          setStatusMessage('Face not registered in this section')
-          setTimeout(() => setScanStatus('idle'), 2000)
-          setIsScanning(false)
-          return
+        } else {
+          setBoundingBox(null)
         }
 
-        resetIdle()
+        if (pythonResult.detected && pythonResult.embedding) {
+          setFaceDetected(true)
+          // Reset inactivity timer on face detection
+          lastActivityRef.current = Date.now()
 
-        // Mark attendance with time-based rules
-        const markRes = await fetch('/api/attendance/mark', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sectionId,
-            studentId: matchData.student.id,
-            faceMatchConfidence: matchData.confidence,
-            scheduleId
-          })
-        })
-        const markData = await markRes.json()
+          if (!isMatchingRef.current) {
+            isMatchingRef.current = true
+            setProfessorScanStatus('scanning')
 
-        if (markData.alreadyMarked) {
-          setScanStatus('already-marked')
-          setStatusMessage(`${matchData.student.first_name} ${matchData.student.last_name} - Already recorded`)
-          setTimeout(() => setScanStatus('idle'), 3000)
-        } else if (markData.locked) {
-          setScanStatus('locked')
-          setStatusMessage('Attendance recording is locked (30+ minutes past start)')
-          setTimeout(() => setScanStatus('idle'), 3000)
-        } else if (markData.success) {
-          const status = markData.record?.status || 'present'
-          setScanStatus('matched')
-          setStatusMessage(`${matchData.student.first_name} ${matchData.student.last_name} - ${status === 'late' ? 'LATE' : 'PRESENT'}`)
-          
-          const recognition: RecognizedStudent = {
-            id: matchData.student.id,
-            first_name: matchData.student.first_name,
-            last_name: matchData.student.last_name,
-            student_number: matchData.student.student_number,
-            confidence: matchData.confidence,
-            status: status,
-            timestamp: new Date().toLocaleTimeString()
+            try {
+              const res = await fetch('/api/professor/face-login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ faceDescriptor: pythonResult.embedding })
+              })
+              const data = await res.json()
+
+              if (data.matched && data.professor) {
+                setProfessorScanStatus('matched')
+                const prof: ProfessorInfo = {
+                  id: data.professor.id,
+                  firstName: data.professor.firstName,
+                  lastName: data.professor.lastName,
+                  email: data.professor.email,
+                  role: data.professor.role,
+                  employeeId: data.professor.employeeId
+                }
+                setProfessor(prof)
+                playSound('success')
+
+                // Fetch professor's schedules for today
+                const schedRes = await fetch(`/api/kiosk/professor-schedule?professorId=${prof.id}`)
+                const schedData = await schedRes.json()
+
+                if (schedData.success && schedData.schedules.length > 0) {
+                  setSchedules(schedData.schedules)
+                  if (schedData.schedules.length === 1) {
+                    // Auto-select if only one schedule
+                    selectSchedule(schedData.schedules[0])
+                  } else {
+                    setPhase('schedule-select')
+                  }
+                } else {
+                  setStatusMessage('No classes scheduled for today')
+                  setTimeout(() => {
+                    resetToScan()
+                  }, 3000)
+                }
+              } else {
+                setProfessorScanStatus('not-found')
+                isMatchingRef.current = false
+                setTimeout(() => setProfessorScanStatus('idle'), 1500)
+              }
+            } catch (err) {
+              console.error('Professor match error:', err)
+              setProfessorScanStatus('idle')
+              isMatchingRef.current = false
+            }
           }
-          setRecentRecognitions(prev => [recognition, ...prev].slice(0, 20))
-
-          if (status === 'present') {
-            setTotalPresent(p => p + 1)
-          } else if (status === 'late') {
-            setTotalLate(p => p + 1)
+        } else {
+          setFaceDetected(false)
+          if (professorScanStatus === 'scanning') {
+            setProfessorScanStatus('idle')
           }
-
-          // Play sound
-          if (soundEnabled) {
-            playSound(status === 'late' ? 'late' : 'success')
-          }
-
-          setTimeout(() => setScanStatus('idle'), 3000)
         }
-      } catch (err) {
-        console.error('Scan error:', err)
-        setScanStatus('idle')
+      } catch (error) {
+        console.error('Professor scan error:', error)
       }
-      setIsScanning(false)
     }
 
-    // Scan every 2 seconds
-    scanIntervalRef.current = setInterval(scanFace, 2000)
+    scanIntervalRef.current = setInterval(scanProfessor, 300)
     return () => {
       if (scanIntervalRef.current) clearInterval(scanIntervalRef.current)
     }
-  }, [isReady, serverHealthy, attendanceLocked, isScanning, sectionId, scheduleId, soundEnabled, resetIdle])
+  }, [phase, serverHealthy, modelsLoaded])
+
+  // ============ Phase 2: Schedule Select ============
+
+  const selectSchedule = useCallback(async (schedule: ScheduleInfo) => {
+    setSelectedSchedule(schedule)
+    hasMarkedAbsentRef.current = false
+    isMatchingRef.current = false
+    markedStudentIdsRef.current = new Set()
+    markingStudentIdsRef.current = new Set()
+
+    // Load enrolled face encodings into Python server session cache
+    try {
+      const res = await fetch(`/api/attendance/section-encodings?sectionId=${schedule.sectionId}`)
+      const data = await res.json()
+      if (data.success && data.students?.length > 0) {
+        await loadSessionEncodings(schedule.sectionId, data.students)
+        console.log(`\u{1F4DA} Session loaded: ${data.students.length} students`)
+      }
+    } catch (err) {
+      console.error('Failed to load session encodings:', err)
+    }
+
+    setPhase('attendance-active')
+  }, [])
+
+  // ============ Phase 3: Attendance Scanning ============
+
+  // Fetch enrolled students periodically
+  useEffect(() => {
+    if ((phase !== 'attendance-active' && phase !== 'attendance-locked') || !selectedSchedule) return
+
+    const fetchStudents = async () => {
+      try {
+        const res = await fetch(`/api/attendance/enrolled-students?sectionId=${selectedSchedule.sectionId}`)
+        const data = await res.json()
+        if (data.success) {
+          setEnrolledStudents(data.students)
+          setStats(data.stats)
+        }
+      } catch (err) {
+        console.error('Failed to fetch students:', err)
+      }
+    }
+
+    fetchStudents()
+    const interval = setInterval(fetchStudents, 5000)
+    return () => clearInterval(interval)
+  }, [phase, selectedSchedule])
+
+  // Check lock time countdown
+  useEffect(() => {
+    if (phase !== 'attendance-active' || !selectedSchedule) return
+
+    const checkLock = () => {
+      const now = new Date()
+      const [hours, minutes] = selectedSchedule.startTime.split(':').map(Number)
+      const classStart = new Date(now)
+      classStart.setHours(hours, minutes, 0, 0)
+
+      const lockTime = new Date(classStart.getTime() + 30 * 60 * 1000)
+      const diffMs = lockTime.getTime() - now.getTime()
+
+      if (diffMs <= 0) {
+        // Lock attendance
+        setAttendanceLocked(true)
+        setPhase('attendance-locked')
+        setLockTimeRemaining('00:00')
+
+        // Auto-mark remaining students as absent
+        if (!hasMarkedAbsentRef.current) {
+          hasMarkedAbsentRef.current = true
+          markRemainingAbsent()
+        }
+      } else {
+        const mins = Math.floor(diffMs / 60000)
+        const secs = Math.floor((diffMs % 60000) / 1000)
+        setLockTimeRemaining(`${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`)
+      }
+    }
+
+    checkLock()
+    const interval = setInterval(checkLock, 1000)
+    return () => clearInterval(interval)
+  }, [phase, selectedSchedule])
+
+  // Multi-face real-time scanning via WebSocket
+  useEffect(() => {
+    if (phase !== 'attendance-active' || !serverHealthy || !selectedSchedule || attendanceLocked) return
+    if (!videoRef.current) return
+
+    const recognizer = new RealtimeRecognizer()
+    recognizerRef.current = recognizer
+
+    recognizer.start(videoRef.current, (result: RecognitionResult) => {
+      // Reset inactivity timer on face detection
+      lastActivityRef.current = Date.now()
+
+      if (!result.detected || result.faces.length === 0) {
+        setDetectedFaces([])
+        setFaceMatchResults([])
+        setScanStatus('idle')
+        return
+      }
+
+      // Update detected faces for canvas drawing
+      setDetectedFaces(result.faces.map(f => ({
+        index: f.index,
+        embedding: [],
+        embedding_size: 0,
+        box: f.box
+      })))
+
+      // Build UI match results
+      const uiResults: Array<{ box: DetectedFace['box']; name: string; status: 'matched' | 'no-match' | 'already-marked' }> = []
+
+      for (const face of result.faces) {
+        if (face.matched && face.studentId) {
+          // Check if already marked
+          if (markedStudentIdsRef.current.has(face.studentId)) {
+            uiResults.push({ box: face.box, name: face.name, status: 'already-marked' })
+          } else {
+            uiResults.push({ box: face.box, name: face.name, status: 'matched' })
+
+            // Mark attendance (only once per student)
+            if (!markingStudentIdsRef.current.has(face.studentId)) {
+              markingStudentIdsRef.current.add(face.studentId)
+
+              fetch('/api/attendance/mark', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  sectionId: selectedSchedule.sectionId,
+                  studentId: face.studentId,
+                  faceMatchConfidence: face.confidence,
+                  scheduleId: selectedSchedule.id
+                })
+              }).then(async res => {
+                const markData = await res.json()
+                if (markData.alreadyMarked) {
+                  markedStudentIdsRef.current.add(face.studentId!)
+                  markingStudentIdsRef.current.delete(face.studentId!)
+                } else if (markData.locked) {
+                  setAttendanceLocked(true)
+                  setPhase('attendance-locked')
+                  markingStudentIdsRef.current.delete(face.studentId!)
+                } else if (markData.success) {
+                  markedStudentIdsRef.current.add(face.studentId!)
+                  markingStudentIdsRef.current.delete(face.studentId!)
+                  const recStatus = markData.record?.status || 'present'
+                  playSound(recStatus === 'late' ? 'late' : 'success')
+                  refreshStudentList()
+                }
+              }).catch(() => {
+                markingStudentIdsRef.current.delete(face.studentId!)
+              })
+            }
+          }
+        } else {
+          uiResults.push({ box: face.box, name: 'Unknown', status: 'no-match' })
+        }
+      }
+
+      setFaceMatchResults(uiResults)
+
+      // Update aggregate scan status
+      const hasNewMatch = uiResults.some(r => r.status === 'matched')
+      const hasNoMatch = uiResults.some(r => r.status === 'no-match')
+      const allAlready = uiResults.length > 0 && uiResults.every(r => r.status === 'already-marked')
+
+      if (allAlready) {
+        setScanStatus('already-marked')
+        setStatusMessage('All detected faces already recorded')
+      } else if (hasNewMatch) {
+        setScanStatus('matched')
+        const names = uiResults.filter(r => r.status === 'matched').map(r => r.name).join(', ')
+        setStatusMessage(names)
+      } else if (hasNoMatch) {
+        setScanStatus('no-match')
+        setStatusMessage(`${result.faces.length} face(s) detected \u2014 not recognized`)
+      }
+    })
+
+    return () => {
+      recognizer.stop()
+      recognizerRef.current = null
+    }
+  }, [phase, serverHealthy, selectedSchedule, attendanceLocked])
+
+  // ============ Helpers ============
+
+  const refreshStudentList = async () => {
+    if (!selectedSchedule) return
+    try {
+      const res = await fetch(`/api/attendance/enrolled-students?sectionId=${selectedSchedule.sectionId}`)
+      const data = await res.json()
+      if (data.success) {
+        setEnrolledStudents(data.students)
+        setStats(data.stats)
+      }
+    } catch {}
+  }
+
+  const markRemainingAbsent = async () => {
+    if (!selectedSchedule) return
+    try {
+      await fetch('/api/attendance/mark-absent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sectionId: selectedSchedule.sectionId })
+      })
+      playSound('error')
+      // Refresh the student list to show newly absent students
+      setTimeout(refreshStudentList, 1000)
+    } catch (err) {
+      console.error('Error marking absences:', err)
+    }
+  }
+
+  const resetToScan = () => {
+    // Stop real-time recognizer
+    if (recognizerRef.current) {
+      recognizerRef.current.stop()
+      recognizerRef.current = null
+    }
+    clearSessionEncodings()
+
+    setProfessor(null)
+    setSchedules([])
+    setSelectedSchedule(null)
+    setEnrolledStudents([])
+    setStats({ present: 0, late: 0, absent: 0, pending: 0, total: 0 })
+    setAttendanceLocked(false)
+    setScanStatus('idle')
+    setProfessorScanStatus('idle')
+    setStatusMessage('')
+    setFaceDetected(false)
+    setBoundingBox(null)
+    setDetectedFaces([])
+    setFaceMatchResults([])
+    isMatchingRef.current = false
+    hasMarkedAbsentRef.current = false
+    markedStudentIdsRef.current = new Set()
+    markingStudentIdsRef.current = new Set()
+    setPhase('professor-scan')
+  }
 
   const playSound = (type: 'success' | 'late' | 'error') => {
+    if (!soundEnabled) return
     try {
       const ctx = new AudioContext()
       const osc = ctx.createOscillator()
@@ -307,41 +584,11 @@ export default function AttendanceKioskPage() {
     } catch {}
   }
 
-  // If idle for too long, redirect to idle display
-  useEffect(() => {
-    if (idleSeconds >= IDLE_TIMEOUT && sectionId) {
-      // Clean up camera before navigating away
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => {
-          track.stop()
-        })
-        streamRef.current = null
-      }
-      if (videoRef.current) {
-        videoRef.current.pause()
-        videoRef.current.srcObject = null
-      }
-      router.push(`/kiosk/idle?sectionId=${sectionId}&scheduleId=${scheduleId}`)
-    }
-  }, [idleSeconds, sectionId, scheduleId, router])
-
-  // If no section selected, show selection
-  if (!sectionId) {
-    return (
-      <div className="min-h-screen bg-gray-950 flex items-center justify-center text-white">
-        <div className="text-center">
-          <AlertTriangle className="w-16 h-16 mx-auto text-yellow-400 mb-4" />
-          <h1 className="text-2xl font-bold mb-2">No Class Selected</h1>
-          <p className="text-gray-400 mb-6">This kiosk requires a class session to be configured.</p>
-          <button
-            onClick={() => router.push('/login')}
-            className="px-6 py-3 bg-primary text-white rounded-xl hover:bg-primary/90 transition"
-          >
-            Go to Login
-          </button>
-        </div>
-      </div>
-    )
+  const formatTime = (timeStr: string) => {
+    const [h, m] = timeStr.split(':').map(Number)
+    const ampm = h >= 12 ? 'PM' : 'AM'
+    const hour = h % 12 || 12
+    return `${hour}:${m.toString().padStart(2, '0')} ${ampm}`
   }
 
   const getStatusColor = () => {
@@ -355,30 +602,420 @@ export default function AttendanceKioskPage() {
     }
   }
 
+  const getProfessorBorderColor = () => {
+    switch (professorScanStatus) {
+      case 'matched': return 'border-green-500 shadow-green-500/30'
+      case 'not-found': return 'border-red-500 shadow-red-500/30'
+      case 'scanning': return 'border-yellow-500 shadow-yellow-500/30 animate-pulse'
+      default: return faceDetected ? 'border-blue-500 shadow-blue-500/20' : 'border-gray-700'
+    }
+  }
+
+  // ============ Canvas Drawing (Professor Phase) ============
+
+  useEffect(() => {
+    if (phase !== 'professor-scan' || !canvasRef.current || !videoRef.current) return
+
+    const canvas = canvasRef.current
+    const video = videoRef.current
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
+    let animationId: number
+
+    const drawFrame = () => {
+      canvas.width = video.videoWidth
+      canvas.height = video.videoHeight
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+      if (boundingBox) {
+        const { x, y, width, height } = boundingBox
+        const boxColor = professorScanStatus === 'matched' ? '#10b981' :
+                         professorScanStatus === 'not-found' ? '#ef4444' :
+                         faceDetected ? '#3b82f6' : '#6b7280'
+
+        ctx.shadowColor = boxColor
+        ctx.shadowBlur = 20
+        ctx.strokeStyle = boxColor
+        ctx.lineWidth = 4
+        ctx.strokeRect(x, y, width, height)
+        ctx.shadowBlur = 0
+
+        // Corner brackets
+        const cornerLength = 35
+        ctx.lineWidth = 5
+        ctx.lineCap = 'round'
+
+        ctx.beginPath()
+        ctx.moveTo(x, y + cornerLength); ctx.lineTo(x, y); ctx.lineTo(x + cornerLength, y)
+        ctx.stroke()
+
+        ctx.beginPath()
+        ctx.moveTo(x + width - cornerLength, y); ctx.lineTo(x + width, y); ctx.lineTo(x + width, y + cornerLength)
+        ctx.stroke()
+
+        ctx.beginPath()
+        ctx.moveTo(x, y + height - cornerLength); ctx.lineTo(x, y + height); ctx.lineTo(x + cornerLength, y + height)
+        ctx.stroke()
+
+        ctx.beginPath()
+        ctx.moveTo(x + width - cornerLength, y + height); ctx.lineTo(x + width, y + height); ctx.lineTo(x + width, y + height - cornerLength)
+        ctx.stroke()
+
+        // Status label
+        if (professorScanStatus !== 'idle') {
+          const labelText = professorScanStatus === 'matched'
+            ? `\u2713 Prof. ${professor?.firstName} ${professor?.lastName}`
+            : professorScanStatus === 'not-found'
+              ? '\u2717 Face not recognized'
+              : '\uD83D\uDD0D Scanning...'
+
+          ctx.font = 'bold 16px system-ui, sans-serif'
+          const textWidth = ctx.measureText(labelText).width
+          const padding = 12
+          const labelHeight = 32
+
+          const bgColor = professorScanStatus === 'matched' ? 'rgba(16, 185, 129, 0.95)' :
+                          professorScanStatus === 'not-found' ? 'rgba(239, 68, 68, 0.95)' :
+                          'rgba(59, 130, 246, 0.95)'
+
+          ctx.fillStyle = bgColor
+          ctx.beginPath()
+          const labelX = x
+          const labelY = y - labelHeight - 8
+          ctx.roundRect(labelX, labelY, textWidth + padding * 2, labelHeight, 6)
+          ctx.fill()
+
+          ctx.save()
+          ctx.scale(-1, 1)
+          ctx.fillStyle = 'white'
+          ctx.fillText(labelText, -(labelX + padding + textWidth), labelY + 22)
+          ctx.restore()
+        }
+      }
+
+      animationId = requestAnimationFrame(drawFrame)
+    }
+
+    drawFrame()
+    return () => {
+      if (animationId) cancelAnimationFrame(animationId)
+    }
+  }, [phase, boundingBox, professorScanStatus, faceDetected, professor])
+
+  // ============ Canvas Drawing (Attendance Phase — Multi-face boxes) ============
+
+  useEffect(() => {
+    if ((phase !== 'attendance-active' && phase !== 'attendance-locked') || !attendanceCanvasRef.current || !videoRef.current) return
+
+    const canvas = attendanceCanvasRef.current
+    const video = videoRef.current
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
+    let animationId: number
+
+    const drawFrame = () => {
+      canvas.width = video.videoWidth
+      canvas.height = video.videoHeight
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+      // Draw boxes for match results (colored by status)
+      if (faceMatchResults.length > 0) {
+        for (const result of faceMatchResults) {
+          const { box, name, status } = result
+          const color = status === 'matched' ? '#10b981' :
+                        status === 'already-marked' ? '#3b82f6' :
+                        '#ef4444'
+
+          // Mirror the x coordinate since video is flipped
+          const mirroredLeft = canvas.width - box.right
+          const x = mirroredLeft
+          const y = box.top
+          const w = box.width
+          const h = box.height
+
+          ctx.shadowColor = color
+          ctx.shadowBlur = 15
+          ctx.strokeStyle = color
+          ctx.lineWidth = 3
+          ctx.strokeRect(x, y, w, h)
+          ctx.shadowBlur = 0
+
+          // Corner brackets
+          const cl = 25
+          ctx.lineWidth = 4
+          ctx.lineCap = 'round'
+          ctx.beginPath(); ctx.moveTo(x, y + cl); ctx.lineTo(x, y); ctx.lineTo(x + cl, y); ctx.stroke()
+          ctx.beginPath(); ctx.moveTo(x + w - cl, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + cl); ctx.stroke()
+          ctx.beginPath(); ctx.moveTo(x, y + h - cl); ctx.lineTo(x, y + h); ctx.lineTo(x + cl, y + h); ctx.stroke()
+          ctx.beginPath(); ctx.moveTo(x + w - cl, y + h); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w, y + h - cl); ctx.stroke()
+
+          // Name label
+          const labelText = status === 'matched' ? `\u2713 ${name}` :
+                            status === 'already-marked' ? `\u25CF ${name}` :
+                            '\u2717 Unknown'
+          ctx.font = 'bold 14px system-ui, sans-serif'
+          const tw = ctx.measureText(labelText).width
+          const pd = 10
+          const lh = 28
+
+          const bgColor = status === 'matched' ? 'rgba(16, 185, 129, 0.9)' :
+                          status === 'already-marked' ? 'rgba(59, 130, 246, 0.9)' :
+                          'rgba(239, 68, 68, 0.9)'
+
+          ctx.fillStyle = bgColor
+          ctx.beginPath()
+          const lx = x
+          const ly = y - lh - 6
+          ctx.roundRect(lx, ly, tw + pd * 2, lh, 5)
+          ctx.fill()
+
+          ctx.fillStyle = 'white'
+          ctx.fillText(labelText, lx + pd, ly + 19)
+        }
+      } else if (detectedFaces.length > 0 && scanStatus === 'scanning') {
+        // Draw neutral boxes for detected faces while scanning
+        for (const face of detectedFaces) {
+          const mirroredLeft = canvas.width - face.box.right
+          ctx.strokeStyle = '#eab308'
+          ctx.lineWidth = 2
+          ctx.setLineDash([8, 4])
+          ctx.strokeRect(mirroredLeft, face.box.top, face.box.width, face.box.height)
+          ctx.setLineDash([])
+        }
+      }
+
+      animationId = requestAnimationFrame(drawFrame)
+    }
+
+    drawFrame()
+    return () => {
+      if (animationId) cancelAnimationFrame(animationId)
+    }
+  }, [phase, detectedFaces, faceMatchResults, scanStatus])
+
+  // ============ Render ============
+
+  // --- Phase 1: Professor Scan ---
+  if (phase === 'professor-scan') {
+    return (
+      <div className="min-h-screen bg-gray-950 text-white flex flex-col">
+        {/* Top Bar */}
+        <div className="flex items-center justify-between px-6 py-4 bg-gray-900/80 backdrop-blur border-b border-gray-800">
+          <div className="flex items-center gap-4">
+            <div className="bg-primary/20 p-2 rounded-lg">
+              <Camera className="w-6 h-6 text-primary" />
+            </div>
+            <div>
+              <h1 className="text-lg font-bold tracking-tight">VeriFace Attendance Kiosk</h1>
+              <p className="text-sm text-gray-400">Professor verification required</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-6">
+            <div className="flex items-center gap-2">
+              <span className={`w-2 h-2 rounded-full ${serverHealthy ? 'bg-green-400' : 'bg-red-400'} animate-pulse`} />
+              <span className="text-xs text-gray-400">{serverHealthy ? 'Online' : 'Offline'}</span>
+            </div>
+            <button onClick={() => setSoundEnabled(!soundEnabled)} className="text-gray-400 hover:text-white transition">
+              {soundEnabled ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
+            </button>
+            <div className="text-right">
+              <p className="text-2xl font-mono font-bold tabular-nums" suppressHydrationWarning>
+                {currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              </p>
+              <p className="text-xs text-gray-500" suppressHydrationWarning>
+                {currentTime.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Main Content */}
+        <div className="flex-1 flex items-center justify-center p-8">
+          <div className="text-center max-w-2xl">
+            <div className="mb-6">
+              <div className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-500/10 border border-emerald-500/30 rounded-full text-emerald-400 text-sm font-medium mb-4">
+                <GraduationCap className="w-4 h-4" />
+                Step 1: Professor Verification
+              </div>
+              <h2 className="text-3xl font-bold mb-2">Scan Your Face to Begin</h2>
+              <p className="text-gray-400">Position your face in front of the camera to open your class session</p>
+            </div>
+
+            {/* Camera Feed */}
+            <div className={`relative rounded-3xl overflow-hidden border-4 shadow-2xl transition-all duration-500 mx-auto ${getProfessorBorderColor()}`}
+                 style={{ width: '560px', height: '420px' }}>
+              <video
+                ref={videoRef}
+                className="w-full h-full object-cover"
+                autoPlay playsInline muted
+                style={{ transform: 'scaleX(-1)' }}
+              />
+              <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" style={{ transform: 'scaleX(-1)' }} />
+
+              {/* Status Overlay */}
+              <div className="absolute top-4 inset-x-0 flex justify-center">
+                <div className={`text-white text-sm font-medium px-4 py-2 rounded-full backdrop-blur-md flex items-center gap-2 ${
+                  professorScanStatus === 'matched' ? 'bg-emerald-600' :
+                  professorScanStatus === 'not-found' ? 'bg-red-600' :
+                  professorScanStatus === 'scanning' ? 'bg-blue-600' :
+                  faceDetected ? 'bg-gray-700' : 'bg-gray-900/80'
+                }`}>
+                  {professorScanStatus === 'matched' ? (
+                    <><CheckCircle className="w-4 h-4" /> Professor recognized</>
+                  ) : professorScanStatus === 'scanning' ? (
+                    <><Loader2 className="w-4 h-4 animate-spin" /> Verifying...</>
+                  ) : professorScanStatus === 'not-found' ? (
+                    'Face not recognized — Try again'
+                  ) : faceDetected ? (
+                    <><span className="w-2 h-2 rounded-full bg-white animate-pulse" /> Face detected</>
+                  ) : (
+                    'Position your face in the camera'
+                  )}
+                </div>
+              </div>
+
+              {/* Match success overlay */}
+              {professorScanStatus === 'matched' && professor && (
+                <div className="absolute inset-0 bg-emerald-900/40 flex items-center justify-center">
+                  <div className="text-center">
+                    <CheckCircle className="w-16 h-16 text-emerald-400 mx-auto mb-3" />
+                    <p className="text-2xl font-bold text-emerald-300">
+                      Welcome, Prof. {professor.firstName} {professor.lastName}!
+                    </p>
+                    <p className="text-emerald-400/70 mt-2">Loading your schedule...</p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Status Message */}
+            {statusMessage && (
+              <p className="mt-4 text-lg text-yellow-400 font-medium">{statusMessage}</p>
+            )}
+
+            {!serverHealthy && (
+              <div className="mt-6 flex items-center justify-center gap-2 text-amber-400">
+                <AlertTriangle className="w-5 h-5" />
+                <span>Face recognition server is unavailable</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // --- Phase 2: Schedule Select ---
+  if (phase === 'schedule-select') {
+    return (
+      <div className="min-h-screen bg-gray-950 text-white flex flex-col">
+        {/* Top Bar */}
+        <div className="flex items-center justify-between px-6 py-4 bg-gray-900/80 backdrop-blur border-b border-gray-800">
+          <div className="flex items-center gap-4">
+            <div className="bg-primary/20 p-2 rounded-lg">
+              <Camera className="w-6 h-6 text-primary" />
+            </div>
+            <div>
+              <h1 className="text-lg font-bold tracking-tight">VeriFace Attendance Kiosk</h1>
+              {professor && (
+                <p className="text-sm text-emerald-400">Prof. {professor.firstName} {professor.lastName}</p>
+              )}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-6">
+            <div className="text-right">
+              <p className="text-2xl font-mono font-bold tabular-nums" suppressHydrationWarning>
+                {currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              </p>
+              <p className="text-xs text-gray-500" suppressHydrationWarning>
+                {currentTime.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Schedule Selection */}
+        <div className="flex-1 flex items-center justify-center p-8">
+          <div className="max-w-2xl w-full">
+            <div className="text-center mb-8">
+              <div className="inline-flex items-center gap-2 px-4 py-2 bg-blue-500/10 border border-blue-500/30 rounded-full text-blue-400 text-sm font-medium mb-4">
+                <BookOpen className="w-4 h-4" />
+                Step 2: Select Class
+              </div>
+              <h2 className="text-3xl font-bold mb-2">Select Your Class Session</h2>
+              <p className="text-gray-400">You have {schedules.length} class{schedules.length > 1 ? 'es' : ''} today. Choose which one to open attendance for.</p>
+            </div>
+
+            <div className="space-y-4">
+              {schedules.map(schedule => (
+                <button
+                  key={schedule.id}
+                  onClick={() => selectSchedule(schedule)}
+                  className="w-full p-6 bg-gray-900 border border-gray-800 rounded-2xl hover:border-emerald-500/50 hover:bg-gray-900/80 transition-all group text-left"
+                >
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="flex items-center gap-3 mb-2">
+                        <span className="text-lg font-bold text-white group-hover:text-emerald-400 transition-colors">
+                          {schedule.sectionCode}
+                        </span>
+                        <span className="text-xs px-2 py-1 bg-gray-800 rounded-full text-gray-400">
+                          {schedule.room}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-4 text-sm text-gray-400">
+                        <span className="flex items-center gap-1">
+                          <Clock className="w-4 h-4" />
+                          {formatTime(schedule.startTime)} — {formatTime(schedule.endTime)}
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <Users className="w-4 h-4" />
+                          {schedule.totalStudents} students
+                        </span>
+                      </div>
+                    </div>
+                    <div className="text-emerald-500 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Scan className="w-8 h-8" />
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            <button
+              onClick={resetToScan}
+              className="mt-6 w-full py-3 text-gray-500 hover:text-white transition-colors text-sm"
+            >
+              \u2190 Back to professor scan
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // --- Phase 3 & 4: Attendance Active / Locked ---
   return (
-    <div className="min-h-screen bg-gray-950 text-white flex flex-col" onClick={resetIdle}>
+    <div className="min-h-screen bg-gray-950 text-white flex flex-col">
       {/* Top Bar */}
       <div className="flex items-center justify-between px-6 py-4 bg-gray-900/80 backdrop-blur border-b border-gray-800">
         <div className="flex items-center gap-4">
-          <button
-            onClick={() => router.push('/professor')}
-            className="p-2 rounded-lg hover:bg-gray-800 transition-colors text-gray-400 hover:text-white"
-            title="Go to professor dashboard"
-          >
-            <ArrowLeft className="w-6 h-6" />
-          </button>
           <div className="bg-primary/20 p-2 rounded-lg">
             <Camera className="w-6 h-6 text-primary" />
           </div>
           <div>
             <h1 className="text-lg font-bold tracking-tight">VeriFace Attendance Kiosk</h1>
-            {classInfo && (
+            {professor && selectedSchedule && (
               <div className="flex items-center gap-2">
                 <span className="text-sm font-semibold px-2 py-0.5 bg-emerald-500/20 text-emerald-400 rounded">
-                  {classInfo.section_code}
+                  {selectedSchedule.sectionCode}
                 </span>
                 <p className="text-sm text-gray-400">
-                  {classInfo.room} &bull; {classInfo.day_of_week}
+                  {selectedSchedule.room} • Prof. {professor.firstName} {professor.lastName}
                 </p>
               </div>
             )}
@@ -386,6 +1023,22 @@ export default function AttendanceKioskPage() {
         </div>
 
         <div className="flex items-center gap-6">
+          {/* Lock countdown */}
+          {phase === 'attendance-active' && (
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-amber-500/10 border border-amber-500/30 rounded-lg">
+              <Clock className="w-4 h-4 text-amber-400" />
+              <span className="text-sm font-mono text-amber-400">{lockTimeRemaining}</span>
+              <span className="text-xs text-amber-400/70">until lock</span>
+            </div>
+          )}
+
+          {phase === 'attendance-locked' && (
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-red-500/10 border border-red-500/30 rounded-lg">
+              <Lock className="w-4 h-4 text-red-400" />
+              <span className="text-sm font-semibold text-red-400">LOCKED</span>
+            </div>
+          )}
+
           {/* Server Status */}
           <div className="flex items-center gap-2">
             <span className={`w-2 h-2 rounded-full ${serverHealthy ? 'bg-green-400' : 'bg-red-400'} animate-pulse`} />
@@ -399,10 +1052,10 @@ export default function AttendanceKioskPage() {
 
           {/* Clock */}
           <div className="text-right">
-            <p className="text-2xl font-mono font-bold tabular-nums">
+            <p className="text-2xl font-mono font-bold tabular-nums" suppressHydrationWarning>
               {currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
             </p>
-            <p className="text-xs text-gray-500">
+            <p className="text-xs text-gray-500" suppressHydrationWarning>
               {currentTime.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
             </p>
           </div>
@@ -413,61 +1066,78 @@ export default function AttendanceKioskPage() {
       <div className="flex-1 flex">
         {/* Left: Camera Feed */}
         <div className="flex-1 flex flex-col items-center justify-center p-8">
-          {/* Attendance Lock Warning */}
-          {attendanceLocked && (
-            <div className="mb-6 px-6 py-3 bg-orange-500/20 border border-orange-500/50 rounded-xl flex items-center gap-3">
-              <AlertTriangle className="w-5 h-5 text-orange-400" />
-              <span className="text-orange-300 font-medium">Attendance recording is locked (30+ minutes past class start)</span>
+          {/* Locked Banner */}
+          {phase === 'attendance-locked' && (
+            <div className="mb-6 px-6 py-4 bg-red-500/10 border border-red-500/30 rounded-xl flex items-center gap-3">
+              <Lock className="w-6 h-6 text-red-400" />
+              <div>
+                <span className="text-red-300 font-bold text-lg">Attendance Session Closed</span>
+                <p className="text-red-400/70 text-sm">All unscanned students have been marked as absent.</p>
+              </div>
             </div>
           )}
 
-          {/* Camera with Status Border */}
-          <div className={`relative rounded-3xl overflow-hidden border-4 shadow-2xl transition-all duration-500 ${getStatusColor()}`}>
+          {/* Camera */}
+          <div className={`relative rounded-3xl overflow-hidden border-4 shadow-2xl transition-all duration-500 mx-auto ${
+            phase === 'attendance-locked' ? 'border-red-500/50 opacity-60' : getStatusColor()
+          }`}
+               style={{ width: '560px', height: '420px' }}>
             <video
               ref={videoRef}
-              className="w-140 h-105 object-cover mirror"
-              autoPlay
-              playsInline
-              muted
+              className="w-full h-full object-cover"
+              autoPlay playsInline muted
               style={{ transform: 'scaleX(-1)' }}
             />
-            <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
-            
-            {/* Scan overlay */}
+            {/* Multi-face bounding box canvas overlay */}
+            <canvas
+              ref={attendanceCanvasRef}
+              className="absolute inset-0 w-full h-full pointer-events-none"
+              style={{ transform: 'scaleX(-1)' }}
+            />
+
+            {/* Face count indicator */}
+            {detectedFaces.length > 0 && phase === 'attendance-active' && (
+              <div className="absolute top-4 left-4 bg-black/60 text-white text-sm font-medium px-3 py-1.5 rounded-full backdrop-blur-md flex items-center gap-2">
+                <Users className="w-4 h-4" />
+                {detectedFaces.length} face{detectedFaces.length > 1 ? 's' : ''} detected
+              </div>
+            )}
+
+            {/* Scanning overlay (pill in corner, not full-screen block) */}
             {scanStatus === 'scanning' && (
-              <div className="absolute inset-0 flex items-center justify-center bg-black/30">
-                <div className="flex flex-col items-center gap-2">
-                  <Loader2 className="w-10 h-10 animate-spin text-yellow-400" />
-                  <span className="text-sm font-medium text-yellow-300">Scanning...</span>
+              <div className="absolute top-4 right-4 bg-yellow-500/80 text-white text-sm font-medium px-3 py-1.5 rounded-full backdrop-blur-md flex items-center gap-2">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Scanning {detectedFaces.length} face{detectedFaces.length > 1 ? 's' : ''}...
+              </div>
+            )}
+
+            {/* Multi-face matched summary (bottom overlay) */}
+            {scanStatus === 'matched' && faceMatchResults.length > 0 && (
+              <div className="absolute bottom-0 inset-x-0 bg-linear-to-t from-green-900/80 to-transparent pt-12 pb-4 px-4">
+                <div className="flex flex-wrap justify-center gap-2">
+                  {faceMatchResults.filter(r => r.status === 'matched').map((r, i) => (
+                    <span key={i} className="bg-green-500/90 text-white text-sm font-bold px-3 py-1 rounded-full flex items-center gap-1">
+                      <CheckCircle className="w-3.5 h-3.5" /> {r.name}
+                    </span>
+                  ))}
                 </div>
               </div>
             )}
 
-            {/* Match overlay */}
-            {scanStatus === 'matched' && (
-              <div className="absolute inset-0 flex items-center justify-center bg-green-600/30">
+            {phase === 'attendance-locked' && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/50">
                 <div className="flex flex-col items-center gap-2">
-                  <CheckCircle className="w-16 h-16 text-green-400" />
-                  <span className="text-lg font-bold text-green-300">RECOGNIZED</span>
-                </div>
-              </div>
-            )}
-
-            {/* No match overlay */}
-            {scanStatus === 'no-match' && (
-              <div className="absolute inset-0 flex items-center justify-center bg-red-600/20">
-                <div className="flex flex-col items-center gap-2">
-                  <XCircle className="w-16 h-16 text-red-400" />
-                  <span className="text-lg font-bold text-red-300">NOT RECOGNIZED</span>
+                  <Lock className="w-16 h-16 text-red-400" />
+                  <span className="text-lg font-bold text-red-300">SESSION CLOSED</span>
                 </div>
               </div>
             )}
           </div>
 
           {/* Status Message */}
-          <div className="mt-6 h-12 flex items-center justify-center">
-            {statusMessage && (
-              <p className={`text-xl font-semibold animate-in fade-in slide-in-from-bottom-2 ${
+          <div className="mt-6 min-h-12 flex items-center justify-center">
+            {statusMessage ? (
+              <p className={`text-lg font-semibold text-center max-w-xl ${
                 scanStatus === 'matched' ? 'text-green-400' :
                 scanStatus === 'no-match' ? 'text-red-400' :
                 scanStatus === 'already-marked' ? 'text-blue-400' :
@@ -476,91 +1146,132 @@ export default function AttendanceKioskPage() {
               }`}>
                 {statusMessage}
               </p>
-            )}
-            {scanStatus === 'idle' && !statusMessage && !attendanceLocked && (
-              <p className="text-gray-500 text-lg">Step in front of the camera to mark attendance</p>
-            )}
+            ) : phase === 'attendance-active' ? (
+              <p className="text-gray-500 text-lg">Step in front of the camera to mark attendance \u2014 supports multiple faces</p>
+            ) : null}
           </div>
 
           {/* Class Time Info */}
-          {classInfo && (
+          {selectedSchedule && (
             <div className="mt-4 flex items-center gap-4 text-sm text-gray-500">
               <span className="flex items-center gap-1">
                 <Clock className="w-4 h-4" />
-                {classInfo.start_time} - {classInfo.end_time}
+                {formatTime(selectedSchedule.startTime)} — {formatTime(selectedSchedule.endTime)}
               </span>
               <span>|</span>
-              <span>Late after 20 min from start</span>
+              <span>Present: 0-20 min • Late: 20-30 min • Lock: 30 min</span>
             </div>
+          )}
+
+          {/* End Session button (only when locked) */}
+          {phase === 'attendance-locked' && (
+            <button
+              onClick={resetToScan}
+              className="mt-6 px-6 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded-xl transition-colors font-medium"
+            >
+              Start New Session
+            </button>
           )}
         </div>
 
-        {/* Right: Stats & Recent Activity */}
-        <div className="w-96 border-l border-gray-800 bg-gray-900/50 flex flex-col">
+        {/* Right: Student List & Stats */}
+        <div className="w-105 border-l border-gray-800 bg-gray-900/50 flex flex-col">
           {/* Stats */}
           <div className="p-6 border-b border-gray-800">
-            <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Today&apos;s Attendance</h2>
-            <div className="grid grid-cols-3 gap-4">
-              <div className="bg-green-500/10 rounded-xl p-4 text-center border border-green-500/20">
-                <p className="text-3xl font-bold text-green-400">{totalPresent}</p>
-                <p className="text-xs text-green-300/70 mt-1">Present</p>
+            <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Attendance Summary</h2>
+            <div className="grid grid-cols-4 gap-3">
+              <div className="bg-green-500/10 rounded-xl p-3 text-center border border-green-500/20">
+                <p className="text-2xl font-bold text-green-400">{stats.present}</p>
+                <p className="text-xs text-green-300/70 mt-0.5">Present</p>
               </div>
-              <div className="bg-yellow-500/10 rounded-xl p-4 text-center border border-yellow-500/20">
-                <p className="text-3xl font-bold text-yellow-400">{totalLate}</p>
-                <p className="text-xs text-yellow-300/70 mt-1">Late</p>
+              <div className="bg-yellow-500/10 rounded-xl p-3 text-center border border-yellow-500/20">
+                <p className="text-2xl font-bold text-yellow-400">{stats.late}</p>
+                <p className="text-xs text-yellow-300/70 mt-0.5">Late</p>
               </div>
-              <div className="bg-red-500/10 rounded-xl p-4 text-center border border-red-500/20">
-                <p className="text-3xl font-bold text-red-400">{Math.max(0, totalStudents - totalPresent - totalLate)}</p>
-                <p className="text-xs text-red-300/70 mt-1">Absent</p>
+              <div className="bg-red-500/10 rounded-xl p-3 text-center border border-red-500/20">
+                <p className="text-2xl font-bold text-red-400">{stats.absent}</p>
+                <p className="text-xs text-red-300/70 mt-0.5">Absent</p>
+              </div>
+              <div className="bg-gray-500/10 rounded-xl p-3 text-center border border-gray-500/20">
+                <p className="text-2xl font-bold text-gray-400">{stats.pending}</p>
+                <p className="text-xs text-gray-300/70 mt-0.5">Pending</p>
               </div>
             </div>
+            {/* Progress bar */}
+            <div className="mt-4 h-2 bg-gray-800 rounded-full overflow-hidden flex">
+              {stats.total > 0 && (
+                <>
+                  <div className="bg-green-500 transition-all" style={{ width: `${(stats.present / stats.total) * 100}%` }} />
+                  <div className="bg-yellow-500 transition-all" style={{ width: `${(stats.late / stats.total) * 100}%` }} />
+                  <div className="bg-red-500 transition-all" style={{ width: `${(stats.absent / stats.total) * 100}%` }} />
+                </>
+              )}
+            </div>
+            <p className="text-xs text-gray-500 mt-2 text-right">{stats.present + stats.late} / {stats.total} checked in</p>
           </div>
 
-          {/* Recent Recognitions */}
-          <div className="flex-1 overflow-y-auto p-6">
-            <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Recent Activity</h2>
-            {recentRecognitions.length === 0 ? (
+          {/* Student List */}
+          <div className="flex-1 overflow-y-auto p-4">
+            <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3 px-2">
+              Student List ({enrolledStudents.length})
+            </h2>
+            {enrolledStudents.length === 0 ? (
               <div className="text-center py-12 text-gray-600">
-                <Camera className="w-10 h-10 mx-auto mb-3 opacity-30" />
-                <p className="text-sm">No students scanned yet</p>
+                <Users className="w-10 h-10 mx-auto mb-3 opacity-30" />
+                <p className="text-sm">No students enrolled</p>
               </div>
             ) : (
-              <div className="space-y-3">
-                {recentRecognitions.map((rec, idx) => (
+              <div className="space-y-1.5">
+                {enrolledStudents.map(student => (
                   <div
-                    key={`${rec.id}-${idx}`}
-                    className={`flex items-center gap-3 p-3 rounded-xl border transition-all ${
-                      idx === 0 ? 'animate-in fade-in slide-in-from-top-2' : ''
-                    } ${
-                      rec.status === 'present'
+                    key={student.id}
+                    className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border transition-all ${
+                      student.status === 'present'
                         ? 'bg-green-500/5 border-green-500/20'
-                        : rec.status === 'late'
+                        : student.status === 'late'
                         ? 'bg-yellow-500/5 border-yellow-500/20'
-                        : 'bg-red-500/5 border-red-500/20'
+                        : student.status === 'absent'
+                        ? 'bg-red-500/5 border-red-500/20'
+                        : 'bg-gray-800/30 border-gray-700/30'
                     }`}
                   >
-                    <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm ${
-                      rec.status === 'present' ? 'bg-green-500/20 text-green-400' :
-                      rec.status === 'late' ? 'bg-yellow-500/20 text-yellow-400' :
-                      'bg-red-500/20 text-red-400'
+                    {/* Status indicator */}
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
+                      student.status === 'present' ? 'bg-green-500/20 text-green-400' :
+                      student.status === 'late' ? 'bg-yellow-500/20 text-yellow-400' :
+                      student.status === 'absent' ? 'bg-red-500/20 text-red-400' :
+                      'bg-gray-700/50 text-gray-500'
                     }`}>
-                      {rec.first_name[0]}{rec.last_name[0]}
+                      {student.status === 'present' ? '\u2713' :
+                       student.status === 'late' ? '\u23F0' :
+                       student.status === 'absent' ? '\u2717' :
+                       '\u2014'}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-white truncate">
-                        {rec.first_name} {rec.last_name}
-                      </p>
-                      <p className="text-xs text-gray-500">{rec.student_number}</p>
-                    </div>
-                    <div className="text-right">
-                      <span className={`text-xs font-semibold px-2 py-1 rounded-full ${
-                        rec.status === 'present'
-                          ? 'bg-green-500/20 text-green-400'
-                          : 'bg-yellow-500/20 text-yellow-400'
+                      <p className={`text-sm font-medium truncate ${
+                        student.status === 'pending' ? 'text-gray-400' : 'text-white'
                       }`}>
-                        {rec.status === 'present' ? 'PRESENT' : 'LATE'}
+                        {student.lastName}, {student.firstName}
+                      </p>
+                      <p className="text-xs text-gray-500">{student.studentNumber}</p>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                        student.status === 'present' ? 'bg-green-500/20 text-green-400' :
+                        student.status === 'late' ? 'bg-yellow-500/20 text-yellow-400' :
+                        student.status === 'absent' ? 'bg-red-500/20 text-red-400' :
+                        'bg-gray-700/50 text-gray-500'
+                      }`}>
+                        {student.status === 'present' ? 'PRESENT' :
+                         student.status === 'late' ? 'LATE' :
+                         student.status === 'absent' ? 'ABSENT' :
+                         'PENDING'}
                       </span>
-                      <p className="text-xs text-gray-600 mt-1">{rec.timestamp}</p>
+                      {student.checkedInAt && (
+                        <p className="text-xs text-gray-600 mt-0.5">
+                          {new Date(student.checkedInAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                        </p>
+                      )}
                     </div>
                   </div>
                 ))}
