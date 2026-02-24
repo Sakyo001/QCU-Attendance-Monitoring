@@ -1,0 +1,20 @@
+# Railway deployment configuration
+# Docs: https://docs.railway.app/reference/config-as-code
+
+[build]
+# Use the facenet-specific Dockerfile (avoids conflict with Next.js root)
+builder = "dockerfile"
+dockerfilePath = "Dockerfile.facenet"
+
+[deploy]
+# Railway injects PORT automatically — no need to set it here
+startCommand = "python facenet-server.py"
+
+# /health returns JSON quickly without loading heavy models (just checks status)
+healthcheckPath = "/health"
+
+# TensorFlow + FaceNet model loading takes 60-120s on cold start — give it room
+healthcheckTimeout = 300
+
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3

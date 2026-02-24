@@ -1,0 +1,44 @@
+# ── FaceNet Real-Time Recognition Server ──────────────────────────────────────
+# Railway deployment Dockerfile
+# Python 3.10 required for TensorFlow 2.14 compatibility
+# ──────────────────────────────────────────────────────────────────────────────
+
+FROM python:3.10-slim
+
+# Keeps Python from generating .pyc files
+ENV PYTHONDONTWRITEBYTECODE=1
+# Turns off buffering for easier logging in Railway
+ENV PYTHONUNBUFFERED=1
+# Use Keras 2.x API to match keras-facenet expectations
+ENV TF_USE_LEGACY_KERAS=1
+# Suppress TF C++ INFO logs
+ENV TF_CPP_MIN_LOG_LEVEL=2
+
+WORKDIR /app
+
+# ── System dependencies ────────────────────────────────────────────────────────
+# libGL / libGLib are pulled in by opencv-python-headless at runtime
+# libgomp is required by TensorFlow BLAS ops
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libglib2.0-0 \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Python dependencies ────────────────────────────────────────────────────────
+COPY requirements-facenet.txt .
+
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements-facenet.txt
+
+# ── Application code ───────────────────────────────────────────────────────────
+COPY facenet-server.py .
+
+# Railway injects PORT dynamically — the app reads it via os.environ.get("PORT", 8000)
+# EXPOSE is informational only; Railway uses PORT env var
+EXPOSE 8000
+
+# Healthcheck so Railway knows when the server is ready
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${PORT:-8000}/health')"
+
+CMD ["python", "facenet-server.py"]

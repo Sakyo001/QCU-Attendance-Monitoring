@@ -24,11 +24,21 @@ import uvicorn
 import cv2
 import numpy as np
 import json
-import os
 from typing import List, Optional
 import base64
 import time
 import asyncio
+
+# ============ Environment Config ============
+
+PORT = int(os.environ.get("PORT", 8000))
+HOST = os.environ.get("HOST", "0.0.0.0")
+
+# CORS origins: comma-separated list via env, fallback to localhost for dev
+_cors_env = os.environ.get("CORS_ORIGINS", "http://localhost:3000,http://localhost:3001")
+ALLOWED_ORIGINS = [o.strip() for o in _cors_env.split(",") if o.strip()]
+
+RECOG_THRESHOLD = float(os.environ.get("RECOGNITION_THRESHOLD", "0.70"))
 
 # Suppress TensorFlow warnings
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
@@ -40,7 +50,7 @@ app = FastAPI(title="FaceNet Real-Time Multi-Face Recognition API")
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -218,7 +228,7 @@ def crop_and_embed(img_bgr: np.ndarray, boxes: list):
     return [(valid_indices[j], embs[j].tolist()) for j in range(len(crops))]
 
 
-def match_against_session(emb_pairs: list, boxes: list, threshold: float = 0.70):
+def _match_against_session_impl(emb_pairs: list, boxes: list, threshold: float = 0.70):
     """
     Match detected face embeddings against session-cached student embeddings.
     Uses numpy cosine similarity for fast in-memory matching.
@@ -263,6 +273,13 @@ def match_against_session(emb_pairs: list, boxes: list, threshold: float = 0.70)
             })
 
     return results
+
+
+def match_against_session(emb_pairs: list, boxes: list, threshold: float = None):
+    """Wrapper that uses RECOG_THRESHOLD env var as default."""
+    if threshold is None:
+        threshold = RECOG_THRESHOLD
+    return _match_against_session_impl(emb_pairs, boxes, threshold)
 
 
 def process_frame(img_bgr: np.ndarray):
@@ -454,6 +471,8 @@ async def health_check():
         "model": "keras-facenet",
         "detector": FAST_DETECTOR,
         "session_active": _session["active"],
+        "session_students": len(_session["students"]),
+        "threshold": RECOG_THRESHOLD,
     }
 
 
@@ -548,7 +567,7 @@ async def verify_face(request: VerifyRequest):
         if len(captured_embedding) != len(stored_embedding):
             raise HTTPException(400, f"Embedding size mismatch: {len(captured_embedding)} vs {len(stored_embedding)}")
         similarity = cosine_similarity(captured_embedding, stored_embedding)
-        THRESHOLD = 0.70
+        THRESHOLD = RECOG_THRESHOLD
         return {
             "verified": similarity >= THRESHOLD,
             "similarity": similarity,
@@ -569,7 +588,7 @@ async def compare_embeddings(data: dict):
         if len(embedding1) != len(embedding2):
             raise HTTPException(400, f"Embedding size mismatch: {len(embedding1)} vs {len(embedding2)}")
         similarity = cosine_similarity(embedding1, embedding2)
-        THRESHOLD = 0.70
+        THRESHOLD = RECOG_THRESHOLD
         return {
             "similarity": similarity,
             "threshold": THRESHOLD,
@@ -591,17 +610,21 @@ if __name__ == "__main__":
         det_info = "dlib HOG ~30ms"
     else:
         det_info = "OpenCV Haar ~10ms"
-    print(f"URL: http://localhost:8000")
-    print(f"Docs: http://localhost:8000/docs")
+    print(f"URL: http://{HOST}:{PORT}")
+    print(f"Docs: http://{HOST}:{PORT}/docs")
     print(f"Detector: {FAST_DETECTOR} ({det_info})")
     print(f"Embedder: keras-facenet (512D)")
-    print(f"WebSocket: ws://localhost:8000/ws/recognize")
-    print(f"Threshold: 70% cosine similarity")
+    print(f"WebSocket: ws://{HOST}:{PORT}/ws/recognize")
+    print(f"Threshold: {RECOG_THRESHOLD * 100:.0f}% cosine similarity")
+    print(f"CORS Origins: {ALLOWED_ORIGINS}")
     print("=" * 60 + "\n")
 
     uvicorn.run(
         app,
-        host="0.0.0.0",
-        port=8000,
+        host=HOST,
+        port=PORT,
         log_level="info",
+        # WebSocket ping/pong keepalive for Railway's 60s idle timeout
+        ws_ping_interval=20,
+        ws_ping_timeout=30,
     )
