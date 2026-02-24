@@ -1,5 +1,11 @@
 keras-facenet==0.3.2
 tensorflow==2.14.0
+# scipy is a required dependency of keras-facenet (was missing — caused model load failure)
+scipy>=1.11.0,<1.13
+# mtcnn is used by keras-facenet embedder.extract() for face detection
+mtcnn>=0.1.1
+# h5py is required by keras to load .h5 model weights
+h5py>=3.9.0
 # headless variant required on Railway (no display server)
 opencv-python-headless==4.9.0.80
 fastapi==0.109.0
