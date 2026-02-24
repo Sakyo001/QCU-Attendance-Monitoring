@@ -37,8 +37,9 @@ COPY facenet-server.py .
 # EXPOSE is informational only; Railway uses PORT env var
 EXPOSE 8000
 
-# Healthcheck so Railway knows when the server is ready
-HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+# /health returns 200 immediately (model loads async in background)
+# Railway uses healthcheckPath in railway.toml — this is for local docker use
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=5 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${PORT:-8000}/health')"
 
 CMD ["python", "facenet-server.py"]

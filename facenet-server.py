@@ -17,6 +17,7 @@ Speed improvement:
 import os
 os.environ['TF_USE_LEGACY_KERAS'] = '1'
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -43,9 +44,63 @@ RECOG_THRESHOLD = float(os.environ.get("RECOGNITION_THRESHOLD", "0.70"))
 # Suppress TensorFlow warnings
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
-from keras_facenet import FaceNet
+# ============ Model State (populated during lifespan startup) ============
 
-app = FastAPI(title="FaceNet Real-Time Multi-Face Recognition API")
+_model = {
+    "embedder": None,
+    "detector": "haar",   # updated after import attempt
+    "haar_cascade": None,
+    "ready": False,
+    "error": None,
+}
+
+
+def _load_models():
+    """Blocking model loader — runs in a thread executor so the event loop stays free."""
+    from keras_facenet import FaceNet
+
+    print("=" * 60)
+    print("Loading FaceNet model...")
+    embedder = FaceNet()
+    print("FaceNet model loaded (512D embeddings)")
+
+    # Try dlib HOG fast detector
+    try:
+        import face_recognition  # noqa: F401
+        _model["detector"] = "dlib_hog"
+        print("face_recognition (dlib HOG) loaded - fast detection enabled")
+    except ImportError:
+        _model["detector"] = "haar"
+        print("face_recognition not available - using OpenCV Haar cascade")
+
+    # OpenCV Haar cascade (always available fallback)
+    haar = cv2.CascadeClassifier(
+        cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+    )
+
+    _model["embedder"] = embedder
+    _model["haar_cascade"] = haar
+    _model["ready"] = True
+    print("=" * 60)
+    print("Server ready to handle requests.")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    FastAPI lifespan: load heavy TF/FaceNet models in a thread executor.
+    Uvicorn is fully up and /health returns 200 immediately while models load.
+    """
+    loop = asyncio.get_event_loop()
+    try:
+        await loop.run_in_executor(None, _load_models)
+    except Exception as exc:
+        _model["error"] = str(exc)
+        print(f"FATAL: Model loading failed: {exc}")
+    yield
+
+
+app = FastAPI(title="FaceNet Real-Time Multi-Face Recognition API", lifespan=lifespan)
 
 # CORS middleware
 app.add_middleware(
@@ -55,28 +110,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# ============ Model Loading ============
-
-print("=" * 60)
-print("Loading FaceNet model...")
-embedder = FaceNet()
-print("FaceNet model loaded (512D embeddings)")
-
-# Try to load face_recognition (dlib HOG) for fast detection
-try:
-    import face_recognition as fr
-    FAST_DETECTOR = "dlib_hog"
-    print("face_recognition (dlib HOG) loaded - fast detection enabled")
-except ImportError:
-    FAST_DETECTOR = "haar"
-    print("face_recognition not available - using OpenCV Haar cascade")
-
-# OpenCV Haar cascade (always available fallback)
-_haar_cascade = cv2.CascadeClassifier(
-    cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-)
-print("=" * 60)
 
 
 # ============ Session Cache ============
@@ -159,9 +192,10 @@ def detect_faces_fast(img_bgr: np.ndarray, scale: float = 0.5):
 
     boxes = []
 
-    if FAST_DETECTOR == "dlib_hog":
+    if _model["detector"] == "dlib_hog":
+        import face_recognition as _fr
         rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
-        locations = fr.face_locations(rgb, model="hog")
+        locations = _fr.face_locations(rgb, model="hog")
         for (top, right, bottom, left) in locations:
             boxes.append({
                 "left": int(left / scale),
@@ -173,7 +207,7 @@ def detect_faces_fast(img_bgr: np.ndarray, scale: float = 0.5):
             })
     else:
         gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-        rects = _haar_cascade.detectMultiScale(
+        rects = _model["haar_cascade"].detectMultiScale(
             gray, scaleFactor=1.1, minNeighbors=7, minSize=(40, 40)
         )
         for (x, y, fw, fh) in rects:
@@ -224,7 +258,7 @@ def crop_and_embed(img_bgr: np.ndarray, boxes: list):
         return []
 
     arr = np.array(crops)
-    embs = embedder.embeddings(arr)
+    embs = _model["embedder"].embeddings(arr)
     return [(valid_indices[j], embs[j].tolist()) for j in range(len(crops))]
 
 
@@ -291,6 +325,15 @@ def process_frame(img_bgr: np.ndarray):
     """
     start = time.time()
 
+    if not _model["ready"]:
+        return {
+            "detected": False,
+            "faces": [],
+            "num_faces": 0,
+            "error": "Model still loading, please retry shortly",
+            "processing_time_ms": 0,
+        }
+
     if not _session["active"]:
         return {
             "detected": False,
@@ -322,7 +365,7 @@ def process_frame(img_bgr: np.ndarray):
 
     processing_time = round((time.time() - start) * 1000, 1)
     matched_count = sum(1 for r in results if r["matched"])
-    print(f"Frame: {len(boxes)} face(s), {matched_count} matched in {processing_time}ms [{FAST_DETECTOR}]")
+    print(f"Frame: {len(boxes)} face(s), {matched_count} matched in {processing_time}ms [{_model['detector']}]")
 
     return {
         "detected": True,
@@ -457,7 +500,8 @@ async def root():
     return {
         "message": "FaceNet Real-Time Multi-Face Recognition API",
         "model": "keras-facenet",
-        "detector": FAST_DETECTOR,
+        "detector": _model["detector"],
+        "ready": _model["ready"],
         "session_active": _session["active"],
         "session_students": len(_session["students"]),
         "status": "running",
@@ -466,25 +510,31 @@ async def root():
 
 @app.get("/health")
 async def health_check():
+    # Always returns 200 so Railway healthcheck passes immediately on startup.
+    # Use the `ready` field to know when model loading is complete.
     return {
-        "status": "healthy",
+        "status": "loading" if not _model["ready"] else "healthy",
+        "ready": _model["ready"],
         "model": "keras-facenet",
-        "detector": FAST_DETECTOR,
+        "detector": _model["detector"],
         "session_active": _session["active"],
         "session_students": len(_session["students"]),
         "threshold": RECOG_THRESHOLD,
+        "error": _model.get("error"),
     }
 
 
 @app.post("/extract-embedding")
 async def extract_embedding(data: dict):
+    if not _model["ready"]:
+        raise HTTPException(status_code=503, detail="Model still loading, please retry shortly")
     try:
         image_b64 = data.get("image")
         if not image_b64:
             raise HTTPException(status_code=400, detail="No image provided")
 
         img = base64_to_image(image_b64)
-        faces = embedder.extract(img, threshold=0.95)
+        faces = _model["embedder"].extract(img, threshold=0.95)
 
         if not faces or len(faces) == 0:
             return {"detected": False, "error": "No face detected in image"}
@@ -509,6 +559,8 @@ async def extract_embedding(data: dict):
 
 @app.post("/extract-multiple-embeddings")
 async def extract_multiple_embeddings(data: dict):
+    if not _model["ready"]:
+        raise HTTPException(status_code=503, detail="Model still loading, please retry shortly")
     try:
         start_time = time.time()
         image_b64 = data.get("image")
@@ -516,7 +568,7 @@ async def extract_multiple_embeddings(data: dict):
             raise HTTPException(status_code=400, detail="No image provided")
 
         img = base64_to_image(image_b64)
-        faces = embedder.extract(img, threshold=0.95)
+        faces = _model["embedder"].extract(img, threshold=0.95)
 
         if not faces or len(faces) == 0:
             return {
@@ -557,9 +609,11 @@ async def extract_multiple_embeddings(data: dict):
 
 @app.post("/verify")
 async def verify_face(request: VerifyRequest):
+    if not _model["ready"]:
+        raise HTTPException(status_code=503, detail="Model still loading, please retry shortly")
     try:
         img = base64_to_image(request.image)
-        faces = embedder.extract(img, threshold=0.95)
+        faces = _model["embedder"].extract(img, threshold=0.95)
         if not faces or len(faces) == 0:
             return {"verified": False, "error": "No face detected"}
         captured_embedding = faces[0]["embedding"]
@@ -605,15 +659,11 @@ async def compare_embeddings(data: dict):
 if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("Starting FaceNet Real-Time Multi-Face Recognition Server")
+    print("(Models load in background — /health returns 200 immediately)")
     print("=" * 60)
-    if FAST_DETECTOR == "dlib_hog":
-        det_info = "dlib HOG ~30ms"
-    else:
-        det_info = "OpenCV Haar ~10ms"
     print(f"URL: http://{HOST}:{PORT}")
     print(f"Docs: http://{HOST}:{PORT}/docs")
-    print(f"Detector: {FAST_DETECTOR} ({det_info})")
-    print(f"Embedder: keras-facenet (512D)")
+    print(f"Embedder: keras-facenet (512D, loads async)")
     print(f"WebSocket: ws://{HOST}:{PORT}/ws/recognize")
     print(f"Threshold: {RECOG_THRESHOLD * 100:.0f}% cosine similarity")
     print(f"CORS Origins: {ALLOWED_ORIGINS}")

@@ -13,8 +13,9 @@ startCommand = "python facenet-server.py"
 # /health returns JSON quickly without loading heavy models (just checks status)
 healthcheckPath = "/health"
 
-# TensorFlow + FaceNet model loading takes 60-120s on cold start — give it room
-healthcheckTimeout = 300
+# /health returns 200 immediately (model loads in background)
+# so a short timeout is fine — Railway marks healthy within seconds
+healthcheckTimeout = 30
 
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
