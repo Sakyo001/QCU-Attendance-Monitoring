@@ -7,8 +7,70 @@
  * - Real-time multi-face recognition via session cache + fast detection + WebSocket
  */
 
-const FACENET_API_URL = process.env.NEXT_PUBLIC_FACENET_API_URL || 'http://localhost:8000'
-const FACENET_WS_URL = FACENET_API_URL.replace(/^http/, 'ws')
+const PRODUCTION_URL = 'https://qcu-attendance-monitoring-production.up.railway.app'
+const FACENET_API_URL = process.env.NEXT_PUBLIC_FACENET_API_URL || PRODUCTION_URL
+const FACENET_WS_URL = FACENET_API_URL.replace(/^https/, 'wss').replace(/^http/, 'ws')
+
+// ============ Retry helper ============
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
+/**
+ * fetch() wrapper that automatically retries on 503 (model still loading).
+ * Uses exponential backoff: 2s, 4s, 8s … up to maxRetries attempts.
+ */
+async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  maxRetries = 6,
+  baseDelayMs = 2000
+): Promise<Response> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const response = await fetch(url, init)
+    if (response.status !== 503) return response
+
+    if (attempt < maxRetries) {
+      const delay = baseDelayMs * Math.pow(1.5, attempt)
+      console.log(`⏳ Model loading — retrying in ${Math.round(delay / 1000)}s (attempt ${attempt + 1}/${maxRetries})`)
+      await sleep(delay)
+    }
+  }
+  // Return the last 503 response so callers can handle it
+  return fetch(url, init)
+}
+
+/**
+ * Poll /health until the model is ready or timeout is reached.
+ * Useful to call once on page load before kicking off recognition.
+ *
+ * @param timeoutMs  Total time to wait (default 120s)
+ * @param intervalMs Poll interval (default 3s)
+ * @returns true if model became ready, false on timeout
+ */
+export async function waitForModelReady(
+  timeoutMs = 120_000,
+  intervalMs = 3_000
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`${FACENET_API_URL}/health`)
+      if (res.ok) {
+        const data = await res.json()
+        if (data.ready === true) {
+          console.log('✅ FaceNet model ready')
+          return true
+        }
+        console.log(`⏳ Model loading… (status: ${data.status})`)
+      }
+    } catch {
+      // server not yet reachable — keep polling
+    }
+    await sleep(intervalMs)
+  }
+  console.warn('⚠️ waitForModelReady timed out')
+  return false
+}
 
 export interface FaceNetEmbedding {
   detected: boolean
@@ -58,7 +120,7 @@ export async function extractFaceNetEmbedding(
   base64Image: string
 ): Promise<FaceNetEmbedding> {
   try {
-    const response = await fetch(`${FACENET_API_URL}/extract-embedding`, {
+    const response = await fetchWithRetry(`${FACENET_API_URL}/extract-embedding`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -129,7 +191,7 @@ export async function verifyFaceNetEmbedding(
   storedEmbedding: number[]
 ): Promise<FaceNetVerification> {
   try {
-    const response = await fetch(`${FACENET_API_URL}/verify`, {
+    const response = await fetchWithRetry(`${FACENET_API_URL}/verify`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -167,7 +229,7 @@ export async function compareFaceNetEmbeddings(
   embedding2: number[]
 ): Promise<{ similarity: number; match: boolean; confidence: number }> {
   try {
-    const response = await fetch(`${FACENET_API_URL}/compare-embeddings`, {
+    const response = await fetchWithRetry(`${FACENET_API_URL}/compare-embeddings`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -198,7 +260,7 @@ export async function extractMultipleFaceEmbeddings(
   base64Image: string
 ): Promise<MultiFaceResult> {
   try {
-    const response = await fetch(`${FACENET_API_URL}/extract-multiple-embeddings`, {
+    const response = await fetchWithRetry(`${FACENET_API_URL}/extract-multiple-embeddings`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ image: base64Image }),
@@ -262,10 +324,12 @@ export async function extractMultipleFacesFromVideo(
  */
 export async function checkFaceNetHealth(): Promise<boolean> {
   try {
-    const response = await fetch(`${FACENET_API_URL}/health`, {
-      method: 'GET',
-    })
-    return response.ok
+    const response = await fetch(`${FACENET_API_URL}/health`)
+    if (!response.ok) return false
+    const data = await response.json()
+    // Return true only when server is up (model may still be loading)
+    // Use waitForModelReady() if you need to wait for full readiness
+    return true
   } catch (error) {
     console.error('❌ FaceNet health check failed:', error)
     return false
@@ -314,7 +378,7 @@ export async function loadSessionEncodings(
   students: Array<{ id: string; name: string; student_number?: string; embedding: number[] }>
 ): Promise<boolean> {
   try {
-    const response = await fetch(`${FACENET_API_URL}/load-session`, {
+    const response = await fetchWithRetry(`${FACENET_API_URL}/load-session`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sectionId, students }),
@@ -363,7 +427,7 @@ export async function recognizeFrameFromVideo(
     ctx.drawImage(videoElement, 0, 0, SEND_WIDTH, SEND_HEIGHT)
     const base64 = canvas.toDataURL('image/jpeg', 0.7)
 
-    const response = await fetch(`${FACENET_API_URL}/recognize-frame`, {
+    const response = await fetchWithRetry(`${FACENET_API_URL}/recognize-frame`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ image: base64 }),
@@ -459,6 +523,12 @@ export class RealtimeRecognizer {
     }
 
     this.ws.onopen = () => {
+      // If stop() was called while we were still connecting, close cleanly now
+      if (this.stopped) {
+        this.ws?.close()
+        this.ws = null
+        return
+      }
       console.log('✅ WebSocket connected — starting real-time recognition')
       this.sendLoop()
     }
@@ -536,8 +606,13 @@ export class RealtimeRecognizer {
       this.animationId = null
     }
     if (this.ws) {
-      this.ws.onclose = null // prevent reconnect
-      this.ws.close()
+      this.ws.onclose = null // prevent auto-reconnect
+      // Only call close() when already open — calling it on a CONNECTING socket
+      // triggers the "WebSocket closed before connection was established" browser warning.
+      // For CONNECTING sockets, onopen will detect stopped=true and close cleanly.
+      if (this.ws.readyState === WebSocket.OPEN) {
+        this.ws.close()
+      }
       this.ws = null
     }
     this.videoElement = null

@@ -3,7 +3,7 @@
 import { useAuth } from '@/contexts/AuthContext'
 import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import { useEffect, useState, useRef } from 'react'
-import { ArrowLeft, Loader2, Camera, RefreshCw, Check, X, ShieldCheck, Clock, Users, Plus, LayoutGrid, List, Monitor, Edit2, Trash2 } from 'lucide-react'
+import { ArrowLeft, Loader2, Camera, RefreshCw, Check, X, ShieldCheck, Clock, Users, Plus, LayoutGrid, List, Monitor, Edit2, Trash2, ScanFace, CircleAlert, CircleCheck } from 'lucide-react'
 import { initializeFaceDetection, detectFaceInVideo } from '@/lib/mediapipe-face'
 import { extractFaceNetFromVideo, checkFaceNetHealth } from '@/lib/facenet-python-api'
 import { usePassiveLivenessDetection } from '@/hooks/usePassiveLivenessDetection'
@@ -318,10 +318,6 @@ export default function AttendancePage() {
           <p className="text-xs text-muted-foreground hidden sm:block">Manage attendance for today</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button onClick={() => setShowFaceRecognitionModal(true)} className="gap-2 font-medium">
-            <Camera className="h-4 w-4" />
-            Mark Attendance
-          </Button>
           <Button variant="outline" size="sm" onClick={() => setShowStudentRegModal(true)} className="gap-2">
             <Plus className="h-4 w-4" />
             Register Student
@@ -755,13 +751,18 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
   const streamRef = useRef<MediaStream | null>(null)
   const captureTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const detectionIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const rafRef = useRef<number | null>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const faceStableStartRef = useRef<number | null>(null)
   const consecutiveFaceDetectionsRef = useRef<number>(0)
   const autoCaptureTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null)
-  const savedFaceDescriptorRef = useRef<Float32Array | null>(null) // Permanent storage for captured descriptor
-  const lastRecognitionTimeRef = useRef<number>(0) // Throttle face recognition API calls
+  const savedFaceDescriptorRef = useRef<Float32Array | null>(null)
+  const lastRecognitionTimeRef = useRef<number>(0)
+  const lastMediaPipeCallRef = useRef<number>(0)
+  const lastFaceNetCallRef = useRef<number>(0)
+  const isDetectingRef = useRef<boolean>(false)
+  const isNewStudentConfirmedRef = useRef<boolean>(false)
 
   // Validate email uniqueness
   useEffect(() => {
@@ -915,9 +916,9 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
         if (recognizedName) {
           const isWarning = isAlreadyRegistered
           const labelText = isAlreadyRegistered 
-            ? `⚠️ ${recognizedName} (${Math.round(recognitionConfidence! * 100)}%)`
+            ? `${recognizedName} (${Math.round(recognitionConfidence! * 100)}%) - Already Registered`
             : isNewStudent 
-              ? '✓ New Student - Ready to Register'
+              ? 'New Student - Ready to Register'
               : recognizedName
           
           ctx.font = 'bold 16px system-ui, sans-serif'
@@ -1004,6 +1005,7 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
 
     // Cleanup function
     return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current)
       if (captureTimeoutRef.current) clearTimeout(captureTimeoutRef.current)
       if (detectionIntervalRef.current) clearInterval(detectionIntervalRef.current)
       if (autoCaptureTimeoutRef.current) clearTimeout(autoCaptureTimeoutRef.current)
@@ -1034,128 +1036,117 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
     }
   }
 
-  const startFaceDetection = async () => {
+  const startFaceDetection = () => {
     if (!videoRef.current || !modelsLoaded) return
 
-    detectionIntervalRef.current = setInterval(async () => {
-      if (!videoRef.current || isCapturing) return
+    const MEDIAPIPE_THROTTLE_MS = 150   // ~6-7 fps — what MediaPipe WASM can safely handle
+    const FACENET_THROTTLE_MS = 1200    // server call throttle
+    const MATCH_THROTTLE_MS = 2000      // DB match-face check throttle
 
-      try {
-        // Run MediaPipe detection (for bounding box) and Python FaceNet (for embedding) in parallel
-        const [mediapipeResult, pythonResult] = await Promise.all([
-          detectFaceInVideo(videoRef.current!),
-          extractFaceNetFromVideo(videoRef.current!)
-        ])
+    const loop = async () => {
+      if (!videoRef.current || isCapturing) {
+        rafRef.current = requestAnimationFrame(loop)
+        return
+      }
 
-        // Use MediaPipe for bounding box (more reliable for UI)
-        if (mediapipeResult.detected && mediapipeResult.boundingBox && videoRef.current) {
-          const video = videoRef.current
-          const { xCenter, yCenter, width, height } = mediapipeResult.boundingBox
-          
-          // Convert normalized coordinates (0-1) to pixel coordinates
-          const pixelX = (xCenter - width / 2) * video.videoWidth
-          const pixelY = (yCenter - height / 2) * video.videoHeight
-          const pixelWidth = width * video.videoWidth
-          const pixelHeight = height * video.videoHeight
-          
-          // Add padding for better visual appearance
-          const padding = 40
-          setBoundingBox({
-            x: Math.max(0, pixelX - padding),
-            y: Math.max(0, pixelY - padding),
-            width: Math.min(video.videoWidth - pixelX + padding, pixelWidth + padding * 2),
-            height: Math.min(video.videoHeight - pixelY + padding, pixelHeight + padding * 2)
-          })
-        } else {
-          setBoundingBox(null)
-        }
+      const now = Date.now()
 
-        // Use Python FaceNet for embedding (better for recognition)
-        if (pythonResult.detected && pythonResult.embedding) {
-          setFaceDetected(true)
-          const descriptor = new Float32Array(pythonResult.embedding)
-          setFaceDescriptor(descriptor)
-          
-          // IMPORTANT: Save to ref IMMEDIATELY when detected (not just during capture)
-          savedFaceDescriptorRef.current = descriptor
-          
-          // THROTTLED REAL-TIME CHECK: Only verify face every 1.5 seconds to prevent API overload
-          const now = Date.now()
-          const timeSinceLastRecognition = now - lastRecognitionTimeRef.current
-          const RECOGNITION_THROTTLE = 1500 // 1.5 seconds between recognition attempts
-          
-          let isNewStudent = false
-          if (timeSinceLastRecognition >= RECOGNITION_THROTTLE) {
-            lastRecognitionTimeRef.current = now
-            
-            // Verify if face already exists in database
-            const matchResponse = await fetch('/api/attendance/match-face', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ faceDescriptor: Array.from(descriptor) })
+      // --- MediaPipe bounding box (throttled so WASM doesn't abort) ---
+      if (
+        !isDetectingRef.current &&
+        now - lastMediaPipeCallRef.current >= MEDIAPIPE_THROTTLE_MS &&
+        videoRef.current.readyState === 4 &&
+        videoRef.current.videoWidth > 0
+      ) {
+        lastMediaPipeCallRef.current = now
+        isDetectingRef.current = true
+        try {
+          const mediapipeResult = await detectFaceInVideo(videoRef.current!)
+          if (mediapipeResult.detected && mediapipeResult.boundingBox && videoRef.current) {
+            const video = videoRef.current
+            const { xCenter, yCenter, width, height } = mediapipeResult.boundingBox
+            const cx = xCenter * video.videoWidth
+            const cy = yCenter * video.videoHeight
+            const pw = width * video.videoWidth
+            const ph = height * video.videoHeight
+            const pad = 40
+            const side = Math.max(pw, ph) + pad * 2
+            setBoundingBox({
+              x: Math.max(0, cx - side / 2),
+              y: Math.max(0, cy - side / 2),
+              width: Math.min(video.videoWidth, side),
+              height: Math.min(video.videoHeight, side),
             })
-            const matchData = await matchResponse.json()
-            
-            if (matchData.success && matchData.matched) {
-              setRecognizedName(`${matchData.student.first_name} ${matchData.student.last_name}`)
-              setRecognitionConfidence(matchData.confidence)
-              isNewStudent = false
-            } else {
-              setRecognizedName('New Student')
-              setRecognitionConfidence(null)
-              isNewStudent = true
-            }
+            consecutiveFaceDetectionsRef.current += 1
           } else {
-            // Use cached recognition result
-            isNewStudent = recognizedName === 'New Student'
-          }
-          
-          // Auto-capture logic - ONLY for NEW students (not already registered)
-          consecutiveFaceDetectionsRef.current += 1
-          
-          // Only auto-capture if this is a new student
-          const shouldAutoCapture = autoCapture && !isCapturing && 
-                                    consecutiveFaceDetectionsRef.current >= 1 &&
-                                    (isNewStudent || recognizedName === 'New Student')
-          
-          if (shouldAutoCapture) {
-            if (!faceStableStartRef.current) {
-              faceStableStartRef.current = Date.now()
-            }
-            
-            const CAPTURE_DELAY = 1500 // 1.5 seconds to give time to see the status
-            const elapsed = Date.now() - faceStableStartRef.current
-            const remaining = Math.max(0, CAPTURE_DELAY - elapsed)
-            const countdownValue = Math.ceil(remaining / 1000)
-            
-            setCaptureCountdown(countdownValue)
-            
-            if (elapsed >= CAPTURE_DELAY) {
-              capturePhoto()
-            }
-          } else if (!isNewStudent && recognizedName && recognizedName !== 'New Student') {
-            // Already registered - reset countdown and don't auto-capture
-            faceStableStartRef.current = null
-            setCaptureCountdown(null)
-          }
-        } else {
-          setFaceDetected(false)
-          setRecognizedName(null)
-          setRecognitionConfidence(null)
-          
-          // Ultra-lenient forgiveness: slow decay, reset after many misses
-          consecutiveFaceDetectionsRef.current = Math.max(0, consecutiveFaceDetectionsRef.current - 0.25)
-          
-          if (consecutiveFaceDetectionsRef.current < 0.1) {
+            setBoundingBox(null)
             consecutiveFaceDetectionsRef.current = 0
             faceStableStartRef.current = null
             setCaptureCountdown(null)
+            setFaceDetected(false)
+            setRecognizedName(null)
+            setRecognitionConfidence(null)
           }
+        } catch (err) {
+          console.warn('MediaPipe detection error (ignored):', err)
+        } finally {
+          isDetectingRef.current = false
         }
-      } catch (error) {
-        console.error('Face detection error:', error)
       }
-    }, 300)
+
+      // --- FaceNet embedding (throttled, only with stable MediaPipe detections) ---
+      if (
+        consecutiveFaceDetectionsRef.current >= 3 &&
+        now - lastFaceNetCallRef.current >= FACENET_THROTTLE_MS &&
+        videoRef.current?.readyState === 4
+      ) {
+        lastFaceNetCallRef.current = now
+        try {
+          const pythonResult = await extractFaceNetFromVideo(videoRef.current!)
+          if (pythonResult.detected && pythonResult.embedding) {
+            const descriptor = new Float32Array(pythonResult.embedding)
+            setFaceDetected(true)
+            setFaceDescriptor(descriptor)
+            savedFaceDescriptorRef.current = descriptor
+
+            // --- DB match check (throttled separately) ---
+            if (now - lastRecognitionTimeRef.current >= MATCH_THROTTLE_MS) {
+              lastRecognitionTimeRef.current = now
+              try {
+                const matchResponse = await fetch('/api/attendance/match-face', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ faceDescriptor: Array.from(descriptor) })
+                })
+                const matchData = await matchResponse.json()
+                if (matchData.success && matchData.matched) {
+                  setRecognizedName(`${matchData.student.first_name} ${matchData.student.last_name}`)
+                  setRecognitionConfidence(matchData.confidence)
+                  isNewStudentConfirmedRef.current = false
+                } else {
+                  setRecognizedName('New Student')
+                  setRecognitionConfidence(null)
+                  isNewStudentConfirmedRef.current = true
+                }
+              } catch { /* ignore */ }
+            }
+
+            // --- Auto-capture immediately when confirmed new student (no countdown) ---
+            if (autoCapture && !isCapturing && isNewStudentConfirmedRef.current) {
+              capturePhoto()
+            }
+          } else {
+            setFaceDetected(false)
+            faceStableStartRef.current = null
+            setCaptureCountdown(null)
+          }
+        } catch { /* ignore */ }
+      }
+
+      rafRef.current = requestAnimationFrame(loop)
+    }
+
+    rafRef.current = requestAnimationFrame(loop)
   }
 
   const startCamera = async () => {
@@ -1187,11 +1178,12 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
       streamRef.current.getTracks().forEach(track => track.stop())
       streamRef.current = null
     }
+    if (rafRef.current) cancelAnimationFrame(rafRef.current)
     if (captureTimeoutRef.current) clearTimeout(captureTimeoutRef.current)
     if (detectionIntervalRef.current) clearInterval(detectionIntervalRef.current)
     if (autoCaptureTimeoutRef.current) clearTimeout(autoCaptureTimeoutRef.current)
     if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current)
-    
+
     setShowCamera(false)
     setIsCapturing(false)
     setFaceDetected(false)
@@ -1201,9 +1193,13 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
     setRecognitionConfidence(null)
     setCaptureCountdown(null)
     // NOTE: Don't clear savedFaceDescriptorRef - it must persist for submission!
-    
+
     faceStableStartRef.current = null
     consecutiveFaceDetectionsRef.current = 0
+    lastMediaPipeCallRef.current = 0
+    lastFaceNetCallRef.current = 0
+    isDetectingRef.current = false
+    isNewStudentConfirmedRef.current = false
   }
 
   const capturePhoto = () => {
@@ -1513,93 +1509,114 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
 
               {!showCamera && !capturedImage && (
                 <div className="border border-dashed rounded-lg p-8 flex flex-col items-center justify-center bg-muted/30 hover:bg-muted/50 transition-colors">
-                  <ShieldCheck className="h-10 w-10 text-muted-foreground mb-4" />
+                  <ScanFace className="h-10 w-10 text-violet-400 mb-4" />
                   <p className="text-sm text-muted-foreground mb-6 text-center max-w-xs">
-                    Position your face in the camera and ensure good lighting.
+                    Position the student in front of the camera. The system detects and captures automatically.
                   </p>
-                  <Button type="button" onClick={startCamera}>
-                    Start Camera
+                  <Button type="button" onClick={startCamera} disabled={!modelsLoaded}>
+                    {modelsLoaded ? 'Start Camera' : 'Loading Models...'}
                   </Button>
                 </div>
               )}
 
               {showCamera && (
-                <div className="relative rounded-xl overflow-hidden bg-black shadow-2xl" style={{ height: '500px' }}>
-                  <video
-                    ref={videoRef}
-                    autoPlay
-                    playsInline
-                    muted
-                    className="w-full h-full object-cover transform scale-x-[-1]"
-                  />
+                <div className="flex flex-col items-center gap-3">
+                  <div className="relative w-full max-w-md mx-auto aspect-square rounded-2xl overflow-hidden bg-black shadow-2xl ring-2 ring-violet-500/30">
+                    <video
+                      ref={videoRef}
+                      autoPlay
+                      playsInline
+                      muted
+                      className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1]"
+                    />
+                    <canvas
+                      ref={canvasRef}
+                      className="absolute inset-0 w-full h-full pointer-events-none transform scale-x-[-1]"
+                    />
 
-                  {/* Canvas overlay for bounding box */}
-                  <canvas
-                    ref={canvasRef}
-                    className="absolute inset-0 w-full h-full object-cover pointer-events-none transform scale-x-[-1]"
-                  />
-
-                  {/* Real-time status indicators */}
-                  <div className="absolute top-4 inset-x-0 flex flex-col items-center pointer-events-none gap-2">
-                    {/* Mode indicator */}
-                    <div className={`text-white text-sm font-medium px-4 py-2 rounded-full backdrop-blur-md flex items-center gap-2 ${
-                      recognizedName === 'New Student' ? 'bg-emerald-600/90' :
-                      recognizedName && recognizedName !== 'New Student' ? 'bg-amber-600/90' :
-                      'bg-black/80'
-                    }`}>
+                    {/* Top status bar */}
+                    <div className="absolute top-3 inset-x-3 flex justify-center pointer-events-none">
                       {faceDetected ? (
-                        <>
+                        <div className={`flex items-center gap-2 backdrop-blur-md text-white text-sm font-medium px-4 py-2 rounded-full shadow-lg ${
+                          recognizedName === 'New Student' ? 'bg-emerald-600/90' :
+                          recognizedName && recognizedName !== 'New Student' ? 'bg-amber-500/90' :
+                          'bg-blue-600/90'
+                        }`}>
                           <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
-                          Real-time Face Recognition Active
-                        </>
+                          {recognizedName === 'New Student' ? 'New Student Detected' :
+                           recognizedName ? 'Already Registered' :
+                           'Face Detected'}
+                        </div>
                       ) : (
-                        '📷 Position your face in the camera'
+                        <div className="flex items-center gap-2 bg-black/70 backdrop-blur-md text-white text-sm px-4 py-2 rounded-full shadow-lg">
+                          <ScanFace className="w-4 h-4 opacity-70" />
+                          Position face in frame
+                        </div>
                       )}
                     </div>
-                    
-                    {/* Capture countdown */}
-                    {faceDetected && recognizedName === 'New Student' && captureCountdown !== null && captureCountdown > 0 && (
-                      <div className="bg-emerald-600 text-white text-sm font-bold px-4 py-2 rounded-full backdrop-blur-md animate-pulse flex items-center gap-2">
-                        <Camera className="w-4 h-4" />
-                        Auto-capturing in {captureCountdown}s...
-                      </div>
-                    )}
-                    
-                    {/* Warning for already registered */}
-                    {recognizedName && recognizedName !== 'New Student' && recognitionConfidence !== null && (
-                      <div className="bg-amber-500 text-white text-sm font-medium px-4 py-2 rounded-full backdrop-blur-md flex items-center gap-2">
-                        <ShieldCheck className="w-4 h-4" />
-                        This face is already registered!
-                      </div>
-                    )}
-                    
-                    {/* No face detected warning */}
-                    {!faceDetected && (
-                      <div className="bg-red-600/90 text-white text-xs px-3 py-1.5 rounded-full backdrop-blur-md mt-2">
-                        No face detected - look at the camera
-                      </div>
-                    )}
-                  </div>
 
-                  {/* Bottom controls */}
-                  <div className="absolute bottom-4 inset-x-0 flex justify-center gap-4 px-4 z-10">
-                    <Button type="button" variant="destructive" size="sm" onClick={stopCamera}>
-                      Cancel
-                    </Button>
+                    {/* No face badge */}
+                    {!faceDetected && (
+                      <div className="absolute top-14 inset-x-0 flex justify-center pointer-events-none">
+                        <div className="flex items-center gap-1.5 bg-red-600/90 backdrop-blur-md text-white text-xs font-medium px-3 py-1.5 rounded-full">
+                          <CircleAlert className="w-3.5 h-3.5" />
+                          No face detected
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Already registered warning */}
+                    {recognizedName && recognizedName !== 'New Student' && recognitionConfidence !== null && (
+                      <div className="absolute top-14 inset-x-0 flex justify-center pointer-events-none">
+                        <div className="flex items-center gap-1.5 bg-amber-500/90 backdrop-blur-md text-white text-xs font-medium px-3 py-1.5 rounded-full">
+                          <CircleAlert className="w-3.5 h-3.5" />
+                          Already registered
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Auto-capturing indicator */}
+                    {faceDetected && recognizedName === 'New Student' && (
+                      <div className="absolute bottom-16 inset-x-0 flex justify-center pointer-events-none">
+                        <div className="flex items-center gap-2 bg-emerald-600/90 backdrop-blur-md text-white text-sm font-bold px-4 py-2 rounded-full animate-pulse">
+                          <Camera className="w-4 h-4" />
+                          Capturing...
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Cancel button */}
+                    <div className="absolute bottom-3 inset-x-3 flex justify-center">
+                      <button
+                        type="button"
+                        onClick={stopCamera}
+                        className="px-5 py-2.5 bg-red-600/90 backdrop-blur-md text-white text-sm font-medium rounded-xl hover:bg-red-600 transition-colors shadow-lg"
+                      >
+                        Cancel
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
 
               {capturedImage && !showCamera && (
-                <div className="relative rounded-lg overflow-hidden border aspect-video bg-muted">
-                  <img src={capturedImage} alt="Captured" className="w-full h-full object-cover" />
-                  <div className="absolute bottom-4 right-4">
-                    <Button type="button" variant="secondary" size="sm" onClick={() => {
-                      setCapturedImage(null)
-                      startCamera()
-                    }}>
-                      <RefreshCw className="w-4 h-4 mr-2" /> Retake
-                    </Button>
+                <div className="flex flex-col items-center gap-3">
+                  <div className="relative w-full max-w-md mx-auto aspect-square rounded-2xl overflow-hidden border-2 border-emerald-500 bg-gray-100 shadow-lg">
+                    <img src={capturedImage} alt="Captured" className="w-full h-full object-cover" />
+                    <div className="absolute top-3 left-3 flex items-center gap-1.5 bg-emerald-600 text-white text-xs font-medium px-3 py-1.5 rounded-full shadow-md">
+                      <CircleCheck className="w-3.5 h-3.5" />
+                      Face Captured
+                    </div>
+                    <div className="absolute bottom-3 right-3">
+                      <button
+                        type="button"
+                        onClick={() => { setCapturedImage(null); startCamera() }}
+                        className="flex items-center gap-2 px-3 py-2 bg-white/90 backdrop-blur-md text-gray-700 rounded-xl hover:bg-white transition-colors text-sm font-medium shadow-md"
+                      >
+                        <RefreshCw className="w-4 h-4" />
+                        Retake
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}

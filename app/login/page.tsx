@@ -6,7 +6,7 @@ import Link from 'next/link'
 import { LogIn, Mail, Lock, AlertCircle, Loader2, Camera, CheckCircle2, RefreshCw, Scan } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 import { initializeFaceDetection, detectFaceInVideo } from '@/lib/mediapipe-face'
-import { extractFaceNetFromVideo, checkFaceNetHealth } from '@/lib/facenet-python-api'
+import { extractFaceNetFromVideo, checkFaceNetHealth, waitForModelReady } from '@/lib/facenet-python-api'
 
 export default function UnifiedLoginPage() {
   const router = useRouter()
@@ -49,6 +49,7 @@ export default function UnifiedLoginPage() {
     const checkServer = async () => {
       const healthy = await checkFaceNetHealth()
       setServerHealthy(healthy)
+      if (healthy) waitForModelReady()
     }
     checkServer()
   }, [])

@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Camera, CheckCircle, XCircle, Clock, AlertTriangle, Loader2, Volume2, VolumeX, Users, Lock, GraduationCap, BookOpen, Scan } from 'lucide-react'
-import { extractFaceNetFromVideo, checkFaceNetHealth, loadSessionEncodings, clearSessionEncodings, RealtimeRecognizer } from '@/lib/facenet-python-api'
+import { extractFaceNetFromVideo, checkFaceNetHealth, waitForModelReady, loadSessionEncodings, clearSessionEncodings, RealtimeRecognizer } from '@/lib/facenet-python-api'
 import type { DetectedFace, RecognizedFace, RecognitionResult } from '@/lib/facenet-python-api'
 import { initializeFaceDetection, detectFaceInVideo } from '@/lib/mediapipe-face'
 
@@ -62,6 +62,10 @@ export default function AttendanceKioskPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const scanIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const rafRef = useRef<number | null>(null)
+  const lastMediaPipeCallRef = useRef<number>(0)
+  const lastFaceNetCallRef = useRef<number>(0)
+  const isDetectingRef = useRef<boolean>(false)
   const isMatchingRef = useRef<boolean>(false)
   const hasMarkedAbsentRef = useRef<boolean>(false)
 
@@ -156,6 +160,11 @@ export default function AttendanceKioskPage() {
       ])
       setServerHealthy(healthy)
       setModelsLoaded(loaded)
+      if (healthy) {
+        waitForModelReady().then(ready => {
+          if (!ready) console.warn('⚠️ Model did not become ready within timeout')
+        })
+      }
     }
     init()
     const interval = setInterval(async () => {
@@ -207,40 +216,67 @@ export default function AttendanceKioskPage() {
   useEffect(() => {
     if (phase !== 'professor-scan' || !serverHealthy || !modelsLoaded) return
 
-    const scanProfessor = async () => {
-      if (!videoRef.current || isMatchingRef.current) return
+    const MEDIAPIPE_THROTTLE_MS = 150  // ~6-7 fps — safe for MediaPipe WASM
+    const FACENET_THROTTLE_MS = 600
 
-      try {
-        const [mediapipeResult, pythonResult] = await Promise.all([
-          detectFaceInVideo(videoRef.current!),
-          extractFaceNetFromVideo(videoRef.current!)
-        ])
+    const loop = async () => {
+      const video = videoRef.current
+      if (!video) { rafRef.current = requestAnimationFrame(loop); return }
 
-        // Update bounding box
-        if (mediapipeResult.detected && mediapipeResult.boundingBox && videoRef.current) {
-          const video = videoRef.current
-          const { xCenter, yCenter, width, height } = mediapipeResult.boundingBox
-          const pixelX = (xCenter - width / 2) * video.videoWidth
-          const pixelY = (yCenter - height / 2) * video.videoHeight
-          const pixelWidth = width * video.videoWidth
-          const pixelHeight = height * video.videoHeight
-          const padding = 40
-          setBoundingBox({
-            x: Math.max(0, pixelX - padding),
-            y: Math.max(0, pixelY - padding),
-            width: Math.min(video.videoWidth - pixelX + padding, pixelWidth + padding * 2),
-            height: Math.min(video.videoHeight - pixelY + padding, pixelHeight + padding * 2)
-          })
-        } else {
-          setBoundingBox(null)
+      const now = Date.now()
+
+      // --- MediaPipe: throttled bounding box ---
+      if (
+        !isDetectingRef.current &&
+        now - lastMediaPipeCallRef.current >= MEDIAPIPE_THROTTLE_MS &&
+        video.readyState === 4 &&
+        video.videoWidth > 0
+      ) {
+        lastMediaPipeCallRef.current = now
+        isDetectingRef.current = true
+        try {
+          const mediapipeResult = await detectFaceInVideo(video)
+          if (mediapipeResult.detected && mediapipeResult.boundingBox && videoRef.current) {
+            const v = videoRef.current
+            const { xCenter, yCenter, width, height } = mediapipeResult.boundingBox
+            const cx = xCenter * v.videoWidth
+            const cy = yCenter * v.videoHeight
+            const pw = width * v.videoWidth
+            const ph = height * v.videoHeight
+            const pad = 40
+            const side = Math.max(pw, ph) + pad * 2
+            setBoundingBox({
+              x: Math.max(0, cx - side / 2),
+              y: Math.max(0, cy - side / 2),
+              width: Math.min(v.videoWidth, side),
+              height: Math.min(v.videoHeight, side),
+            })
+            setFaceDetected(true)
+            lastActivityRef.current = Date.now()
+          } else {
+            setBoundingBox(null)
+            setFaceDetected(false)
+          }
+        } catch (err) {
+          console.warn('MediaPipe detection error (ignored):', err)
+        } finally {
+          isDetectingRef.current = false
         }
+      }
 
-        if (pythonResult.detected && pythonResult.embedding) {
-          setFaceDetected(true)
-          // Reset inactivity timer on face detection
-          lastActivityRef.current = Date.now()
+      // --- FaceNet: throttled, only when video is ready ---
+      if (
+        !isMatchingRef.current &&
+        now - lastFaceNetCallRef.current >= FACENET_THROTTLE_MS &&
+        video.readyState === 4 &&
+        video.videoWidth > 0
+      ) {
+        lastFaceNetCallRef.current = now
+        try {
+          const pythonResult = await extractFaceNetFromVideo(video)
 
-          if (!isMatchingRef.current) {
+          if (pythonResult.detected && pythonResult.embedding) {
+            setFaceDetected(true)
             isMatchingRef.current = true
             setProfessorScanStatus('scanning')
 
@@ -265,23 +301,19 @@ export default function AttendanceKioskPage() {
                 setProfessor(prof)
                 playSound('success')
 
-                // Fetch professor's schedules for today
                 const schedRes = await fetch(`/api/kiosk/professor-schedule?professorId=${prof.id}`)
                 const schedData = await schedRes.json()
 
                 if (schedData.success && schedData.schedules.length > 0) {
                   setSchedules(schedData.schedules)
                   if (schedData.schedules.length === 1) {
-                    // Auto-select if only one schedule
                     selectSchedule(schedData.schedules[0])
                   } else {
                     setPhase('schedule-select')
                   }
                 } else {
                   setStatusMessage('No classes scheduled for today')
-                  setTimeout(() => {
-                    resetToScan()
-                  }, 3000)
+                  setTimeout(() => { resetToScan() }, 3000)
                 }
               } else {
                 setProfessorScanStatus('not-found')
@@ -293,21 +325,18 @@ export default function AttendanceKioskPage() {
               setProfessorScanStatus('idle')
               isMatchingRef.current = false
             }
+          } else {
+            if (professorScanStatus === 'scanning') setProfessorScanStatus('idle')
           }
-        } else {
-          setFaceDetected(false)
-          if (professorScanStatus === 'scanning') {
-            setProfessorScanStatus('idle')
-          }
-        }
-      } catch (error) {
-        console.error('Professor scan error:', error)
+        } catch { /* ignore — server may still be warming up */ }
       }
+
+      rafRef.current = requestAnimationFrame(loop)
     }
 
-    scanIntervalRef.current = setInterval(scanProfessor, 300)
+    rafRef.current = requestAnimationFrame(loop)
     return () => {
-      if (scanIntervalRef.current) clearInterval(scanIntervalRef.current)
+      if (rafRef.current) cancelAnimationFrame(rafRef.current)
     }
   }, [phase, serverHealthy, modelsLoaded])
 
@@ -341,22 +370,37 @@ export default function AttendanceKioskPage() {
   useEffect(() => {
     if ((phase !== 'attendance-active' && phase !== 'attendance-locked') || !selectedSchedule) return
 
+    const controller = new AbortController()
+
     const fetchStudents = async () => {
       try {
-        const res = await fetch(`/api/attendance/enrolled-students?sectionId=${selectedSchedule.sectionId}`)
+        const res = await fetch(
+          `/api/attendance/enrolled-students?sectionId=${selectedSchedule.sectionId}`,
+          { signal: controller.signal }
+        )
         const data = await res.json()
         if (data.success) {
           setEnrolledStudents(data.students)
           setStats(data.stats)
         }
       } catch (err) {
-        console.error('Failed to fetch students:', err)
+        if (err instanceof Error && err.name !== 'AbortError') {
+          console.error('Failed to fetch students:', err)
+        }
       }
     }
 
+    // When locked: fetch once to show final state, then stop
     fetchStudents()
+    if (phase === 'attendance-locked') {
+      return () => controller.abort()
+    }
+
     const interval = setInterval(fetchStudents, 5000)
-    return () => clearInterval(interval)
+    return () => {
+      controller.abort()
+      clearInterval(interval)
+    }
   }, [phase, selectedSchedule])
 
   // Check lock time countdown
@@ -377,6 +421,10 @@ export default function AttendanceKioskPage() {
         setAttendanceLocked(true)
         setPhase('attendance-locked')
         setLockTimeRemaining('00:00')
+        // Clear any active scan UI immediately on lock
+        setFaceMatchResults([])
+        setDetectedFaces([])
+        setScanStatus('locked')
 
         // Auto-mark remaining students as absent
         if (!hasMarkedAbsentRef.current) {
@@ -550,6 +598,9 @@ export default function AttendanceKioskPage() {
     setDetectedFaces([])
     setFaceMatchResults([])
     isMatchingRef.current = false
+    isDetectingRef.current = false
+    lastMediaPipeCallRef.current = 0
+    lastFaceNetCallRef.current = 0
     hasMarkedAbsentRef.current = false
     markedStudentIdsRef.current = new Set()
     markingStudentIdsRef.current = new Set()
@@ -668,7 +719,7 @@ export default function AttendanceKioskPage() {
             ? `\u2713 Prof. ${professor?.firstName} ${professor?.lastName}`
             : professorScanStatus === 'not-found'
               ? '\u2717 Face not recognized'
-              : '\uD83D\uDD0D Scanning...'
+              : 'Scanning...'
 
           ctx.font = 'bold 16px system-ui, sans-serif'
           const textWidth = ctx.measureText(labelText).width
@@ -728,9 +779,8 @@ export default function AttendanceKioskPage() {
                         status === 'already-marked' ? '#3b82f6' :
                         '#ef4444'
 
-          // Mirror the x coordinate since video is flipped
-          const mirroredLeft = canvas.width - box.right
-          const x = mirroredLeft
+          // Canvas is CSS-flipped (scaleX -1) so draw at original coordinates
+          const x = box.left
           const y = box.top
           const w = box.width
           const h = box.height
@@ -771,17 +821,19 @@ export default function AttendanceKioskPage() {
           ctx.roundRect(lx, ly, tw + pd * 2, lh, 5)
           ctx.fill()
 
+          ctx.save()
+          ctx.scale(-1, 1)
           ctx.fillStyle = 'white'
-          ctx.fillText(labelText, lx + pd, ly + 19)
+          ctx.fillText(labelText, -(lx + pd + tw), ly + 19)
+          ctx.restore()
         }
       } else if (detectedFaces.length > 0 && scanStatus === 'scanning') {
         // Draw neutral boxes for detected faces while scanning
         for (const face of detectedFaces) {
-          const mirroredLeft = canvas.width - face.box.right
           ctx.strokeStyle = '#eab308'
           ctx.lineWidth = 2
           ctx.setLineDash([8, 4])
-          ctx.strokeRect(mirroredLeft, face.box.top, face.box.width, face.box.height)
+          ctx.strokeRect(face.box.left, face.box.top, face.box.width, face.box.height)
           ctx.setLineDash([])
         }
       }
@@ -1242,10 +1294,10 @@ export default function AttendanceKioskPage() {
                       student.status === 'absent' ? 'bg-red-500/20 text-red-400' :
                       'bg-gray-700/50 text-gray-500'
                     }`}>
-                      {student.status === 'present' ? '\u2713' :
-                       student.status === 'late' ? '\u23F0' :
-                       student.status === 'absent' ? '\u2717' :
-                       '\u2014'}
+                      {student.status === 'present' ? <CheckCircle className="w-3.5 h-3.5" /> :
+                       student.status === 'late' ? <Clock className="w-3.5 h-3.5" /> :
+                       student.status === 'absent' ? <XCircle className="w-3.5 h-3.5" /> :
+                       '—'}
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className={`text-sm font-medium truncate ${

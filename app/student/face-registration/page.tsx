@@ -4,7 +4,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState, useRef } from 'react'
 import { Camera, ArrowLeft } from 'lucide-react'
-import { extractFaceNetFromVideo, checkFaceNetHealth } from '@/lib/facenet-python-api'
+import { extractFaceNetFromVideo, checkFaceNetHealth, waitForModelReady } from '@/lib/facenet-python-api'
 
 export default function StudentFaceRegistrationPage() {
   const { user, loading } = useAuth()
@@ -130,7 +130,13 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
         console.warn('⚠️ Python FaceNet server not responding')
         alert('Python FaceNet server is not running. Please start: python facenet-optimized-server.py')
       } else {
-        console.log('✅ Python FaceNet server is healthy')
+        console.log('✅ Python FaceNet server is up — waiting for model to be ready...')
+        const ready = await waitForModelReady()
+        if (ready) {
+          console.log('✅ FaceNet model ready')
+        } else {
+          console.warn('⚠️ Model load timed out — retries will happen automatically')
+        }
         setModelsLoaded(true)
       }
     }

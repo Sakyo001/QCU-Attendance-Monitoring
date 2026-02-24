@@ -3,7 +3,7 @@
  * Interfaces with Python FastAPI server for face recognition
  */
 
-const ARCFACE_API_URL = process.env.NEXT_PUBLIC_ARCFACE_API_URL || 'http://localhost:8000'
+const ARCFACE_API_URL = process.env.NEXT_PUBLIC_ARCFACE_API_URL || 'https://qcu-attendance-monitoring-production.up.railway.app'
 
 export interface ArcFaceEmbedding {
   detected: boolean
