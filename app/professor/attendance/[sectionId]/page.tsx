@@ -404,13 +404,18 @@ export default function AttendancePage() {
                 registeredStudents.map((student: any) => (
                   <div key={student.id} className="bg-white border rounded-lg p-4 shadow-sm hover:shadow-md transition-shadow">
                     {/* Student Avatar */}
-                    <div className="flex justify-center mb-3">
+                    <div className="flex justify-center mb-3 relative">
                       <Avatar className="h-16 w-16 border-2 border-gray-200">
                         <AvatarImage src={student.avatar_url || ''} />
-                        <AvatarFallback className="bg-emerald-100 text-emerald-700 font-bold">
+                        <AvatarFallback className={`${student.face_data === 'pending' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'} font-bold`}>
                           {student.first_name?.charAt(0) || ''}{student.last_name?.charAt(0) || ''}
                         </AvatarFallback>
                       </Avatar>
+                      {student.face_data === 'pending' && (
+                        <span className="absolute -top-1 -right-1 bg-amber-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                          No Face
+                        </span>
+                      )}
                     </div>
 
                     {/* Student Name */}

@@ -18,7 +18,7 @@ export async function GET(request: NextRequest) {
     // Filter by section_id to only show students registered for this specific section
     const { data: students, error } = await supabase
       .from('student_face_registrations')
-      .select('id, first_name, last_name, student_number, registered_at')
+      .select('id, first_name, last_name, middle_name, student_number, registered_at, face_data, email')
       .eq('section_id', sectionId)
       .eq('is_active', true)
       .order('last_name', { ascending: true })

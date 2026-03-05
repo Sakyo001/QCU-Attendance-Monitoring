@@ -111,9 +111,9 @@ export default function AttendanceKioskPage() {
     const checkInactivity = () => {
       const now = Date.now()
       const inactiveTime = now - lastActivityRef.current
-      const ONE_MINUTE = 60000 // 60 seconds
+      const THIRTY_SECONDS = 30000
 
-      if (inactiveTime >= ONE_MINUTE) {
+      if (inactiveTime >= THIRTY_SECONDS) {
         // Get current params to pass to idle page
         const sectionId = searchParams.get('sectionId') || selectedSchedule?.sectionId || ''
         const scheduleId = searchParams.get('scheduleId') || selectedSchedule?.id || ''
@@ -239,6 +239,16 @@ export default function AttendanceKioskPage() {
           if (mediapipeResult.detected && mediapipeResult.boundingBox && videoRef.current) {
             const v = videoRef.current
             const { xCenter, yCenter, width, height } = mediapipeResult.boundingBox
+
+            // Reject tiny "faces" that are likely noise (< 5% of frame)
+            if (width < 0.05 || height < 0.05) {
+              setBoundingBox(null)
+              setFaceDetected(false)
+              isDetectingRef.current = false
+              rafRef.current = requestAnimationFrame(loop)
+              return
+            }
+
             const cx = xCenter * v.videoWidth
             const cy = yCenter * v.videoHeight
             const pw = width * v.videoWidth
@@ -852,9 +862,9 @@ export default function AttendanceKioskPage() {
   // --- Phase 1: Professor Scan ---
   if (phase === 'professor-scan') {
     return (
-      <div className="min-h-screen bg-gray-950 text-white flex flex-col">
+      <div className="h-screen overflow-hidden bg-gray-950 text-white flex flex-col">
         {/* Top Bar */}
-        <div className="flex items-center justify-between px-6 py-4 bg-gray-900/80 backdrop-blur border-b border-gray-800">
+        <div className="flex items-center justify-between px-6 py-4 bg-gray-900/80 backdrop-blur border-b border-gray-800 shrink-0">
           <div className="flex items-center gap-4">
             <div className="bg-primary/20 p-2 rounded-lg">
               <Camera className="w-6 h-6 text-primary" />
@@ -963,9 +973,9 @@ export default function AttendanceKioskPage() {
   // --- Phase 2: Schedule Select ---
   if (phase === 'schedule-select') {
     return (
-      <div className="min-h-screen bg-gray-950 text-white flex flex-col">
+      <div className="h-screen overflow-hidden bg-gray-950 text-white flex flex-col">
         {/* Top Bar */}
-        <div className="flex items-center justify-between px-6 py-4 bg-gray-900/80 backdrop-blur border-b border-gray-800">
+        <div className="flex items-center justify-between px-6 py-4 bg-gray-900/80 backdrop-blur border-b border-gray-800 shrink-0">
           <div className="flex items-center gap-4">
             <div className="bg-primary/20 p-2 rounded-lg">
               <Camera className="w-6 h-6 text-primary" />
@@ -1052,9 +1062,9 @@ export default function AttendanceKioskPage() {
 
   // --- Phase 3 & 4: Attendance Active / Locked ---
   return (
-    <div className="min-h-screen bg-gray-950 text-white flex flex-col">
+    <div className="h-screen overflow-hidden bg-gray-950 text-white flex flex-col">
       {/* Top Bar */}
-      <div className="flex items-center justify-between px-6 py-4 bg-gray-900/80 backdrop-blur border-b border-gray-800">
+      <div className="flex items-center justify-between px-6 py-4 bg-gray-900/80 backdrop-blur border-b border-gray-800 shrink-0">
         <div className="flex items-center gap-4">
           <div className="bg-primary/20 p-2 rounded-lg">
             <Camera className="w-6 h-6 text-primary" />
@@ -1115,9 +1125,9 @@ export default function AttendanceKioskPage() {
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 flex">
+      <div className="flex-1 overflow-hidden flex">
         {/* Left: Camera Feed */}
-        <div className="flex-1 flex flex-col items-center justify-center p-8">
+        <div className="flex-1 overflow-hidden flex flex-col items-center justify-center p-8">
           {/* Locked Banner */}
           {phase === 'attendance-locked' && (
             <div className="mb-6 px-6 py-4 bg-red-500/10 border border-red-500/30 rounded-xl flex items-center gap-3">

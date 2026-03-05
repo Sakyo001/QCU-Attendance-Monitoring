@@ -4,7 +4,7 @@ import { NextResponse } from 'next/server'
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    const { professorId, sectionId, room, maxCapacity, dayOfWeek, startTime, endTime } = body
+    const { professorId, sectionId, subjectCode, subjectName, room, maxCapacity, dayOfWeek, startTime, endTime } = body
 
     // Validate required fields
     if (!professorId || !sectionId || !room || !maxCapacity || !dayOfWeek || !startTime || !endTime) {
@@ -31,6 +31,8 @@ export async function POST(request: Request) {
         day_of_week: dayOfWeek,
         start_time: startTime,
         end_time: endTime,
+        subject_code: subjectCode || null,
+        subject_name: subjectName || null,
       })
       .select()
       .single()

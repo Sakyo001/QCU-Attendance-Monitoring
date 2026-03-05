@@ -2,10 +2,11 @@
 
 import { useAuth } from '@/contexts/AuthContext'
 import { useRouter } from 'next/navigation'
-import { useEffect, useState, useRef } from 'react'
-import { BookOpen, Users, Calendar, LogOut, Clock, MapPin, Play, BarChart3 } from 'lucide-react'
+import { useEffect, useState, useRef, useCallback } from 'react'
+import { BookOpen, Users, Calendar, LogOut, Clock, MapPin, Play, BarChart3, Upload, FileSpreadsheet, CheckCircle, AlertCircle, X } from 'lucide-react'
 import { createClient } from '@/utils/supabase/client'
 import { ClassAccessModal } from '@/components/class-access-modal'
+import * as XLSX from 'xlsx'
 
 interface Section {
   id: string
@@ -39,6 +40,7 @@ export default function ProfessorDashboard() {
   const [showClassAccessModal, setShowClassAccessModal] = useState(false)
   const [selectedSectionId, setSelectedSectionId] = useState<string>('')
   const [selectedScheduleId, setSelectedScheduleId] = useState<string>('')
+  const [showUploadModal, setShowUploadModal] = useState(false)
   const hasFetchedRef = useRef(false)
 
   useEffect(() => {
@@ -181,6 +183,13 @@ export default function ProfessorDashboard() {
                 Reports
               </button>
               <button
+                onClick={() => setShowUploadModal(true)}
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+              >
+                <Upload className="w-4 h-4" />
+                Upload Class List
+              </button>
+              <button
                 onClick={() => setShowCreateModal(true)}
                 className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors"
               >
@@ -265,6 +274,9 @@ export default function ProfessorDashboard() {
                             </span>
                           )}
                         </div>
+                        {classroom.subject_code && (
+                          <p className="text-white/80 text-xs font-mono mt-0.5">{classroom.subject_code}</p>
+                        )}
                         <p className="text-white/90 text-sm mt-1">
                           {classroom.sections.semester} • {classroom.sections.academic_year}
                         </p>
@@ -281,7 +293,7 @@ export default function ProfessorDashboard() {
                         <div>
                           <p className="text-sm font-medium text-gray-700">Schedule</p>
                           <p className="text-sm text-gray-500">
-                            {classroom.day_of_week}, {classroom.start_time} - {classroom.end_time}
+                            {classroom.day_of_week}, {formatTime12h(classroom.start_time)} - {formatTime12h(classroom.end_time)}
                           </p>
                         </div>
                       </div>
@@ -342,6 +354,19 @@ export default function ProfessorDashboard() {
         onFaceRecognitionClick={handleFaceRecognitionClick}
         professorName={`${user?.firstName} ${user?.lastName}`}
       />
+
+      {/* Upload Class List Modal */}
+      {showUploadModal && (
+        <UploadClassListModal
+          professorId={user.id}
+          onClose={() => setShowUploadModal(false)}
+          onComplete={() => {
+            setShowUploadModal(false)
+            hasFetchedRef.current = false
+            fetchSections()
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -357,6 +382,8 @@ function CreateClassroomModal({ sections: initialSections, professorName, onClos
   const supabase = createClient()
   const [formData, setFormData] = useState({
     sectionId: '',
+    subjectCode: '',
+    subjectName: '',
     room: '',
     maxCapacity: '',
     dayOfWeek: '',
@@ -401,7 +428,7 @@ function CreateClassroomModal({ sections: initialSections, professorName, onClos
     setIsSubmitting(true)
 
     try {
-      if (!formData.sectionId || !formData.room || !formData.maxCapacity || !formData.dayOfWeek || !formData.startTime || !formData.endTime) {
+      if (!formData.sectionId || !formData.subjectCode || !formData.room || !formData.maxCapacity || !formData.dayOfWeek || !formData.startTime || !formData.endTime) {
         throw new Error('All fields are required')
       }
 
@@ -461,6 +488,36 @@ function CreateClassroomModal({ sections: initialSections, professorName, onClos
               value={professorName}
               disabled
               className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100 text-gray-600 cursor-not-allowed"
+            />
+          </div>
+
+          {/* Subject Code */}
+          <div>
+            <label htmlFor="subjectCode" className="block text-sm font-medium text-gray-700 mb-1">
+              Subject Code *
+            </label>
+            <input
+              type="text"
+              id="subjectCode"
+              value={formData.subjectCode}
+              onChange={(e) => setFormData(prev => ({ ...prev, subjectCode: e.target.value.toUpperCase() }))}
+              placeholder="e.g., CC112, IT-ELEC-1"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            />
+          </div>
+
+          {/* Subject Name */}
+          <div>
+            <label htmlFor="subjectName" className="block text-sm font-medium text-gray-700 mb-1">
+              Subject Name
+            </label>
+            <input
+              type="text"
+              id="subjectName"
+              value={formData.subjectName}
+              onChange={(e) => setFormData(prev => ({ ...prev, subjectName: e.target.value }))}
+              placeholder="e.g., Computer Programming 1"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
             />
           </div>
 
@@ -570,6 +627,655 @@ function CreateClassroomModal({ sections: initialSections, professorName, onClos
             </button>
           </div>
         </form>
+      </div>
+    </div>
+  )
+}
+
+// ── Day code → full day name mapping ─────────────────────────────────────────
+
+const DAY_CODE_MAP: Record<string, string> = {
+  M: 'Monday',
+  T: 'Tuesday',
+  W: 'Wednesday',
+  TH: 'Thursday',
+  F: 'Friday',
+  S: 'Saturday',
+  SU: 'Sunday',
+}
+
+function dayCodeToName(code: string): string {
+  const upper = (code || '').trim().toUpperCase()
+  return DAY_CODE_MAP[upper] || upper
+}
+
+/** Convert Excel serial time (fraction of day) to "HH:mm" string.
+ *  Handles: "14:00", "2:00 PM", "7:00:00 AM", 0.583333, Date objects */
+function excelTimeToHHMM(value: any): string {
+  if (value == null) return ''
+
+  if (typeof value === 'string') {
+    const s = value.trim()
+    // Match patterns like "2:00 PM", "11:00 AM", "7:00:00 AM", "14:00", "07:00:00"
+    const match = s.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?$/i)
+    if (match) {
+      let h = parseInt(match[1], 10)
+      const m = parseInt(match[2], 10)
+      const ampm = match[3]?.toUpperCase()
+      if (ampm === 'PM' && h < 12) h += 12
+      if (ampm === 'AM' && h === 12) h = 0
+      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+    }
+    return s
+  }
+
+  // Number (Excel serial time, e.g. 0.583333 = 14:00)
+  if (typeof value === 'number') {
+    const totalMinutes = Math.round(value * 24 * 60)
+    const h = Math.floor(totalMinutes / 60)
+    const m = totalMinutes % 60
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+  }
+
+  // Date object
+  if (value instanceof Date) {
+    return `${String(value.getHours()).padStart(2, '0')}:${String(value.getMinutes()).padStart(2, '0')}`
+  }
+
+  return String(value)
+}
+
+/** Convert "17:00" or "17:00:00" → "5:00 PM" */
+function formatTime12h(time: string): string {
+  if (!time) return ''
+  const [hStr, mStr] = time.split(':')
+  let h = parseInt(hStr, 10)
+  const m = parseInt(mStr || '0', 10)
+  const ampm = h >= 12 ? 'PM' : 'AM'
+  if (h === 0) h = 12
+  else if (h > 12) h -= 12
+  return `${h}:${String(m).padStart(2, '0')} ${ampm}`
+}
+
+// ── Parsed section type used by the upload modal ─────────────────────────────
+
+interface ParsedSchedule {
+  schedKey: string
+  subjectCode: string
+  subjectName: string
+  dayOfWeek: string
+  startTime: string
+  endTime: string
+  room: string
+}
+
+interface ParsedStudent {
+  studentNumber: string
+  firstName: string
+  lastName: string
+  middleName: string | null
+  email: string
+}
+
+interface ParsedSection {
+  sectionCode: string
+  semester: string
+  academicYear: string
+  course: string
+  yearLevel: string
+  schedules: ParsedSchedule[]
+  students: ParsedStudent[]
+  selected: boolean
+  selectedScheduleKeys: string[]
+}
+
+// ── Upload Class List Modal ──────────────────────────────────────────────────
+
+interface UploadModalProps {
+  professorId: string
+  onClose: () => void
+  onComplete: () => void
+}
+
+function UploadClassListModal({ professorId, onClose, onComplete }: UploadModalProps) {
+  const [step, setStep] = useState<'upload' | 'preview' | 'uploading' | 'done'>('upload')
+  const [parsedSections, setParsedSections] = useState<ParsedSection[]>([])
+  const [fileName, setFileName] = useState('')
+  const [parseError, setParseError] = useState('')
+  const [uploadResult, setUploadResult] = useState<any>(null)
+  const [progress, setProgress] = useState('')
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // ── Parse XLSX ──────────────────────────────────────────────────────────────
+
+  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setFileName(file.name)
+    setParseError('')
+
+    const reader = new FileReader()
+    reader.onload = (evt) => {
+      try {
+        const data = evt.target?.result
+        const workbook = XLSX.read(data, { type: 'binary' })
+        const sheetName = workbook.SheetNames[0]
+        const ws = workbook.Sheets[sheetName]
+        const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, dateNF: 'HH:mm' })
+
+        if (rows.length < 2) {
+          setParseError('The file appears to be empty or has no data rows.')
+          return
+        }
+
+        // Col indices (0-based): 2=Class, 5=SubCode, 6=Subject, 8=StudNo,
+        // 9=StLName, 10=StFName, 11=StMName, 13=DaysCode, 14=ClassStart,
+        // 15=ClassEnd, 16=StudentCourse, 18=Email, 22=SY, 28=Room
+        const COL = {
+          CLASS: 2,
+          CLASS_YRLVL: 4,
+          SUBCODE: 5,
+          SUBJECT: 6,
+          STUDNO: 8,
+          LASTNAME: 9,
+          FIRSTNAME: 10,
+          MIDDLENAME: 11,
+          DAYSCODE: 13,
+          START: 14,
+          END: 15,
+          STUDENT_COURSE: 16,
+          EMAIL: 18,
+          SY: 22,
+          ROOM: 28,
+        }
+
+        // Build a map: sectionCode -> { schedules, students }
+        const sectionMap = new Map<string, {
+          semester: string
+          academicYear: string
+          course: string
+          yearLevel: string
+          scheduleSet: Map<string, ParsedSchedule>
+          studentMap: Map<string, ParsedStudent>
+        }>()
+
+        for (let i = 1; i < rows.length; i++) {
+          const row = rows[i]
+          if (!row || !row[COL.CLASS] || !row[COL.STUDNO]) continue
+
+          const sectionCode = String(row[COL.CLASS]).trim()
+          const studNo = String(row[COL.STUDNO]).trim()
+          if (!sectionCode || !studNo) continue
+
+          if (!sectionMap.has(sectionCode)) {
+            sectionMap.set(sectionCode, {
+              semester: '2nd Semester',
+              academicYear: row[COL.SY] ? String(row[COL.SY]).trim() : '2025-2026',
+              course: row[COL.STUDENT_COURSE] ? String(row[COL.STUDENT_COURSE]).trim() : '',
+              yearLevel: row[COL.CLASS_YRLVL] ? String(row[COL.CLASS_YRLVL]).trim() : '',
+              scheduleSet: new Map(),
+              studentMap: new Map(),
+            })
+          }
+
+          const sec = sectionMap.get(sectionCode)!
+
+          // Schedule key = subCode + day + start + end
+          const subCode = row[COL.SUBCODE] ? String(row[COL.SUBCODE]).trim() : ''
+          const dayRaw = row[COL.DAYSCODE] ? String(row[COL.DAYSCODE]).trim() : ''
+          const startRaw = row[COL.START] ?? ''
+          const endRaw = row[COL.END] ?? ''
+          const room = row[COL.ROOM] ? String(row[COL.ROOM]).trim() : 'TBA'
+          const day = dayCodeToName(dayRaw)
+          const startTime = excelTimeToHHMM(startRaw)
+          const endTime = excelTimeToHHMM(endRaw)
+
+          if (subCode && day) {
+            const schedKey = `${subCode}|${day}|${startTime}|${endTime}`
+            if (!sec.scheduleSet.has(schedKey)) {
+              sec.scheduleSet.set(schedKey, {
+                schedKey,
+                subjectCode: subCode,
+                subjectName: row[COL.SUBJECT] ? String(row[COL.SUBJECT]).trim() : subCode,
+                dayOfWeek: day,
+                startTime,
+                endTime,
+                room,
+              })
+            }
+          }
+
+          // Student (deduplicate by student number)
+          if (!sec.studentMap.has(studNo)) {
+            sec.studentMap.set(studNo, {
+              studentNumber: studNo,
+              firstName: row[COL.FIRSTNAME] ? String(row[COL.FIRSTNAME]).trim() : '',
+              lastName: row[COL.LASTNAME] ? String(row[COL.LASTNAME]).trim() : '',
+              middleName: row[COL.MIDDLENAME] ? String(row[COL.MIDDLENAME]).trim() : null,
+              email: row[COL.EMAIL] ? String(row[COL.EMAIL]).trim() : '',
+            })
+          }
+        }
+
+        // Convert map to array
+        const parsed: ParsedSection[] = Array.from(sectionMap.entries())
+          .map(([code, data]) => {
+            const schedules = Array.from(data.scheduleSet.values())
+            return {
+              sectionCode: code,
+              semester: data.semester,
+              academicYear: data.academicYear,
+              course: data.course,
+              yearLevel: data.yearLevel,
+              schedules,
+              students: Array.from(data.studentMap.values()),
+              selected: false,
+              selectedScheduleKeys: schedules.map((s) => s.schedKey),
+            }
+          })
+          .sort((a, b) => a.sectionCode.localeCompare(b.sectionCode))
+
+        setParsedSections(parsed)
+        setStep('preview')
+      } catch (err: any) {
+        console.error('XLSX parse error:', err)
+        setParseError(err.message || 'Failed to parse file')
+      }
+    }
+    reader.readAsBinaryString(file)
+  }, [])
+
+  // ── Toggle section selection ────────────────────────────────────────────────
+
+  const toggleSection = (sectionCode: string) => {
+    setParsedSections((prev) =>
+      prev.map((s) => (s.sectionCode === sectionCode ? { ...s, selected: !s.selected } : s))
+    )
+  }
+
+  const toggleSchedule = (sectionCode: string, schedKey: string) => {
+    setParsedSections((prev) =>
+      prev.map((s) => {
+        if (s.sectionCode !== sectionCode) return s
+        const isSelected = s.selectedScheduleKeys.includes(schedKey)
+        return {
+          ...s,
+          selectedScheduleKeys: isSelected
+            ? s.selectedScheduleKeys.filter((k) => k !== schedKey)
+            : [...s.selectedScheduleKeys, schedKey],
+        }
+      })
+    )
+  }
+
+  const selectedSections = parsedSections.filter((s) => s.selected)
+
+  // ── Submit to API ───────────────────────────────────────────────────────────
+
+  const handleSubmit = async () => {
+    if (selectedSections.length === 0) return
+    setStep('uploading')
+    setProgress('Uploading class list...')
+
+    try {
+      const payload = {
+        professorId,
+        sections: selectedSections.map(({ selected, selectedScheduleKeys, ...rest }) => ({
+          ...rest,
+          schedules: rest.schedules.filter((s) => selectedScheduleKeys.includes(s.schedKey)),
+        })),
+      }
+
+      const response = await fetch('/api/professor/upload-classlist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Upload failed')
+      }
+
+      setUploadResult(result)
+      setStep('done')
+    } catch (err: any) {
+      setUploadResult({ error: err.message })
+      setStep('done')
+    }
+  }
+
+  // ── Search / filter ─────────────────────────────────────────────────────────
+
+  const [searchQuery, setSearchQuery] = useState('')
+  const [courseFilter, setCourseFilter] = useState('')
+  const [yearLevelFilter, setYearLevelFilter] = useState('')
+
+  // Derive unique courses and year levels for filter dropdowns
+  const uniqueCourses = Array.from(new Set(parsedSections.map((s) => s.course).filter(Boolean))).sort()
+  const uniqueYearLevels = Array.from(new Set(parsedSections.map((s) => s.yearLevel).filter(Boolean))).sort()
+
+  const filteredSections = parsedSections.filter((s) => {
+    const matchesSearch =
+      !searchQuery ||
+      s.sectionCode.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      s.schedules.some((sc) => sc.subjectCode.toLowerCase().includes(searchQuery.toLowerCase()))
+    const matchesCourse = !courseFilter || s.course === courseFilter
+    const matchesYear = !yearLevelFilter || s.yearLevel === yearLevelFilter
+    return matchesSearch && matchesCourse && matchesYear
+  })
+
+  const toggleAllFiltered = () => {
+    const filteredCodes = new Set(filteredSections.map((s) => s.sectionCode))
+    const allFilteredSelected = filteredSections.every((s) => s.selected)
+    setParsedSections((prev) =>
+      prev.map((s) =>
+        filteredCodes.has(s.sectionCode) ? { ...s, selected: !allFilteredSelected } : s
+      )
+    )
+  }
+
+  // ── Render ──────────────────────────────────────────────────────────────────
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+      <div className="bg-white rounded-xl max-w-4xl w-full max-h-[90vh] flex flex-col shadow-2xl">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+          <div className="flex items-center gap-3">
+            <div className="bg-indigo-100 p-2 rounded-lg">
+              <FileSpreadsheet className="w-5 h-5 text-indigo-600" />
+            </div>
+            <div>
+              <h2 className="text-lg font-bold text-gray-900">Upload Class List</h2>
+              <p className="text-sm text-gray-500">
+                {step === 'upload' && 'Select an Excel file (.xlsx) to import sections and students'}
+                {step === 'preview' && `${parsedSections.length} sections found — select which ones to import`}
+                {step === 'uploading' && 'Creating sections and enrolling students...'}
+                {step === 'done' && 'Upload complete'}
+              </p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto px-6 py-4">
+          {/* ── Step: Upload ───────────────────────────────────────────────── */}
+          {step === 'upload' && (
+            <div className="flex flex-col items-center justify-center py-16">
+              <div
+                onClick={() => fileInputRef.current?.click()}
+                className="border-2 border-dashed border-gray-300 rounded-xl p-12 text-center cursor-pointer hover:border-indigo-400 hover:bg-indigo-50/30 transition-all w-full max-w-md"
+              >
+                <Upload className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+                <p className="text-gray-700 font-medium">Click to select file</p>
+                <p className="text-sm text-gray-500 mt-1">Supports .xlsx files</p>
+                {fileName && (
+                  <p className="text-sm text-indigo-600 mt-3 font-medium">{fileName}</p>
+                )}
+              </div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".xlsx,.xls"
+                onChange={handleFileChange}
+                className="hidden"
+              />
+              {parseError && (
+                <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  {parseError}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Step: Preview ──────────────────────────────────────────────── */}
+          {step === 'preview' && (
+            <div className="space-y-4">
+              {/* Summary bar */}
+              <div className="flex items-center justify-between bg-gray-50 rounded-lg p-3">
+                <div className="flex items-center gap-4 text-sm text-gray-600">
+                  <span>{filteredSections.length} / {parsedSections.length} sections</span>
+                  <span>{filteredSections.reduce((s, sec) => s + sec.students.length, 0)} students</span>
+                  <span className="font-medium text-indigo-600">
+                    {selectedSections.length} selected
+                  </span>
+                </div>
+                <button
+                  onClick={toggleAllFiltered}
+                  className="text-sm font-medium text-indigo-600 hover:text-indigo-800"
+                >
+                  {filteredSections.length > 0 && filteredSections.every((s) => s.selected) ? 'Deselect All' : 'Select All'}
+                </button>
+              </div>
+
+              {/* Filters row */}
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="text"
+                  placeholder="Search by section or subject..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+                <select
+                  value={courseFilter}
+                  onChange={(e) => setCourseFilter(e.target.value)}
+                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                >
+                  <option value="">All Courses</option>
+                  {uniqueCourses.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+                <select
+                  value={yearLevelFilter}
+                  onChange={(e) => setYearLevelFilter(e.target.value)}
+                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                >
+                  <option value="">All Year Levels</option>
+                  {uniqueYearLevels.map((y) => (
+                    <option key={y} value={y}>{y}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Section list */}
+              <div className="space-y-2 max-h-[50vh] overflow-y-auto">
+                {filteredSections.map((section) => (
+                    <div
+                      key={section.sectionCode}
+                      onClick={() => toggleSection(section.sectionCode)}
+                      className={`border rounded-lg p-4 cursor-pointer transition-all ${
+                        section.selected
+                          ? 'border-indigo-500 bg-indigo-50 ring-1 ring-indigo-500'
+                          : 'border-gray-200 hover:border-gray-300'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="checkbox"
+                            checked={section.selected}
+                            readOnly
+                            className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500 pointer-events-none"
+                          />
+                          <div>
+                            <h4 className="font-semibold text-gray-900">{section.sectionCode}</h4>
+                            <p className="text-xs text-gray-500">
+                              {section.course && <span className="text-indigo-600 font-medium">{section.course}</span>}
+                              {section.course && section.yearLevel && ' • '}
+                              {section.yearLevel && <span>{section.yearLevel} Year</span>}
+                              {(section.course || section.yearLevel) && ' • '}
+                              {section.semester} • {section.academicYear}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="text-right text-sm">
+                          <div className="text-gray-700 font-medium">
+                            {section.students.length} students
+                          </div>
+                          <div className={`text-xs ${section.selected && section.selectedScheduleKeys.length < section.schedules.length ? 'text-amber-600 font-medium' : 'text-gray-500'}`}>
+                            {section.selected
+                              ? `${section.selectedScheduleKeys.length}/${section.schedules.length} subjects`
+                              : `${section.schedules.length} subject${section.schedules.length !== 1 ? 's' : ''}`}
+                          </div>
+                        </div>
+                      </div>
+                      {/* Expanded schedule checkboxes */}
+                      {section.selected && section.schedules.length > 0 && (
+                        <div className="mt-3 pt-3 border-t border-indigo-200 space-y-1">
+                          <p className="text-xs font-medium text-indigo-700 mb-2">Select subjects to create classrooms for:</p>
+                          {section.schedules.map((sched) => {
+                            const isSchedSelected = section.selectedScheduleKeys.includes(sched.schedKey)
+                            return (
+                              <div
+                                key={sched.schedKey}
+                                onClick={(e) => { e.stopPropagation(); toggleSchedule(section.sectionCode, sched.schedKey) }}
+                                className={`flex items-center gap-2 text-xs rounded px-2 py-1.5 cursor-pointer transition-colors ${
+                                  isSchedSelected ? 'bg-indigo-100 text-indigo-800' : 'text-gray-400 line-through hover:bg-gray-100'
+                                }`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={isSchedSelected}
+                                  readOnly
+                                  className="w-3 h-3 pointer-events-none accent-indigo-600"
+                                />
+                                <span className="font-semibold">{sched.subjectCode}</span>
+                                <span className="text-gray-400 not-italic">—</span>
+                                <span>{sched.dayOfWeek} {formatTime12h(sched.startTime)}–{formatTime12h(sched.endTime)}</span>
+                                <span className="text-gray-400">({sched.room})</span>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
+
+          {/* ── Step: Uploading ────────────────────────────────────────────── */}
+          {step === 'uploading' && (
+            <div className="flex flex-col items-center justify-center py-16">
+              <div className="w-16 h-16 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
+              <p className="mt-6 text-gray-700 font-medium">{progress}</p>
+              <p className="mt-2 text-sm text-gray-500">
+                Creating {selectedSections.length} sections and enrolling{' '}
+                {selectedSections.reduce((s, sec) => s + sec.students.length, 0)} students...
+              </p>
+            </div>
+          )}
+
+          {/* ── Step: Done ─────────────────────────────────────────────────── */}
+          {step === 'done' && uploadResult && (
+            <div className="py-8 space-y-6">
+              {uploadResult.error && !uploadResult.success ? (
+                <div className="flex flex-col items-center text-center">
+                  <div className="bg-red-100 p-4 rounded-full mb-4">
+                    <AlertCircle className="w-8 h-8 text-red-600" />
+                  </div>
+                  <h3 className="text-lg font-semibold text-red-800">Upload Failed</h3>
+                  <p className="text-sm text-red-600 mt-2">{uploadResult.error}</p>
+                </div>
+              ) : (
+                <>
+                  <div className="flex flex-col items-center text-center">
+                    <div className="bg-emerald-100 p-4 rounded-full mb-4">
+                      <CheckCircle className="w-8 h-8 text-emerald-600" />
+                    </div>
+                    <h3 className="text-lg font-semibold text-gray-900">Upload Complete!</h3>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                    <div className="bg-emerald-50 rounded-lg p-4 text-center">
+                      <div className="text-2xl font-bold text-emerald-700">{uploadResult.sectionsCreated}</div>
+                      <div className="text-xs text-emerald-600 mt-1">Sections Created</div>
+                    </div>
+                    <div className="bg-blue-50 rounded-lg p-4 text-center">
+                      <div className="text-2xl font-bold text-blue-700">{uploadResult.classSessionsCreated}</div>
+                      <div className="text-xs text-blue-600 mt-1">Classes Created</div>
+                    </div>
+                    <div className="bg-indigo-50 rounded-lg p-4 text-center">
+                      <div className="text-2xl font-bold text-indigo-700">{uploadResult.studentsCreated}</div>
+                      <div className="text-xs text-indigo-600 mt-1">Students Enrolled</div>
+                    </div>
+                    <div className="bg-gray-50 rounded-lg p-4 text-center">
+                      <div className="text-2xl font-bold text-gray-700">{uploadResult.studentsExisting}</div>
+                      <div className="text-xs text-gray-600 mt-1">Already Existed</div>
+                    </div>
+                  </div>
+
+                  {uploadResult.errors?.length > 0 && (
+                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                      <h4 className="text-sm font-medium text-amber-800 mb-2">
+                        {uploadResult.errors.length} warning(s):
+                      </h4>
+                      <ul className="text-xs text-amber-700 space-y-1 max-h-32 overflow-y-auto">
+                        {uploadResult.errors.map((err: string, i: number) => (
+                          <li key={i}>• {err}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  <p className="text-sm text-gray-500 text-center">
+                    Students are enrolled without face data. They will need to register their face separately.
+                  </p>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-200 bg-gray-50/50 rounded-b-xl">
+          {step === 'preview' && (
+            <>
+              <button
+                onClick={() => {
+                  setStep('upload')
+                  setParsedSections([])
+                  setFileName('')
+                }}
+                className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 text-sm"
+              >
+                Back
+              </button>
+              <button
+                onClick={handleSubmit}
+                disabled={selectedSections.length === 0}
+                className="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-sm font-medium transition-colors"
+              >
+                Import {selectedSections.length} Section{selectedSections.length !== 1 ? 's' : ''} (
+                {selectedSections.reduce((s, sec) => s + sec.students.length, 0)} students)
+              </button>
+            </>
+          )}
+          {step === 'done' && (
+            <button
+              onClick={onComplete}
+              className="px-6 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium transition-colors"
+            >
+              Done
+            </button>
+          )}
+          {step === 'upload' && (
+            <button
+              onClick={onClose}
+              className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 text-sm"
+            >
+              Cancel
+            </button>
+          )}
+        </div>
       </div>
     </div>
   )

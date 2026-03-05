@@ -8,8 +8,36 @@
  */
 
 const PRODUCTION_URL = 'https://qcu-attendance-monitoring-production.up.railway.app'
-const FACENET_API_URL = process.env.NEXT_PUBLIC_FACENET_API_URL || PRODUCTION_URL
-const FACENET_WS_URL = FACENET_API_URL.replace(/^https/, 'wss').replace(/^http/, 'ws')
+const LOCAL_FALLBACK_URL = process.env.NEXT_PUBLIC_LOCAL_API_URL || 'http://localhost:8000'
+
+// Runtime-mutable — switches to local fallback automatically when Railway is unreachable
+let FACENET_API_URL = process.env.NEXT_PUBLIC_FACENET_API_URL || PRODUCTION_URL
+let _fallbackActive = false
+
+/** Returns the active WebSocket base URL (derived from current FACENET_API_URL). */
+function getWsUrl(): string {
+  return FACENET_API_URL.replace(/^https/, 'wss').replace(/^http/, 'ws')
+}
+
+/** Switch to the local server. Called automatically on connection failure. */
+function activateFallback(): void {
+  if (!_fallbackActive && LOCAL_FALLBACK_URL !== FACENET_API_URL) {
+    _fallbackActive = true
+    FACENET_API_URL = LOCAL_FALLBACK_URL
+    console.warn(`⚠️ Railway API unreachable — switched to local fallback: ${LOCAL_FALLBACK_URL}`)
+  }
+}
+
+/**
+ * Reset the active URL back to the primary/production URL.
+ * Call this if Railway recovers and you want to switch back.
+ */
+export function resetToProductionUrl(): void {
+  const primaryUrl = process.env.NEXT_PUBLIC_FACENET_API_URL || PRODUCTION_URL
+  _fallbackActive = false
+  FACENET_API_URL = primaryUrl
+  console.log(`🔄 Reset to primary API: ${primaryUrl}`)
+}
 
 // ============ Retry helper ============
 
@@ -18,6 +46,7 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 /**
  * fetch() wrapper that automatically retries on 503 (model still loading).
  * Uses exponential backoff: 2s, 4s, 8s … up to maxRetries attempts.
+ * On network-level failure (Railway down), switches to the local fallback and retries.
  */
 async function fetchWithRetry(
   url: string,
@@ -26,13 +55,24 @@ async function fetchWithRetry(
   baseDelayMs = 2000
 ): Promise<Response> {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const response = await fetch(url, init)
-    if (response.status !== 503) return response
+    try {
+      const response = await fetch(url, init)
+      if (response.status !== 503) return response
 
-    if (attempt < maxRetries) {
-      const delay = baseDelayMs * Math.pow(1.5, attempt)
-      console.log(`⏳ Model loading — retrying in ${Math.round(delay / 1000)}s (attempt ${attempt + 1}/${maxRetries})`)
-      await sleep(delay)
+      if (attempt < maxRetries) {
+        const delay = baseDelayMs * Math.pow(1.5, attempt)
+        console.log(`⏳ Model loading — retrying in ${Math.round(delay / 1000)}s (attempt ${attempt + 1}/${maxRetries})`)
+        await sleep(delay)
+      }
+    } catch (networkError) {
+      // Network-level failure (server unreachable) — try local fallback once
+      if (!_fallbackActive && LOCAL_FALLBACK_URL !== FACENET_API_URL) {
+        activateFallback()
+        const fallbackUrl = url.replace(/^https?:\/\/[^/]+/, LOCAL_FALLBACK_URL)
+        console.log(`🔄 Retrying with local fallback: ${fallbackUrl}`)
+        return fetchWithRetry(fallbackUrl, init, maxRetries, baseDelayMs)
+      }
+      throw networkError
     }
   }
   // Return the last 503 response so callers can handle it
@@ -64,7 +104,10 @@ export async function waitForModelReady(
         console.log(`⏳ Model loading… (status: ${data.status})`)
       }
     } catch {
-      // server not yet reachable — keep polling
+      // server not yet reachable — try local fallback if not already active
+      if (!_fallbackActive) {
+        activateFallback()
+      }
     }
     await sleep(intervalMs)
   }
@@ -326,13 +369,20 @@ export async function checkFaceNetHealth(): Promise<boolean> {
   try {
     const response = await fetch(`${FACENET_API_URL}/health`)
     if (!response.ok) return false
-    const data = await response.json()
     // Return true only when server is up (model may still be loading)
     // Use waitForModelReady() if you need to wait for full readiness
     return true
   } catch (error) {
     console.error('❌ FaceNet health check failed:', error)
-    return false
+    // Activate local fallback so subsequent calls use localhost
+    activateFallback()
+    // Retry once against the local fallback
+    try {
+      const fallbackResponse = await fetch(`${FACENET_API_URL}/health`)
+      return fallbackResponse.ok
+    } catch {
+      return false
+    }
   }
 }
 
@@ -509,10 +559,10 @@ export class RealtimeRecognizer {
     this.videoScaleX = videoElement.videoWidth / SEND_WIDTH
     this.videoScaleY = videoElement.videoHeight / SEND_HEIGHT
 
-    const wsUrl = `${FACENET_WS_URL}/ws/recognize`
+    const wsUrl = `${getWsUrl()}/ws/recognize`
     console.log(`🔌 Connecting WebSocket to ${wsUrl}`)
     console.log(`   API URL: ${FACENET_API_URL}`)
-    console.log(`   WS URL: ${FACENET_WS_URL}`)
+    console.log(`   WS URL: ${getWsUrl()}`)
     
     try {
       this.ws = new WebSocket(wsUrl)
@@ -562,6 +612,10 @@ export class RealtimeRecognizer {
       console.error('   - Python server not running (start with: python facenet-server.py)')
       console.error('   - Server running on different port')
       console.error('   - CORS or firewall blocking connection')
+      // If Railway WS is unreachable, activate local fallback so reconnect uses localhost
+      if (!_fallbackActive) {
+        activateFallback()
+      }
     }
 
     this.ws.onclose = (event) => {

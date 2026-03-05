@@ -6,7 +6,7 @@ export async function PUT(request: NextRequest) {
     const supabase = getSupabaseAdmin()
     const body = await request.json()
     
-    const { userId, firstName, lastName, studentId, email } = body
+    const { userId, firstName, lastName, middleName, studentId, email } = body
 
     if (!userId || !firstName || !lastName || !studentId) {
       return NextResponse.json({ 
@@ -26,6 +26,7 @@ export async function PUT(request: NextRequest) {
       .update({
         first_name: firstName,
         last_name: lastName,
+        middle_name: middleName ?? null,
         student_number: studentId,
         updated_at: new Date().toISOString()
       })

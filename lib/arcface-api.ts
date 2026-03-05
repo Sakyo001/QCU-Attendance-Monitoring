@@ -3,7 +3,35 @@
  * Interfaces with Python FastAPI server for face recognition
  */
 
-const ARCFACE_API_URL = process.env.NEXT_PUBLIC_ARCFACE_API_URL || 'https://qcu-attendance-monitoring-production.up.railway.app'
+const ARCFACE_PRODUCTION_URL = 'https://qcu-attendance-monitoring-production.up.railway.app'
+const ARCFACE_LOCAL_FALLBACK_URL = process.env.NEXT_PUBLIC_LOCAL_API_URL || 'http://localhost:8000'
+
+// Runtime-mutable — switches to local fallback automatically when Railway is unreachable
+let ARCFACE_API_URL = process.env.NEXT_PUBLIC_ARCFACE_API_URL || ARCFACE_PRODUCTION_URL
+let _arcfaceFallbackActive = false
+
+function activateArcFaceFallback(): void {
+  if (!_arcfaceFallbackActive && ARCFACE_LOCAL_FALLBACK_URL !== ARCFACE_API_URL) {
+    _arcfaceFallbackActive = true
+    ARCFACE_API_URL = ARCFACE_LOCAL_FALLBACK_URL
+    console.warn(`⚠️ Railway ArcFace API unreachable — switched to local fallback: ${ARCFACE_LOCAL_FALLBACK_URL}`)
+  }
+}
+
+/** Fetch wrapper that falls back to the local server on network failure. */
+async function fetchArcFace(url: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init)
+  } catch (networkError) {
+    if (!_arcfaceFallbackActive && ARCFACE_LOCAL_FALLBACK_URL !== ARCFACE_API_URL) {
+      activateArcFaceFallback()
+      const fallbackUrl = url.replace(/^https?:\/\/[^/]+/, ARCFACE_LOCAL_FALLBACK_URL)
+      console.log(`🔄 Retrying ArcFace with local fallback: ${fallbackUrl}`)
+      return fetch(fallbackUrl, init)
+    }
+    throw networkError
+  }
+}
 
 export interface ArcFaceEmbedding {
   detected: boolean
@@ -29,7 +57,7 @@ export async function extractArcFaceEmbedding(
   base64Image: string
 ): Promise<ArcFaceEmbedding> {
   try {
-    const response = await fetch(`${ARCFACE_API_URL}/extract-from-base64`, {
+    const response = await fetchArcFace(`${ARCFACE_API_URL}/extract-from-base64`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -94,7 +122,7 @@ export async function verifyArcFaceEmbeddings(
   embedding2: number[]
 ): Promise<ArcFaceVerification> {
   try {
-    const response = await fetch(`${ARCFACE_API_URL}/verify`, {
+    const response = await fetchArcFace(`${ARCFACE_API_URL}/verify`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -122,7 +150,7 @@ export async function verifyArcFaceEmbeddings(
  */
 export async function checkArcFaceHealth(): Promise<boolean> {
   try {
-    const response = await fetch(`${ARCFACE_API_URL}/health`, {
+    const response = await fetchArcFace(`${ARCFACE_API_URL}/health`, {
       method: 'POST',
     })
     return response.ok

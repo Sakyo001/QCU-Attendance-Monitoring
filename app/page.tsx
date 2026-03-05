@@ -96,6 +96,7 @@ export default function Home() {
   const recognizerRef = useRef<RealtimeRecognizer | null>(null)
   const markedStudentIdsRef = useRef<Set<string>>(new Set())
   const markingStudentIdsRef = useRef<Set<string>>(new Set())
+  const lastActivityRef = useRef<number>(Date.now())
 
   // ============ Effects ============
 
@@ -103,6 +104,32 @@ export default function Home() {
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000)
     return () => clearInterval(timer)
+  }, [])
+
+  // Inactivity — redirect to idle after 30 seconds
+  useEffect(() => {
+    const checkInactivity = () => {
+      if (Date.now() - lastActivityRef.current >= 30000) {
+        router.push('/idle')
+      }
+    }
+    const interval = setInterval(checkInactivity, 5000)
+    return () => clearInterval(interval)
+  }, [router])
+
+  // Reset activity on any user interaction
+  useEffect(() => {
+    const reset = () => { lastActivityRef.current = Date.now() }
+    window.addEventListener('mousemove', reset)
+    window.addEventListener('mousedown', reset)
+    window.addEventListener('keydown', reset)
+    window.addEventListener('touchstart', reset)
+    return () => {
+      window.removeEventListener('mousemove', reset)
+      window.removeEventListener('mousedown', reset)
+      window.removeEventListener('keydown', reset)
+      window.removeEventListener('touchstart', reset)
+    }
   }, [])
 
   // Check server health + load models
@@ -849,7 +876,7 @@ export default function Home() {
   // --- Phase 1: Professor Scan ---
   if (phase === 'professor-scan') {
     return (
-      <div className="min-h-screen bg-gray-50 text-gray-900 flex flex-col">
+      <div className="h-screen overflow-hidden bg-gray-50 text-gray-900 flex flex-col">
         <TopBar>
           <p className="text-xs text-gray-400">Professor verification required</p>
         </TopBar>
@@ -944,7 +971,7 @@ export default function Home() {
   // --- Phase 2: Schedule Select ---
   if (phase === 'schedule-select') {
     return (
-      <div className="min-h-screen bg-gray-50 text-gray-900 flex flex-col">
+      <div className="h-screen overflow-hidden bg-gray-50 text-gray-900 flex flex-col">
         <TopBar>
           {professor && <p className="text-xs text-emerald-600">Prof. {professor.firstName} {professor.lastName}</p>}
         </TopBar>
@@ -1002,9 +1029,9 @@ export default function Home() {
 
   // --- Phase 3 & 4: Attendance Active / Locked ---
   return (
-    <div className="min-h-screen bg-gray-50 text-gray-900 flex flex-col">
+    <div className="h-screen overflow-hidden bg-gray-50 text-gray-900 flex flex-col">
       {/* Top Bar */}
-      <div className="flex items-center justify-between px-6 py-3 bg-white border-b border-gray-100 shadow-sm">
+      <div className="flex items-center justify-between px-6 py-3 bg-white border-b border-gray-100 shadow-sm shrink-0">
         <div className="flex items-center gap-3">
           <Image src="/verifaceqcu.jpg" alt="VeriFace" width={40} height={40} className="rounded-lg" />
           <div>
@@ -1060,9 +1087,9 @@ export default function Home() {
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 flex">
+      <div className="flex-1 overflow-hidden flex">
         {/* Left: Camera Feed */}
-        <div className="flex-1 flex flex-col items-center justify-center p-8">
+        <div className="flex-1 overflow-hidden flex flex-col items-center justify-center p-8">
           {/* Locked Banner */}
           {phase === 'attendance-locked' && (
             <div className="mb-5 px-5 py-3 bg-red-50 border border-red-200 rounded-xl flex items-center gap-3">

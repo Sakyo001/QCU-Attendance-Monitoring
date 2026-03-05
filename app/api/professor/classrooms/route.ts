@@ -22,7 +22,7 @@ export async function GET(request: Request) {
     // Fetch professor's class sessions with section details
     const { data: classrooms, error } = await supabase
       .from('class_sessions')
-      .select('id, section_id, room, max_capacity, day_of_week, start_time, end_time, sections(id, section_code, semester, academic_year, max_students)')
+      .select('id, section_id, room, max_capacity, day_of_week, start_time, end_time, subject_code, subject_name, sections(id, section_code, semester, academic_year, max_students)')
       .eq('professor_id', professorId)
       .order('day_of_week')
 
