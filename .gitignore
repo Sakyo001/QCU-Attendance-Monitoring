@@ -43,3 +43,20 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Large ML/dataset directories (local only)
+/deepface/
+/dataset/samples/
+/face-ml-training/models/
+/face-ml-training/runs/
+/face-ml-training/datasets/
+/face-ml-training/api/database/
+/face-ml-training/database/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Python virtual environment
+/.venv/

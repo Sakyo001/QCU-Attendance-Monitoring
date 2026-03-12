@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation'
 import { ArrowLeft, UserPlus, Camera, RefreshCw, ShieldCheck, Loader2, ScanFace, CircleAlert, CircleCheck } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 import { createClient } from '@/utils/supabase/client'
-import { initializeFaceDetection, detectFaceInVideo } from '@/lib/mediapipe-face'
 import { extractFaceNetFromVideo, checkFaceNetHealth, waitForModelReady } from '@/lib/facenet-python-api'
 
 interface Section {
@@ -23,6 +22,7 @@ export default function AddFacultyPage() {
 
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState('')
+  const [formErrors, setFormErrors] = useState<{ contactNumber?: string }>({})
 
   const [formData, setFormData] = useState({
     firstName: '',
@@ -52,9 +52,7 @@ export default function AddFacultyPage() {
   const savedFaceDescriptorRef = useRef<Float32Array | null>(null)
   const faceStableStartRef = useRef<number | null>(null)
   const consecutiveFaceDetectionsRef = useRef<number>(0)
-  const lastFaceNetCallRef = useRef<number>(0)
-  const lastMediaPipeCallRef = useRef<number>(0)
-  const isDetectingRef = useRef<boolean>(false)
+  const consecutiveServerErrorsRef = useRef<number>(0)
 
   useEffect(() => {
     if (!user || user.role !== 'admin') {
@@ -62,28 +60,15 @@ export default function AddFacultyPage() {
     }
   }, [user, router])
 
-  // Load MediaPipe models
-  useEffect(() => {
-    const loadModels = async () => {
-      try {
-        const loaded = await initializeFaceDetection()
-        setModelsLoaded(loaded)
-        if (loaded) {
-          console.log('✅ MediaPipe models loaded for Faculty Registration')
-        }
-      } catch (error) {
-        console.error('Error loading MediaPipe:', error)
-      }
-    }
-    loadModels()
-  }, [])
-
   // Check Python FaceNet server health and warm up model
   useEffect(() => {
     const checkServer = async () => {
       const healthy = await checkFaceNetHealth()
       setServerHealthy(healthy)
-      if (healthy) waitForModelReady()
+      if (healthy) {
+        await waitForModelReady()
+        setModelsLoaded(true)  // server ready = models loaded
+      }
     }
     checkServer()
   }, [])
@@ -214,95 +199,68 @@ export default function AddFacultyPage() {
   const startFaceDetection = () => {
     if (!videoRef.current || !modelsLoaded) return
 
-    const MEDIAPIPE_THROTTLE_MS = 150  // ~6-7 fps — what MediaPipe WASM can handle
-    const FACENET_THROTTLE_MS = 1200   // only call server this often
     const CAPTURE_DELAY = 1500
 
-    const loop = async () => {
-      if (!videoRef.current || isCapturing) {
-        rafRef.current = requestAnimationFrame(loop)
-        return
-      }
+    detectionIntervalRef.current = setInterval(async () => {
+      if (!videoRef.current || isCapturing) return
+      if (videoRef.current.readyState !== 4 || videoRef.current.videoWidth === 0) return
 
-      const now = Date.now()
+      try {
+        const result = await extractFaceNetFromVideo(videoRef.current)
 
-      // --- MediaPipe: throttled to ~6fps to avoid WASM abort ---
-      // Only call when video is truly ready (readyState 4 = HAVE_ENOUGH_DATA)
-      if (
-        !isDetectingRef.current &&
-        now - lastMediaPipeCallRef.current >= MEDIAPIPE_THROTTLE_MS &&
-        videoRef.current.readyState === 4 &&
-        videoRef.current.videoWidth > 0
-      ) {
-        lastMediaPipeCallRef.current = now
-        isDetectingRef.current = true
-        try {
-          const mediapipeResult = await detectFaceInVideo(videoRef.current!)
+        // Auto-stop if server is consistently unreachable (5 consecutive errors ≈ 2s)
+        if (result.error) {
+          consecutiveServerErrorsRef.current += 1
+          if (consecutiveServerErrorsRef.current >= 5) {
+            setServerHealthy(false)
+            stopCamera()
+            setError('Face recognition server is unreachable. Please start the Python server and try again.')
+          }
+          return
+        }
+        consecutiveServerErrorsRef.current = 0
 
-          if (mediapipeResult.detected && mediapipeResult.boundingBox && videoRef.current) {
-            const video = videoRef.current
-            const { xCenter, yCenter, width, height } = mediapipeResult.boundingBox
-            const cx = xCenter * video.videoWidth
-            const cy = yCenter * video.videoHeight
-            const pw = width * video.videoWidth
-            const ph = height * video.videoHeight
-            // Square: use the larger dimension + padding as the side
-            const pad = 40
-            const side = Math.max(pw, ph) + pad * 2
-            setBoundingBox({
-              x: Math.max(0, cx - side / 2),
-              y: Math.max(0, cy - side / 2),
-              width: Math.min(video.videoWidth, side),
-              height: Math.min(video.videoHeight, side),
-            })
-            consecutiveFaceDetectionsRef.current += 1
-          } else {
+        if (result.detected) {
+          // Spoof check: reset capture timer and treat as "no face" so the
+          // countdown never completes for a phone screen / printed photo.
+          if (result.spoofDetected || !result.embedding) {
+            setFaceDetected(false)
             setBoundingBox(null)
             consecutiveFaceDetectionsRef.current = 0
             faceStableStartRef.current = null
             setCaptureCountdown(null)
-            setFaceDetected(false)
+            return
           }
-        } catch (err) {
-          // MediaPipe WASM can abort if called too fast; swallow and keep going
-          console.warn('MediaPipe detection error (ignored):', err)
-        } finally {
-          isDetectingRef.current = false
+
+          setFaceDetected(true)
+          const descriptor = new Float32Array(result.embedding)
+          setFaceDescriptor(descriptor)
+          savedFaceDescriptorRef.current = descriptor
+
+          // Use bounding box from server response
+          if (result.box) {
+            setBoundingBox(result.box)
+          }
+
+          consecutiveFaceDetectionsRef.current += 1
+
+          if (!faceStableStartRef.current) faceStableStartRef.current = Date.now()
+          const elapsed = Date.now() - faceStableStartRef.current
+          setCaptureCountdown(Math.max(0, Math.ceil((CAPTURE_DELAY - elapsed) / 1000)))
+          if (elapsed >= CAPTURE_DELAY && !isCapturing) {
+            capturePhoto()
+          }
+        } else {
+          setFaceDetected(false)
+          setBoundingBox(null)
+          consecutiveFaceDetectionsRef.current = 0
+          faceStableStartRef.current = null
+          setCaptureCountdown(null)
         }
+      } catch (err) {
+        console.warn('Face detection error:', err)
       }
-
-      // --- FaceNet: throttled, only when MediaPipe sees stable face ---
-      if (
-        consecutiveFaceDetectionsRef.current >= 3 &&
-        now - lastFaceNetCallRef.current > FACENET_THROTTLE_MS &&
-        videoRef.current &&
-        videoRef.current.readyState === 4
-      ) {
-        lastFaceNetCallRef.current = now
-        try {
-          const pythonResult = await extractFaceNetFromVideo(videoRef.current!)
-          if (pythonResult.detected && pythonResult.embedding) {
-            setFaceDetected(true)
-            const descriptor = new Float32Array(pythonResult.embedding)
-            setFaceDescriptor(descriptor)
-            savedFaceDescriptorRef.current = descriptor
-
-            if (!faceStableStartRef.current) faceStableStartRef.current = Date.now()
-            const elapsed = Date.now() - faceStableStartRef.current
-            setCaptureCountdown(Math.max(0, Math.ceil((CAPTURE_DELAY - elapsed) / 1000)))
-            if (elapsed >= CAPTURE_DELAY) capturePhoto()
-          } else {
-            setFaceDetected(false)
-            faceStableStartRef.current = null
-            setCaptureCountdown(null)
-          }
-        } catch { /* ignore */ }
-      }
-
-      rafRef.current = requestAnimationFrame(loop)
-    }
-
-    rafRef.current = requestAnimationFrame(loop)
+    }, 400)  // ~2.5 fps — comfortable rate for server-side detection
   }
 
   const startCamera = async () => {
@@ -324,6 +282,7 @@ export default function AddFacultyPage() {
       
       streamRef.current = stream
       setError('')
+      consecutiveServerErrorsRef.current = 0
       
       requestAnimationFrame(() => {
         setShowCamera(true)
@@ -340,7 +299,7 @@ export default function AddFacultyPage() {
     }
     if (rafRef.current) cancelAnimationFrame(rafRef.current)
     if (detectionIntervalRef.current) clearInterval(detectionIntervalRef.current)
-    
+
     setShowCamera(false)
     setIsCapturing(false)
     setFaceDetected(false)
@@ -349,9 +308,6 @@ export default function AddFacultyPage() {
 
     faceStableStartRef.current = null
     consecutiveFaceDetectionsRef.current = 0
-    lastFaceNetCallRef.current = 0
-    lastMediaPipeCallRef.current = 0
-    isDetectingRef.current = false
   }
 
   const capturePhoto = () => {
@@ -391,6 +347,22 @@ export default function AddFacultyPage() {
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target
+
+    if (name === 'firstName' || name === 'lastName') {
+      // Block numeric characters from name fields
+      const filtered = value.replace(/[0-9]/g, '')
+      setFormData(prev => ({ ...prev, [name]: filtered }))
+      return
+    }
+
+    if (name === 'contactNumber') {
+      // Only allow digits, max 11 characters
+      const filtered = value.replace(/[^0-9]/g, '').slice(0, 11)
+      setFormData(prev => ({ ...prev, [name]: filtered }))
+      if (formErrors.contactNumber) setFormErrors(prev => ({ ...prev, contactNumber: undefined }))
+      return
+    }
+
     setFormData(prev => ({ ...prev, [name]: value }))
   }
 
@@ -402,6 +374,17 @@ export default function AddFacultyPage() {
       setError('Please capture a face photo for the faculty member')
       return
     }
+
+    // Validate contact number if provided
+    const errors: { contactNumber?: string } = {}
+    if (formData.contactNumber && formData.contactNumber.length !== 11) {
+      errors.contactNumber = 'Contact number must be exactly 11 digits'
+    }
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors)
+      return
+    }
+    setFormErrors({})
 
     setIsSubmitting(true)
 
@@ -645,7 +628,7 @@ export default function AddFacultyPage() {
 
               <div>
                 <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
-                  Email Address (Optional)
+                  Email Address <span className="text-gray-400 font-normal">(Optional)</span>
                 </label>
                 <input
                   type="email"
@@ -660,17 +643,27 @@ export default function AddFacultyPage() {
 
               <div>
                 <label htmlFor="contactNumber" className="block text-sm font-medium text-gray-700 mb-1">
-                  Contact Number
+                  Contact Number <span className="text-gray-400 font-normal">(11 digits)</span>
                 </label>
                 <input
-                  type="tel"
+                  type="text"
                   id="contactNumber"
                   name="contactNumber"
                   value={formData.contactNumber}
                   onChange={handleInputChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500"
+                  inputMode="numeric"
+                  maxLength={11}
+                  placeholder="09XXXXXXXXX"
+                  className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500 ${
+                    formErrors.contactNumber ? 'border-red-400 bg-red-50' : 'border-gray-300'
+                  }`}
                 />
+                {formErrors.contactNumber && (
+                  <p className="text-red-500 text-xs mt-1">{formErrors.contactNumber}</p>
+                )}
               </div>
+
+
             </div>
           </div>
 

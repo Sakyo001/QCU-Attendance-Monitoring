@@ -2,10 +2,10 @@
 
 import { useAuth } from '@/contexts/AuthContext'
 import { useRouter } from 'next/navigation'
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { Clock, Check, AlertCircle } from 'lucide-react'
-import * as faceapi from 'face-api.js'
-import { usePassiveLivenessDetection } from '@/hooks/usePassiveLivenessDetection'
+import { checkFaceNetHealth, ServerCameraStream } from '@/lib/facenet-python-api'
+import type { CameraStreamFrame } from '@/lib/facenet-python-api'
 
 type AttendanceStatus = 'idle' | 'detecting' | 'success' | 'error'
 
@@ -17,6 +17,7 @@ export default function StudentAttendancePage() {
   const [checkingSession, setCheckingSession] = useState(true)
   const [modelsLoaded, setModelsLoaded] = useState(false)
   const [faceDetected, setFaceDetected] = useState(false)
+  const [antiSpoofStatus, setAntiSpoofStatus] = useState<'unknown' | 'live' | 'spoof'>('unknown')
   const [status, setStatus] = useState<AttendanceStatus>('idle')
   const [matchResult, setMatchResult] = useState<{
     studentName: string
@@ -25,30 +26,28 @@ export default function StudentAttendancePage() {
   const [showCamera, setShowCamera] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
 
-  const { livenessScore, livenessMetrics, updateLivenessScore, resetLiveness } = usePassiveLivenessDetection()
-
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const streamRef = useRef<MediaStream | null>(null)
-  const detectionIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const serverCanvasRef = useRef<HTMLCanvasElement>(null)
+  const serverStreamRef = useRef<ServerCameraStream | null>(null)
+  const serverImgRef = useRef<HTMLImageElement | null>(null)
+  const pendingFrameRef = useRef<CameraStreamFrame | null>(null)
+  const rafRef = useRef<number>(0)
   const captureTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const livenessFramesRef = useRef(0)
 
-  // Load face-api models
+  // Check face recognition server health (replaces face-api model loading)
   useEffect(() => {
-    const loadModels = async () => {
+    const checkServer = async () => {
       try {
-        const MODEL_URL = '/models'
-        await Promise.all([
-          faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-          faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
-          faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
-        ])
-        setModelsLoaded(true)
-      } catch (error) {
-        console.error('Error loading face-api models:', error)
-        setErrorMessage('Failed to load facial recognition models. Please refresh the page.')
+        const healthy = await checkFaceNetHealth()
+        setModelsLoaded(healthy)
+        if (!healthy) {
+          setErrorMessage('Face recognition server is not responding. Please ensure the Python server is running.')
+        }
+      } catch {
+        setModelsLoaded(false)
       }
     }
-    loadModels()
+    checkServer()
   }, [])
 
   useEffect(() => {
@@ -83,135 +82,144 @@ export default function StudentAttendancePage() {
     }
   }
 
+  const drawServerFrame = useCallback((data: CameraStreamFrame) => {
+    const canvas = serverCanvasRef.current
+    if (!canvas || !data.frame) return
+
+    if (!serverImgRef.current) {
+      serverImgRef.current = new Image()
+    }
+    const img = serverImgRef.current
+
+    img.onload = () => {
+      canvas.width = data.width || img.naturalWidth
+      canvas.height = data.height || img.naturalHeight
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return
+      ctx.save()
+      ctx.translate(canvas.width, 0)
+      ctx.scale(-1, 1)
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+      ctx.restore()
+    }
+    img.src = `data:image/jpeg;base64,${data.frame}`
+  }, [])
+
+  const handleServerFrame = useCallback((data: CameraStreamFrame) => {
+    // Queue frame for rAF rendering
+    pendingFrameRef.current = data
+
+    // Only process results on frames that ran through the pipeline
+    if (data.results === null || data.results === undefined) return
+
+    // Process results
+    if (status === 'success' || status === 'error') return
+
+    if (!data.results || data.results.length === 0) {
+      setFaceDetected(false)
+      setAntiSpoofStatus('unknown')
+      livenessFramesRef.current = 0
+      if (captureTimeoutRef.current) {
+        clearTimeout(captureTimeoutRef.current)
+        captureTimeoutRef.current = null
+      }
+      return
+    }
+
+    const face = data.results[0]
+    setFaceDetected(true)
+
+    if (face.spoof_detected) {
+      livenessFramesRef.current = 0
+      setAntiSpoofStatus('spoof')
+      setErrorMessage('⚠️ Spoof attempt detected. Please use your real face.')
+      if (captureTimeoutRef.current) {
+        clearTimeout(captureTimeoutRef.current)
+        captureTimeoutRef.current = null
+      }
+      return
+    }
+
+    if (!face.embedding) return
+
+    setAntiSpoofStatus('live')
+    setErrorMessage('')
+    livenessFramesRef.current++
+
+    if (livenessFramesRef.current >= 5 && !captureTimeoutRef.current) {
+      captureTimeoutRef.current = setTimeout(async () => {
+        await markAttendance(new Float32Array(face.embedding!))
+      }, 300)
+    }
+  }, [status])
+
+  // rAF loop — draws the latest queued frame
+  useEffect(() => {
+    let running = true
+    const tick = () => {
+      if (!running) return
+      const frame = pendingFrameRef.current
+      if (frame) {
+        pendingFrameRef.current = null
+        drawServerFrame(frame)
+      }
+      rafRef.current = requestAnimationFrame(tick)
+    }
+    rafRef.current = requestAnimationFrame(tick)
+    return () => {
+      running = false
+      cancelAnimationFrame(rafRef.current)
+    }
+  }, [drawServerFrame])
+
   const startCamera = async () => {
     if (!modelsLoaded) {
-      setErrorMessage('Facial recognition models are still loading. Please wait...')
+      setErrorMessage('Facial recognition server is still loading. Please wait...')
       return
     }
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: 'user',
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        },
-        audio: false
+      const stream = new ServerCameraStream()
+      serverStreamRef.current = stream
+      stream.start('extract', handleServerFrame, (err) => {
+        console.error('Server camera error:', err)
+        setErrorMessage('Camera connection error: ' + err)
       })
-
-      // Store stream reference BEFORE showing camera
-      streamRef.current = stream
       setStatus('detecting')
       setErrorMessage('')
-      
-      // Use requestAnimationFrame to ensure video element is mounted before showing
-      requestAnimationFrame(() => {
-        setShowCamera(true)
-      })
+      setShowCamera(true)
     } catch (error: any) {
-      console.error('Error accessing camera:', error)
-      setErrorMessage(`Unable to access camera: ${error.message}. Please check permissions and try again.`)
+      console.error('Error connecting to server camera:', error)
+      setErrorMessage(`Unable to connect to camera server: ${error.message}`)
     }
   }
 
-  // Handle stream attachment when camera is shown
+  // Cleanup on unmount
   useEffect(() => {
-    if (!showCamera || !streamRef.current || !videoRef.current) return
-
-    // Assign stream to video element
-    videoRef.current.srcObject = streamRef.current
-    
-    // Try to play the video
-    const playPromise = videoRef.current.play()
-    if (playPromise !== undefined) {
-      playPromise.catch(err => {
-        // Ignore play interruption errors (normal when component unmounts)
-        if (err.name !== 'AbortError') {
-          console.error('Autoplay failed, retrying...', err)
-          // Retry with a small delay
-          setTimeout(() => {
-            if (videoRef.current && streamRef.current) {
-              videoRef.current.play().catch(e => {
-                if (e.name !== 'AbortError') console.error('Retry failed:', e)
-              })
-            }
-          }, 100)
-        }
-      })
-    }
-
-    // Start face detection
-    startFaceDetection()
-
-    // Cleanup function
     return () => {
-      // Pause video to prevent play() promise errors
-      if (videoRef.current) {
-        videoRef.current.pause()
-        videoRef.current.srcObject = null
-      }
-      if (detectionIntervalRef.current) {
-        clearInterval(detectionIntervalRef.current)
+      if (serverStreamRef.current) {
+        serverStreamRef.current.stop()
       }
       if (captureTimeoutRef.current) {
         clearTimeout(captureTimeoutRef.current)
       }
     }
-  }, [showCamera])
+  }, [])
 
   const stopCamera = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop())
-      streamRef.current = null
-    }
-    if (detectionIntervalRef.current) {
-      clearInterval(detectionIntervalRef.current)
+    if (serverStreamRef.current) {
+      serverStreamRef.current.stop()
+      serverStreamRef.current = null
     }
     if (captureTimeoutRef.current) {
       clearTimeout(captureTimeoutRef.current)
+      captureTimeoutRef.current = null
     }
+    livenessFramesRef.current = 0
     setShowCamera(false)
     setFaceDetected(false)
+    setAntiSpoofStatus('unknown')
     setStatus('idle')
-    resetLiveness()
-  }
-
-  const startFaceDetection = async () => {
-    if (!videoRef.current || !modelsLoaded) return
-
-    detectionIntervalRef.current = setInterval(async () => {
-      if (!videoRef.current || status === 'success' || status === 'error') return
-
-      try {
-        const detection = await faceapi
-          .detectSingleFace(videoRef.current, new faceapi.TinyFaceDetectorOptions())
-          .withFaceLandmarks()
-          .withFaceDescriptor()
-
-        if (detection) {
-          setFaceDetected(true)
-
-          // Check liveness
-          const isLive = updateLivenessScore(detection)
-          
-          // Auto-capture once liveness is verified
-          if (isLive && !captureTimeoutRef.current) {
-            captureTimeoutRef.current = setTimeout(async () => {
-              await markAttendance(detection.descriptor)
-            }, 500)
-          }
-        } else {
-          setFaceDetected(false)
-          resetLiveness()
-          if (captureTimeoutRef.current) {
-            clearTimeout(captureTimeoutRef.current)
-            captureTimeoutRef.current = null
-          }
-        }
-      } catch (error) {
-        console.error('Face detection error:', error)
-      }
-    }, 300)
   }
 
   const markAttendance = async (faceDescriptor: Float32Array) => {
@@ -346,12 +354,9 @@ export default function StudentAttendancePage() {
         {showCamera && (
           <div className="bg-white rounded-lg shadow-lg overflow-hidden">
             <div className="relative bg-black" style={{ height: '480px' }}>
-              <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                muted
-                style={{ width: '100%', height: '100%', display: 'block', objectFit: 'cover', transform: 'scaleX(-1)' }}
+              <canvas
+                ref={serverCanvasRef}
+                style={{ width: '100%', height: '100%', display: 'block', objectFit: 'cover' }}
               />
 
               <div className="absolute inset-0 flex items-center justify-center">
@@ -363,10 +368,17 @@ export default function StudentAttendancePage() {
               <div className="absolute top-6 left-0 right-0 flex justify-center">
                 <div className="bg-black/70 backdrop-blur-sm px-6 py-3 rounded-full">
                   <p className="text-white font-bold">
-                    {status === 'detecting' && livenessScore < 100 && `👁️ Verifying liveness... ${Math.round(livenessScore)}%`}
-                    {status === 'detecting' && livenessScore === 100 && '✅ Liveness verified!'}
-                    {status === 'success' && '✅ Attendance marked!'}
-                    {status === 'error' && '❌ Error occurred'}
+                {status === 'detecting' && (
+                faceDetected
+                  ? antiSpoofStatus === 'spoof'
+                    ? '🚫 Spoof detected — use your real face'
+                    : antiSpoofStatus === 'live'
+                      ? `✅ Live face verified (${livenessFramesRef.current}/5)`
+                      : '🔍 Face detected — analysing...'
+                  : '👁️ Position your face in the camera'
+              )}
+              {status === 'success' && '✅ Attendance marked!'}
+              {status === 'error' && '❌ Error occurred'}
                   </p>
                 </div>
               </div>

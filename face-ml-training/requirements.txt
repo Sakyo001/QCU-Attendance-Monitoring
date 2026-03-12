@@ -1,0 +1,74 @@
+# ============================================================
+# Face Recognition + Anti-Spoofing ML Backend
+# Requirements for GTX 1650 (CUDA 11.x / 12.x)
+# ============================================================
+
+# --- Core ML ---
+torch>=2.1.0
+torchvision>=0.16.0
+torchaudio>=2.1.0
+
+# --- Face Detection (RetinaFace) ---
+retina-face>=0.0.14
+# or use: insightface (bundles RetinaFace + ArcFace together)
+insightface>=0.7.3
+onnxruntime-gpu>=1.16.0          # GPU inference for insightface models
+
+# --- Computer Vision ---
+opencv-python>=4.8.0
+opencv-contrib-python>=4.8.0
+Pillow>=10.0.0
+albumentations>=1.3.1            # Data augmentation
+
+# --- Numerical / Scientific ---
+numpy>=1.24.0
+scipy>=1.11.0
+scikit-learn>=1.3.0              # PCA, metrics, train/val split
+
+# --- Deep Learning Utilities ---
+timm>=0.9.7                      # PyTorch Image Models (backbone support)
+einops>=0.7.0
+
+# --- Anti-Spoofing (MiniFASNet / Silent-Face) ---
+# Installed manually from: https://github.com/minivision-ai/Silent-Face-Anti-Spoofing
+# No pip package — clone repo and add to PYTHONPATH
+
+# --- Database ---
+SQLAlchemy>=2.0.0
+aiosqlite>=0.19.0                # Async SQLite for FastAPI
+
+# --- API Server ---
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6          # For file uploads in FastAPI
+starlette>=0.27.0
+
+# --- Utilities ---
+tqdm>=4.66.0
+pydantic>=2.4.0
+python-dotenv>=1.0.0
+loguru>=0.7.2
+
+# --- Face Alignment ---
+dlib>=19.24.0                    # 68-point landmark detection
+face-alignment>=1.4.1            # Fan-based 3D face alignment
+
+# --- Serialization ---
+h5py>=3.9.0
+faiss-cpu>=1.7.4                 # Vector similarity search (CPU)
+# faiss-gpu>=1.7.4               # Uncomment for GPU FAISS
+
+# ============================================================
+# Installation Notes:
+#
+# 1. Install PyTorch with CUDA first (visit https://pytorch.org):
+#    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+#
+# 2. Then install the rest:
+#    pip install -r requirements.txt
+#
+# 3. For Silent-Face Anti-Spoofing:
+#    git clone https://github.com/minivision-ai/Silent-Face-Anti-Spoofing
+#    cd Silent-Face-Anti-Spoofing && pip install -r requirements.txt
+#    Copy models to: face-ml-training/models/antispoof/
+# ============================================================

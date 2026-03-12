@@ -120,8 +120,16 @@ export interface FaceNetEmbedding {
   embedding?: number[]
   embedding_size?: number
   confidence?: number
-  box?: number[]
+  box?: { x: number; y: number; width: number; height: number }
   num_faces?: number
+  // Anti-spoofing fields (populated by the face-ml-training server)
+  spoofDetected?: boolean
+  spoofLabel?: string
+  realConfidence?: number
+  // Raw snake_case versions as returned directly by the WebSocket stream
+  spoof_detected?: boolean
+  spoof_label?: string
+  real_confidence?: number
   error?: string
 }
 
@@ -181,10 +189,14 @@ export async function extractFaceNetEmbedding(
       detected: true,
       embedding: data.embedding,
       embedding_size: data.dimension,
-      confidence: data.confidence
+      confidence: data.confidence,
+      box: data.box,
+      spoofDetected: data.spoof_detected,
+      spoofLabel: data.spoof_label,
+      realConfidence: data.real_confidence,
     }
   } catch (error) {
-    console.error('❌ FaceNet extraction error:', error)
+    console.warn('⚠️ FaceNet extraction error (server may be offline):', error instanceof Error ? error.message : error)
     return {
       detected: false,
       error: error instanceof Error ? error.message : 'Unknown error'
@@ -218,7 +230,7 @@ export async function extractFaceNetFromVideo(
     // Extract embedding via API
     return await extractFaceNetEmbedding(base64Image)
   } catch (error) {
-    console.error('❌ Video extraction error:', error)
+    console.warn('⚠️ Video extraction error (server may be offline):', error instanceof Error ? error.message : error)
     return {
       detected: false,
       error: error instanceof Error ? error.message : 'Unknown error'
@@ -373,7 +385,7 @@ export async function checkFaceNetHealth(): Promise<boolean> {
     // Use waitForModelReady() if you need to wait for full readiness
     return true
   } catch (error) {
-    console.error('❌ FaceNet health check failed:', error)
+    console.warn('⚠️ FaceNet health check failed:', error)
     // Activate local fallback so subsequent calls use localhost
     activateFallback()
     // Retry once against the local fallback
@@ -406,6 +418,10 @@ export interface RecognizedFace {
   studentNumber?: string
   confidence: number | null
   box: FaceBox
+  // Anti-spoof fields
+  spoofDetected?: boolean
+  spoofLabel?: string
+  realConfidence?: number
 }
 
 export interface RecognitionResult {
@@ -672,5 +688,181 @@ export class RealtimeRecognizer {
     this.videoElement = null
     this.onResult = null
     this.isProcessing = false
+  }
+}
+
+
+// ============ Server-Side Camera Stream ============
+
+/**
+ * Result from the server camera stream.
+ * Contains the raw JPEG frame as a base64 string plus recognition results.
+ */
+export interface CameraStreamFrame {
+  /** Base64-encoded JPEG of the current camera frame (no data URI prefix) */
+  frame: string
+  /** Frame width in pixels */
+  width: number
+  /** Frame height in pixels */
+  height: number
+  /** Recognition or extraction results (depends on mode) */
+  results: RecognitionResult | FaceNetEmbedding | null
+  /** Monotonically increasing frame counter */
+  frame_id: number
+  /** Current stream FPS */
+  fps: number
+  /** Error message if camera failed */
+  error?: string
+}
+
+export type CameraStreamMode = 'recognize' | 'extract' | 'view'
+
+/**
+ * WebSocket-based server-side camera stream.
+ *
+ * Instead of the browser capturing webcam frames, the Python server
+ * captures from the local camera, runs real-time anti-spoofing +
+ * face recognition on the raw frames, and streams processed results
+ * plus JPEG frames back to the browser.
+ *
+ * This eliminates the possibility of anti-spoofing bypass through
+ * browser-side frame manipulation, since the server controls the
+ * camera directly.
+ *
+ * Usage:
+ *   const stream = new ServerCameraStream()
+ *   stream.start('recognize', (data) => {
+ *     // data.frame = base64 JPEG
+ *     // data.results = recognition results
+ *   })
+ *   // later:
+ *   stream.stop()
+ */
+export class ServerCameraStream {
+  private ws: WebSocket | null = null
+  private onFrame: ((data: CameraStreamFrame) => void) | null = null
+  private onError: ((error: string) => void) | null = null
+  private stopped = false
+  private mode: CameraStreamMode = 'recognize'
+  private jpegQuality = 60
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+
+  /**
+   * Start the server camera stream.
+   *
+   * @param mode       Processing mode: 'recognize', 'extract', or 'view'
+   * @param onFrame    Called for each frame received from the server
+   * @param onError    Called on connection errors
+   * @param jpegQuality JPEG quality for the streamed frames (30-95)
+   */
+  start(
+    mode: CameraStreamMode,
+    onFrame: (data: CameraStreamFrame) => void,
+    onError?: (error: string) => void,
+    jpegQuality: number = 60
+  ): void {
+    this.stopped = false
+    this.mode = mode
+    this.onFrame = onFrame
+    this.onError = onError ?? null
+    this.jpegQuality = Math.max(30, Math.min(95, jpegQuality))
+
+    const wsUrl = `${getWsUrl()}/ws/camera-stream`
+    console.log(`📹 Connecting to server camera: ${wsUrl} (mode=${mode})`)
+
+    try {
+      this.ws = new WebSocket(wsUrl)
+    } catch (error) {
+      const msg = 'Failed to create WebSocket for camera stream'
+      console.error(`❌ ${msg}:`, error)
+      this.onError?.(msg)
+      return
+    }
+
+    this.ws.onopen = () => {
+      if (this.stopped) {
+        this.ws?.close()
+        this.ws = null
+        return
+      }
+      console.log('📹 Server camera connected — sending config')
+      // Send initial config
+      this.ws!.send(JSON.stringify({
+        mode: this.mode,
+        jpeg_quality: this.jpegQuality,
+      }))
+    }
+
+    this.ws.onmessage = (event) => {
+      try {
+        const data: CameraStreamFrame = JSON.parse(event.data)
+        if (data.error) {
+          this.onError?.(data.error)
+          return
+        }
+        this.onFrame?.(data)
+      } catch {
+        // ignore parse errors
+      }
+    }
+
+    this.ws.onerror = () => {
+      // Activate fallback only if not already on local
+      if (!_fallbackActive) {
+        console.warn('⚠️ Server camera WS error — switching to local fallback')
+        activateFallback()
+      } else {
+        console.error('❌ Server camera WebSocket error (server may not be running)')
+      }
+      // Don't surface the error immediately — let onclose trigger reconnect first
+    }
+
+    this.ws.onclose = (event) => {
+      console.log(`📹 Server camera disconnected (code: ${event.code})`)
+      if (!this.stopped && this.onFrame) {
+        // If this was a Railway→localhost fallback transition, reconnect immediately
+        const delay = _fallbackActive ? 500 : 2000
+        console.log(`📹 Reconnecting in ${delay}ms...`)
+        this.reconnectTimer = setTimeout(() => {
+          if (!this.stopped) {
+            this.start(this.mode, this.onFrame!, this.onError ?? undefined, this.jpegQuality)
+          }
+        }, delay)
+      }
+    }
+  }
+
+  /** Switch the processing mode without reconnecting. */
+  setMode(mode: CameraStreamMode): void {
+    this.mode = mode
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ mode }))
+    }
+  }
+
+  /** Stop the camera stream. */
+  stop(): void {
+    this.stopped = true
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
+    if (this.ws) {
+      this.ws.onclose = null
+      if (this.ws.readyState === WebSocket.OPEN) {
+        try {
+          this.ws.send(JSON.stringify({ action: 'stop' }))
+        } catch { /* ignore */ }
+        this.ws.close()
+      }
+      this.ws = null
+    }
+    this.onFrame = null
+    this.onError = null
+  }
+
+  /** Whether the stream is currently connected. */
+  get connected(): boolean {
+    return this.ws?.readyState === WebSocket.OPEN
   }
 }

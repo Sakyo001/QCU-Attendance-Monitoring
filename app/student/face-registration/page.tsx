@@ -4,7 +4,8 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState, useRef } from 'react'
 import { Camera, ArrowLeft } from 'lucide-react'
-import { extractFaceNetFromVideo, checkFaceNetHealth, waitForModelReady } from '@/lib/facenet-python-api'
+import { checkFaceNetHealth, waitForModelReady, ServerCameraStream } from '@/lib/facenet-python-api'
+import type { CameraStreamFrame } from '@/lib/facenet-python-api'
 
 export default function StudentFaceRegistrationPage() {
   const { user, loading } = useAuth()
@@ -111,11 +112,14 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
   const [boundingBoxMode, setBoundingBoxMode] = useState(true)
   const [captureCountdown, setCaptureCountdown] = useState<number>(0)
 
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const streamRef = useRef<MediaStream | null>(null)
+  const serverCanvasRef = useRef<HTMLCanvasElement>(null)
+  const overlayCanvasRef = useRef<HTMLCanvasElement>(null)
+  const serverStreamRef = useRef<ServerCameraStream | null>(null)
+  const serverImgRef = useRef<HTMLImageElement | null>(null)
+  const lastFrameRef = useRef<string | null>(null)
+  const pendingFrameRef = useRef<CameraStreamFrame | null>(null)
+  const rafRef = useRef<number>(0)
   const captureTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-  const detectionIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const autoCaptureTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const faceStableStartRef = useRef<number | null>(null)
@@ -144,27 +148,10 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
   }, [])
 
   useEffect(() => {
-    if (!showCamera || !streamRef.current || !videoRef.current) return
-
-    videoRef.current.srcObject = streamRef.current
-    
-    const playPromise = videoRef.current.play()
-    if (playPromise !== undefined) {
-      playPromise.catch(err => {
-        console.error('Autoplay failed, retrying...', err)
-        setTimeout(() => {
-          if (videoRef.current && streamRef.current) {
-            videoRef.current.play().catch(e => console.error('Retry failed:', e))
-          }
-        }, 100)
-      })
-    }
-
-    startFaceDetection()
+    if (!showCamera || !serverStreamRef.current) return
 
     return () => {
       if (captureTimeoutRef.current) clearTimeout(captureTimeoutRef.current)
-      if (detectionIntervalRef.current) clearInterval(detectionIntervalRef.current)
       if (autoCaptureTimeoutRef.current) clearTimeout(autoCaptureTimeoutRef.current)
       if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current)
     }
@@ -172,19 +159,18 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
 
   // Draw bounding box and recognition results on canvas
   useEffect(() => {
-    if (!canvasRef.current || !videoRef.current) return
+    if (!overlayCanvasRef.current || !serverCanvasRef.current) return
 
-    const canvas = canvasRef.current
-    const video = videoRef.current
+    const canvas = overlayCanvasRef.current
+    const source = serverCanvasRef.current
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
     const drawLoop = () => {
       if (!showCamera) return
 
-      // Match canvas size to video
-      canvas.width = video.videoWidth
-      canvas.height = video.videoHeight
+      canvas.width = source.width || 640
+      canvas.height = source.height || 480
 
       // Clear canvas
       ctx.clearRect(0, 0, canvas.width, canvas.height)
@@ -260,84 +246,118 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
     drawLoop()
   }, [boundingBox, faceDetected, recognizedName, recognitionConfidence, showCamera])
 
-  const startFaceDetection = async () => {
-    if (!videoRef.current || !modelsLoaded) return
+  const drawServerFrame = useCallback((data: CameraStreamFrame) => {
+    const canvas = serverCanvasRef.current
+    if (!canvas || !data.frame) return
 
-    detectionIntervalRef.current = setInterval(async () => {
-      if (!videoRef.current || isCapturing) return
+    if (!serverImgRef.current) {
+      serverImgRef.current = new Image()
+    }
+    const img = serverImgRef.current
 
-      try {
-        // Extract embedding via Python server (512D)
-        const result = await extractFaceNetFromVideo(videoRef.current)
+    img.onload = () => {
+      canvas.width = data.width || img.naturalWidth
+      canvas.height = data.height || img.naturalHeight
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return
+      ctx.save()
+      ctx.translate(canvas.width, 0)
+      ctx.scale(-1, 1)
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+      ctx.restore()
+    }
+    img.src = `data:image/jpeg;base64,${data.frame}`
+  }, [])
 
-        if (result.detected && result.embedding) {
-          setFaceDetected(true)
-          const descriptor = new Float32Array(result.embedding)
-          setFaceDescriptor(descriptor)
-          
-          // IMPORTANT: Save to ref IMMEDIATELY when detected (not just during capture)
-          savedFaceDescriptorRef.current = descriptor
-          console.log('✅ Face detected! Descriptor length:', descriptor.length, '- Saved to ref immediately')
-          console.log('   Confidence:', result.confidence?.toFixed(3))
-
-          // Perform face recognition
-          recognizeFace(result.embedding)
-
-          // Track consecutive face detections for stability
-          consecutiveFaceDetectionsRef.current += 1
-
-          // Auto capture with countdown - VERY forgiving, just need 1 detection
-          if (autoCapture && !isCapturing && consecutiveFaceDetectionsRef.current >= 1) {
-            // Face detected - start countdown immediately
-            if (!faceStableStartRef.current) {
-              faceStableStartRef.current = Date.now()
-            }
-
-            const CAPTURE_DELAY = 1200 // 1.2 seconds - faster capture
-            const elapsed = Date.now() - faceStableStartRef.current
-            const remaining = Math.max(0, CAPTURE_DELAY - elapsed)
-            const countdown = Math.ceil(remaining / 1000)
-            setCaptureCountdown(countdown)
-
-            if (remaining <= 0 && !isCapturing) {
-              // Time to capture!
-              console.log('📸 Auto-capturing photo...')
-              capturePhoto()
-            }
-          }
-        } else {
-          // Face lost - be EXTREMELY forgiving
-          // Decrement very slowly - almost never reset
-          if (consecutiveFaceDetectionsRef.current > 0) {
-            consecutiveFaceDetectionsRef.current -= 0.25 // Even slower decay - very forgiving
-          }
-          
-          // Only reset everything if face is lost for 8+ detection cycles (very patient)
-          if (consecutiveFaceDetectionsRef.current <= 0) {
-            consecutiveFaceDetectionsRef.current = 0
-            setFaceDetected(false)
-            setFaceDescriptor(null)
-            setBoundingBox(null)
-            setRecognizedName('')
-            setRecognitionConfidence(0)
-            faceStableStartRef.current = null
-            setCaptureCountdown(0)
-            
-            if (autoCaptureTimeoutRef.current) {
-              clearTimeout(autoCaptureTimeoutRef.current)
-              autoCaptureTimeoutRef.current = null
-            }
-          }
-          // Keep showing "face detected" state even during brief losses
-          else {
-            // Don't update UI - maintain the "detected" appearance
-          }
-        }
-      } catch (error) {
-        console.error('Face detection error:', error)
+  // rAF loop for drawing server frames
+  useEffect(() => {
+    let running = true
+    const tick = () => {
+      if (!running) return
+      const frame = pendingFrameRef.current
+      if (frame) {
+        pendingFrameRef.current = null
+        drawServerFrame(frame)
       }
-    }, 300)
-  }
+      rafRef.current = requestAnimationFrame(tick)
+    }
+    rafRef.current = requestAnimationFrame(tick)
+    return () => {
+      running = false
+      cancelAnimationFrame(rafRef.current)
+    }
+  }, [drawServerFrame])
+
+  const handleServerFrame = useCallback((data: CameraStreamFrame) => {
+    // Queue frame for rAF rendering
+    pendingFrameRef.current = data
+    if (data.frame) lastFrameRef.current = data.frame
+
+    // Only process results on frames that ran through the pipeline
+    if (data.results === null || data.results === undefined) return
+
+    // Process detection results
+    if (!data.results || data.results.length === 0) {
+      // Face lost
+      if (consecutiveFaceDetectionsRef.current > 0) {
+        consecutiveFaceDetectionsRef.current -= 0.25
+      }
+      if (consecutiveFaceDetectionsRef.current <= 0) {
+        consecutiveFaceDetectionsRef.current = 0
+        setFaceDetected(false)
+        setFaceDescriptor(null)
+        setBoundingBox(null)
+        setRecognizedName('')
+        setRecognitionConfidence(0)
+        faceStableStartRef.current = null
+        setCaptureCountdown(0)
+      }
+      return
+    }
+
+    const face = data.results[0]
+
+    // Spoof check
+    if (face.spoof_detected || !face.embedding) {
+      consecutiveFaceDetectionsRef.current = 0
+      faceStableStartRef.current = null
+      setCaptureCountdown(0)
+      return
+    }
+
+    setFaceDetected(true)
+    const descriptor = new Float32Array(face.embedding)
+    setFaceDescriptor(descriptor)
+    savedFaceDescriptorRef.current = descriptor
+
+    if (face.box) {
+      setBoundingBox(face.box)
+    }
+
+    // Recognition
+    recognizeFace(face.embedding)
+
+    // Track consecutive detections
+    consecutiveFaceDetectionsRef.current += 1
+
+    // Auto capture
+    if (autoCapture && !isCapturing && consecutiveFaceDetectionsRef.current >= 1) {
+      if (!faceStableStartRef.current) {
+        faceStableStartRef.current = Date.now()
+      }
+
+      const CAPTURE_DELAY = 1200
+      const elapsed = Date.now() - faceStableStartRef.current
+      const remaining = Math.max(0, CAPTURE_DELAY - elapsed)
+      const countdown = Math.ceil(remaining / 1000)
+      setCaptureCountdown(countdown)
+
+      if (remaining <= 0 && !isCapturing) {
+        console.log('📸 Auto-capturing photo...')
+        capturePhoto()
+      }
+    }
+  }, [autoCapture, isCapturing])
 
   const recognizeFace = async (descriptor: number[]) => {
     try {
@@ -370,35 +390,26 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
     }
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: 'user',
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        },
-        audio: false
+      const stream = new ServerCameraStream()
+      serverStreamRef.current = stream
+      stream.start('extract', handleServerFrame, (err) => {
+        console.error('Server camera error:', err)
       })
-
-      streamRef.current = stream
       setShowCamera(true)
     } catch (error: any) {
-      console.error('Error accessing camera:', error)
-      alert(`Unable to access camera: ${error.message}. Please check permissions and try again.`)
+      console.error('Error connecting to server camera:', error)
+      alert(`Unable to connect to camera server: ${error.message}`)
     }
   }
 
   const stopCamera = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop())
-      streamRef.current = null
+    if (serverStreamRef.current) {
+      serverStreamRef.current.stop()
+      serverStreamRef.current = null
     }
     if (captureTimeoutRef.current) {
       clearTimeout(captureTimeoutRef.current)
       captureTimeoutRef.current = null
-    }
-    if (detectionIntervalRef.current) {
-      clearInterval(detectionIntervalRef.current)
-      detectionIntervalRef.current = null
     }
     if (autoCaptureTimeoutRef.current) {
       clearTimeout(autoCaptureTimeoutRef.current)
@@ -416,7 +427,7 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
     setRecognizedName('')
     setRecognitionConfidence(0)
     setCaptureCountdown(0)
-    // NOTE: Don't clear savedFaceDescriptorRef - it must persist for submission!
+    lastFrameRef.current = null
     faceStableStartRef.current = null
     consecutiveFaceDetectionsRef.current = 0
   }
@@ -425,62 +436,43 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
     console.log('📸 Attempting to capture photo...')
     console.log('   - Face descriptor in state:', !!faceDescriptor, faceDescriptor?.length)
     console.log('   - Face descriptor in ref:', !!savedFaceDescriptorRef.current, savedFaceDescriptorRef.current?.length)
-    console.log('   - Face detected flag:', faceDetected)
-    console.log('   - Models loaded:', modelsLoaded)
     
-    // Use descriptor from state OR ref
     const descriptorToCheck = faceDescriptor || savedFaceDescriptorRef.current
     
-    // CRITICAL: Prevent capture if no face descriptor exists
     if (!descriptorToCheck) {
       console.error('❌ Cannot capture: No face descriptor detected')
-      console.error('   State descriptor:', faceDescriptor)
-      console.error('   Ref descriptor:', savedFaceDescriptorRef.current)
-      console.error('   This usually means MediaPipe face detection is not working')
       alert('Face not detected! Please:\n1. Ensure your face is clearly visible\n2. Wait a moment for detection to activate\n3. Look directly at the camera')
       setIsCapturing(false)
       return
     }
     
-    console.log('✅ Face descriptor confirmed, proceeding with capture')
-    
-    if (videoRef.current && !isCapturing) {
+    if (!lastFrameRef.current) {
+      console.error('❌ Cannot capture: No frame available from server camera')
+      return
+    }
+
+    if (!isCapturing) {
       setIsCapturing(true)
       
-      // IMPORTANT: Save descriptor to REF (permanent storage) BEFORE stopping camera
       const savedDescriptor = faceDescriptor
       if (savedDescriptor) {
         savedFaceDescriptorRef.current = savedDescriptor
-        console.log('📋 Saved face descriptor to ref:', savedDescriptor.length, 'dimensions')
-      } else {
-        console.warn('⚠️ No face descriptor available at capture time!')
       }
 
-      const canvas = document.createElement('canvas')
-      canvas.width = videoRef.current.videoWidth
-      canvas.height = videoRef.current.videoHeight
-      const ctx = canvas.getContext('2d')
-      if (ctx) {
-        ctx.translate(canvas.width, 0)
-        ctx.scale(-1, 1)
-        ctx.drawImage(videoRef.current, 0, 0)
-
-        const imageData = canvas.toDataURL('image/jpeg', 0.9)
-        setCapturedImage(imageData)
-        
-        // Reset all capture-related states
-        faceStableStartRef.current = null
-        consecutiveFaceDetectionsRef.current = 0
-        setCaptureCountdown(0)
-        
-        console.log('✅ Photo captured successfully')
-        
-        stopCamera()
-        
-        // Restore the saved descriptor after stopping camera
-        if (savedDescriptor) {
-          setFaceDescriptor(savedDescriptor)
-        }
+      // Use the latest server frame as the captured image
+      const imageData = `data:image/jpeg;base64,${lastFrameRef.current}`
+      setCapturedImage(imageData)
+      
+      faceStableStartRef.current = null
+      consecutiveFaceDetectionsRef.current = 0
+      setCaptureCountdown(0)
+      
+      console.log('✅ Photo captured successfully from server camera')
+      
+      stopCamera()
+      
+      if (savedDescriptor) {
+        setFaceDescriptor(savedDescriptor)
       }
     }
   }
@@ -690,24 +682,20 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
               {showCamera && (
                 <div className="space-y-4">
                   <div className="relative bg-black rounded-lg overflow-hidden w-full" style={{ height: '500px' }}>
-                    <video
-                      ref={videoRef}
-                      autoPlay
-                      playsInline
-                      muted
-                      style={{ width: '100%', height: '100%', display: 'block', objectFit: 'cover', transform: 'scaleX(-1)' }}
+                    <canvas
+                      ref={serverCanvasRef}
+                      style={{ width: '100%', height: '100%', display: 'block', objectFit: 'cover' }}
                     />
 
-                    {/* Canvas overlay for bounding box - Always show */}
+                    {/* Canvas overlay for bounding box */}
                     <canvas
-                      ref={canvasRef}
+                      ref={overlayCanvasRef}
                       style={{
                         position: 'absolute',
                         top: 0,
                         left: 0,
                         width: '100%',
                         height: '100%',
-                        transform: 'scaleX(-1)',
                         pointerEvents: 'none'
                       }}
                     />

@@ -60,6 +60,10 @@ export default function SchedulesPage() {
     max_capacity: 40
   })
 
+  const [filterDay, setFilterDay] = useState('')
+  const [filterProfessor, setFilterProfessor] = useState('')
+  const [filterSection, setFilterSection] = useState('')
+
   useEffect(() => {
     if (!loading && (!user || user.role !== 'admin')) {
       router.push('/admin/login')
@@ -263,6 +267,13 @@ export default function SchedulesPage() {
     )
   }
 
+  const filteredSessions = classSessions.filter(s => {
+    if (filterDay && s.day_of_week !== filterDay) return false
+    if (filterProfessor && s.professor_id !== filterProfessor) return false
+    if (filterSection && s.section_id !== filterSection) return false
+    return true
+  })
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
@@ -277,7 +288,7 @@ export default function SchedulesPage() {
                 <ArrowLeft className="w-5 h-5" />
               </button>
               <div>
-                <h1 className="text-2xl font-bold text-gray-900">Manage Schedule</h1>
+                <h1 className="text-2xl font-bold text-gray-900">Schedule Management</h1>
                 <p className="text-sm text-gray-600 mt-1">Create and manage class schedules</p>
               </div>
             </div>
@@ -294,94 +305,169 @@ export default function SchedulesPage() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {loadingData ? (
-          <div className="bg-white rounded-lg shadow p-8 text-center">
-            <div className="w-8 h-8 border-4 border-violet-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
-            <p className="mt-2 text-gray-600">Loading schedules...</p>
+        {/* Stats */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+          <div className="bg-white rounded-lg shadow p-6">
+            <div className="text-sm font-medium text-gray-600">Total Schedules</div>
+            <div className="text-3xl font-bold text-gray-900 mt-2">{classSessions.length}</div>
           </div>
-        ) : classSessions.length === 0 ? (
-          <div className="bg-white rounded-lg shadow p-8 text-center">
-            <p className="text-gray-600 mb-4">No schedules created yet</p>
-            <button
-              onClick={() => handleOpenModal()}
-              className="text-violet-600 hover:text-violet-700 font-medium"
-            >
-              Create your first schedule
-            </button>
+          <div className="bg-white rounded-lg shadow p-6">
+            <div className="text-sm font-medium text-gray-600">Today&apos;s Classes</div>
+            <div className="text-3xl font-bold text-gray-900 mt-2">
+              {classSessions.filter(s => s.day_of_week === new Date().toLocaleDateString('en-US', { weekday: 'long' })).length}
+            </div>
           </div>
-        ) : (
-          <div className="space-y-4">
-            {/* Group by day of week */}
-            {DAYS_OF_WEEK.map((day) => {
-              const daySchedules = classSessions.filter(s => s.day_of_week === day)
-              if (daySchedules.length === 0) return null
+          <div className="bg-white rounded-lg shadow p-6">
+            <div className="text-sm font-medium text-gray-600">Active Professors</div>
+            <div className="text-3xl font-bold text-gray-900 mt-2">
+              {new Set(classSessions.map(s => s.professor_id)).size}
+            </div>
+          </div>
+        </div>
 
-              return (
-                <div key={day} className="bg-white rounded-lg shadow overflow-hidden">
-                  <div className="px-6 py-4 bg-gradient-to-r from-violet-50 to-purple-50 border-b border-gray-200">
-                    <h3 className="text-lg font-semibold text-gray-900">{day}</h3>
-                  </div>
-                  <div className="divide-y divide-gray-200">
-                    {daySchedules.map((session) => (
-                      <div key={session.id} className="px-6 py-4 hover:bg-gray-50 transition-colors">
-                        <div className="grid grid-cols-1 md:grid-cols-6 gap-4 items-center">
-                          <div className="flex items-center gap-3">
-                            <Clock className="w-5 h-5 text-violet-600" />
-                            <div>
-                              <p className="font-semibold text-gray-900">{session.start_time} - {session.end_time}</p>
-                              <p className="text-sm text-gray-600">{session.section_code}</p>
-                            </div>
-                          </div>
+        {/* Filters */}
+        <div className="bg-white rounded-lg shadow p-6 mb-8">
+          <h3 className="text-sm font-semibold text-gray-900 mb-4">Filter Schedules</h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Day of Week</label>
+              <select
+                value={filterDay}
+                onChange={(e) => setFilterDay(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500"
+              >
+                <option value="">All Days</option>
+                {DAYS_OF_WEEK.map(day => (
+                  <option key={day} value={day}>{day}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Professor</label>
+              <select
+                value={filterProfessor}
+                onChange={(e) => setFilterProfessor(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500"
+              >
+                <option value="">All Professors</option>
+                {professors.map(prof => (
+                  <option key={prof.id} value={prof.id}>{prof.first_name} {prof.last_name}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Section</label>
+              <select
+                value={filterSection}
+                onChange={(e) => setFilterSection(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500"
+              >
+                <option value="">All Sections</option>
+                {sections.map(section => (
+                  <option key={section.id} value={section.id}>{section.section_code}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
 
-                          <div>
-                            <p className="text-sm text-gray-600">Professor</p>
-                            <p className="font-medium text-gray-900">{session.professor_name}</p>
-                          </div>
+        {/* Table */}
+        <div className="bg-white rounded-lg shadow overflow-hidden">
+          <div className="px-6 py-4 border-b border-gray-200">
+            <h2 className="text-lg font-semibold text-gray-900">All Schedules</h2>
+          </div>
 
-                          <div className="flex items-center gap-2">
-                            <MapPin className="w-5 h-5 text-gray-400" />
-                            <div>
-                              <p className="text-sm text-gray-600">Room</p>
-                              <p className="font-medium text-gray-900">{session.room}</p>
-                            </div>
-                          </div>
-
-                          <div>
-                            <p className="text-sm text-gray-600">Capacity</p>
-                            <p className="font-medium text-gray-900">{session.max_capacity} students</p>
-                          </div>
-
-                          <div className="col-span-2 flex justify-end gap-2">
-                            <button
-                              onClick={() => handleOpenModal(session)}
-                              className="px-4 py-2 text-sm font-medium text-violet-600 bg-violet-50 hover:bg-violet-100 rounded-lg transition-colors flex items-center gap-2"
-                            >
-                              <Edit className="w-4 h-4" />
-                              Edit
-                            </button>
-                            <button
-                              onClick={() => handleDeleteSchedule(session)}
-                              className="px-4 py-2 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors flex items-center gap-2"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                              Delete
-                            </button>
-                          </div>
+          {loadingData ? (
+            <div className="p-8 text-center">
+              <div className="w-8 h-8 border-4 border-violet-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
+              <p className="mt-2 text-gray-600">Loading schedules...</p>
+            </div>
+          ) : filteredSessions.length === 0 ? (
+            <div className="p-8 text-center">
+              <p className="text-gray-600 mb-4">No schedules found</p>
+              {classSessions.length === 0 && (
+                <button
+                  onClick={() => handleOpenModal()}
+                  className="text-violet-600 hover:text-violet-700 font-medium"
+                >
+                  Create your first schedule
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Section</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Professor</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Day</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Room</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Capacity</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {filteredSessions.map((session) => (
+                    <tr key={session.id} className="hover:bg-gray-50">
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                        {session.section_code}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {session.professor_name}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className="px-2 py-1 text-xs font-medium rounded-full bg-violet-100 text-violet-800">
+                          {session.day_of_week}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        <div className="flex items-center gap-1">
+                          <Clock className="w-4 h-4 text-gray-400" />
+                          {session.start_time.substring(0, 5)} – {session.end_time.substring(0, 5)}
                         </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        )}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        <div className="flex items-center gap-1">
+                          <MapPin className="w-4 h-4 text-gray-400" />
+                          {session.room}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {session.max_capacity}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => handleOpenModal(session)}
+                            className="text-violet-600 hover:text-violet-900 transition-colors"
+                            title="Edit schedule"
+                          >
+                            <Edit className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteSchedule(session)}
+                            className="text-red-600 hover:text-red-900 transition-colors"
+                            title="Delete schedule"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       </main>
 
       {/* Modal */}
       {showModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg max-w-2xl w-full max-h-96 overflow-y-auto p-6">
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6">
             <h2 className="text-xl font-bold text-gray-900 mb-6">
               {editingSession ? 'Edit Schedule' : 'Create New Schedule'}
             </h2>
@@ -393,7 +479,7 @@ export default function SchedulesPage() {
                 <select
                   value={formData.section_id}
                   onChange={(e) => setFormData({ ...formData, section_id: e.target.value })}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-transparent"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500"
                 >
                   <option value="">Select a section</option>
                   {sections.map((section) => (
@@ -410,7 +496,7 @@ export default function SchedulesPage() {
                 <select
                   value={formData.professor_id}
                   onChange={(e) => setFormData({ ...formData, professor_id: e.target.value })}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-transparent"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500"
                 >
                   <option value="">Select a professor</option>
                   {professors.map((professor) => (
@@ -427,12 +513,10 @@ export default function SchedulesPage() {
                 <select
                   value={formData.day_of_week}
                   onChange={(e) => setFormData({ ...formData, day_of_week: e.target.value })}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-transparent"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500"
                 >
                   {DAYS_OF_WEEK.map((day) => (
-                    <option key={day} value={day}>
-                      {day}
-                    </option>
+                    <option key={day} value={day}>{day}</option>
                   ))}
                 </select>
               </div>
@@ -444,12 +528,10 @@ export default function SchedulesPage() {
                   <select
                     value={formData.start_time}
                     onChange={(e) => setFormData({ ...formData, start_time: e.target.value })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-transparent"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500"
                   >
                     {TIMES.map((time) => (
-                      <option key={time} value={time}>
-                        {time}
-                      </option>
+                      <option key={time} value={time}>{time}</option>
                     ))}
                   </select>
                 </div>
@@ -458,12 +540,10 @@ export default function SchedulesPage() {
                   <select
                     value={formData.end_time}
                     onChange={(e) => setFormData({ ...formData, end_time: e.target.value })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-transparent"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500"
                   >
                     {TIMES.map((time) => (
-                      <option key={time} value={time}>
-                        {time}
-                      </option>
+                      <option key={time} value={time}>{time}</option>
                     ))}
                   </select>
                 </div>
@@ -471,13 +551,13 @@ export default function SchedulesPage() {
 
               {/* Room */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Room/Building *</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Room / Building *</label>
                 <input
                   type="text"
                   value={formData.room}
                   onChange={(e) => setFormData({ ...formData, room: e.target.value })}
                   placeholder="e.g., Room 101 or Lab 2"
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-transparent"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500"
                 />
               </div>
 
@@ -489,16 +569,16 @@ export default function SchedulesPage() {
                   value={formData.max_capacity}
                   onChange={(e) => setFormData({ ...formData, max_capacity: parseInt(e.target.value) })}
                   min="1"
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-transparent"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500"
                 />
               </div>
             </div>
 
             {/* Buttons */}
-            <div className="flex items-center justify-end gap-3">
+            <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100">
               <button
                 onClick={() => setShowModal(false)}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-200 hover:bg-gray-300 rounded-lg transition-colors"
+                className="px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 hover:bg-gray-50 rounded-lg transition-colors"
               >
                 Cancel
               </button>

@@ -2,11 +2,10 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import Image from 'next/image'
-import { CheckCircle, XCircle, Clock, AlertTriangle, Loader2, Volume2, VolumeX, Users, Lock, Scan, ShieldCheck, ArrowLeft, ChevronRight, MapPin, Timer, Megaphone, Lightbulb } from 'lucide-react'
-import { extractFaceNetFromVideo, checkFaceNetHealth, waitForModelReady, loadSessionEncodings, clearSessionEncodings, RealtimeRecognizer } from '@/lib/facenet-python-api'
-import type { DetectedFace, RecognizedFace, RecognitionResult } from '@/lib/facenet-python-api'
-import { initializeFaceDetection, detectFaceInVideo } from '@/lib/mediapipe-face'
+import NextImage from 'next/image'
+import { CheckCircle, XCircle, Clock, AlertTriangle, Loader2, Volume2, VolumeX, Users, Lock, Scan, ShieldCheck, ArrowLeft, ChevronLeft, ChevronRight, MapPin, Timer, Megaphone, Lightbulb } from 'lucide-react'
+import { checkFaceNetHealth, waitForModelReady, loadSessionEncodings, clearSessionEncodings, ServerCameraStream } from '@/lib/facenet-python-api'
+import type { DetectedFace, RecognizedFace, RecognitionResult, FaceNetEmbedding, CameraStreamFrame, CameraStreamMode } from '@/lib/facenet-python-api'
 
 // ============ Types ============
 
@@ -77,14 +76,16 @@ export default function Home() {
   const [selectedSchedule, setSelectedSchedule] = useState<ScheduleInfo | null>(null)
 
   // --- Camera & detection ---
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const streamRef = useRef<MediaStream | null>(null)
-  const scanIntervalRef = useRef<NodeJS.Timeout | null>(null)
-  const rafRef = useRef<number | null>(null)
-  const lastMediaPipeCallRef = useRef<number>(0)
-  const lastFaceNetCallRef = useRef<number>(0)
-  const isDetectingRef = useRef<boolean>(false)
+  const serverCameraCanvasRef = useRef<HTMLCanvasElement>(null)
+  const serverCameraImgRef = useRef<HTMLImageElement | null>(null)
+  const serverStreamRef = useRef<ServerCameraStream | null>(null)
+  const pendingFrameRef = useRef<CameraStreamFrame | null>(null)
+  const rafRef = useRef<number>(0)
+  const cameraConnectedRef = useRef(false)
+  const lastFpsUpdateRef = useRef(0)
+  const [cameraMode, setCameraMode] = useState<CameraStreamMode>('extract')
+  const [cameraConnected, setCameraConnected] = useState(false)
+  const [cameraFps, setCameraFps] = useState(0)
   const isMatchingRef = useRef<boolean>(false)
   const hasMarkedAbsentRef = useRef<boolean>(false)
   const scanCooldownUntilRef = useRef<number>(0)
@@ -98,12 +99,14 @@ export default function Home() {
   // --- Professor scan UI ---
   const [professorScanStatus, setProfessorScanStatus] = useState<'idle' | 'scanning' | 'matched' | 'not-found'>('idle')
   const [faceDetected, setFaceDetected] = useState(false)
+  const [spoofDetected, setSpoofDetected] = useState(false)
   const [boundingBox, setBoundingBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null)
 
   // --- Attendance state ---
   const [scanStatus, setScanStatus] = useState<'idle' | 'scanning' | 'matched' | 'no-match' | 'already-marked' | 'locked'>('idle')
   const [statusMessage, setStatusMessage] = useState('')
   const [enrolledStudents, setEnrolledStudents] = useState<EnrolledStudent[]>([])
+  const [studentPage, setStudentPage] = useState(0)
   const [stats, setStats] = useState({ present: 0, late: 0, absent: 0, pending: 0, total: 0 })
   const [attendanceLocked, setAttendanceLocked] = useState(false)
   const [lockTimeRemaining, setLockTimeRemaining] = useState('')
@@ -112,7 +115,7 @@ export default function Home() {
   const [detectedFaces, setDetectedFaces] = useState<DetectedFace[]>([])
   const [faceMatchResults, setFaceMatchResults] = useState<Array<{ box: DetectedFace['box']; name: string; status: 'matched' | 'no-match' | 'already-marked' }>>([])
   const attendanceCanvasRef = useRef<HTMLCanvasElement>(null)
-  const recognizerRef = useRef<RealtimeRecognizer | null>(null)
+  const professorOverlayRef = useRef<HTMLCanvasElement>(null)
   const markedStudentIdsRef = useRef<Set<string>>(new Set())
   const markingStudentIdsRef = useRef<Set<string>>(new Set())
   const lastActivityRef = useRef<number>(Date.now())
@@ -129,6 +132,62 @@ export default function Home() {
     return () => clearInterval(timer)
   }, [])
 
+  // ============ Session Persistence (survives tab discard / page reload) ============
+  const SESSION_KEY = 'kiosk-session-v1'
+
+  // Restore persisted session on mount
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(SESSION_KEY)
+      if (!raw) return
+      const saved = JSON.parse(raw) as {
+        phase: KioskPhase
+        professor: ProfessorInfo
+        selectedSchedule: ScheduleInfo
+        attendanceLocked: boolean
+        savedAt: number
+      }
+      // Ignore sessions older than 4 hours
+      if (Date.now() - saved.savedAt > 4 * 60 * 60 * 1000) {
+        sessionStorage.removeItem(SESSION_KEY)
+        return
+      }
+      if (!saved.professor || !saved.selectedSchedule) return
+      setProfessor(saved.professor)
+      setSelectedSchedule(saved.selectedSchedule)
+      if (saved.attendanceLocked) setAttendanceLocked(true)
+      setPhase(saved.phase)
+      // Prevent double-marking absent on restore
+      hasMarkedAbsentRef.current = saved.attendanceLocked || saved.phase === 'attendance-locked'
+      // Reload face encodings into Python server session cache (best-effort)
+      if (saved.phase === 'attendance-active') {
+        fetch(`/api/attendance/section-encodings?sectionId=${saved.selectedSchedule.sectionId}`)
+          .then(r => r.json())
+          .then(data => {
+            if (data.success && data.students?.length > 0) {
+              loadSessionEncodings(saved.selectedSchedule.sectionId, data.students).catch(() => {})
+            }
+          })
+          .catch(() => {})
+      }
+    } catch {}
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Persist active session so it survives tab discard / page reloads
+  useEffect(() => {
+    if ((phase !== 'attendance-active' && phase !== 'attendance-locked') || !professor || !selectedSchedule) return
+    try {
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify({
+        phase,
+        professor,
+        selectedSchedule,
+        attendanceLocked,
+        savedAt: Date.now(),
+      }))
+    } catch {}
+  }, [SESSION_KEY, phase, professor, selectedSchedule, attendanceLocked])
+
   // Inactivity — show idle overlay after 30 seconds of no activity
   useEffect(() => {
     const checkInactivity = () => {
@@ -139,6 +198,8 @@ export default function Home() {
     const interval = setInterval(checkInactivity, 5000)
     return () => clearInterval(interval)
   }, [])
+
+
 
   // Idle carousel timers
   useEffect(() => {
@@ -164,17 +225,13 @@ export default function Home() {
     }
   }, [])
 
-  // Check server health + load models
+  // Check server health
   useEffect(() => {
     const init = async () => {
-      const [healthy, loaded] = await Promise.all([
-        checkFaceNetHealth(),
-        initializeFaceDetection()
-      ])
+      const healthy = await checkFaceNetHealth()
       setServerHealthy(healthy)
-      setModelsLoaded(loaded)
+      setModelsLoaded(true)
       if (healthy) {
-        // Wait for model to finish loading in background (non-blocking for UI)
         waitForModelReady().then(ready => {
           if (!ready) console.warn('⚠️ Model did not become ready within timeout')
         })
@@ -188,175 +245,302 @@ export default function Home() {
     return () => clearInterval(interval)
   }, [])
 
-  // Initialize camera on mount
+  // Initialize persistent Image for server camera frame decoding
   useEffect(() => {
-    const initCamera = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }
-        })
-        streamRef.current = stream
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream
-          videoRef.current.play().catch(() => {})
-        }
-      } catch (err) {
-        console.error('Camera error:', err)
-      }
-    }
-    initCamera()
-
-    return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(t => t.stop())
-        streamRef.current = null
-      }
-      if (rafRef.current) cancelAnimationFrame(rafRef.current)
-      if (scanIntervalRef.current) clearInterval(scanIntervalRef.current)
-    }
+    serverCameraImgRef.current = new Image()
+    return () => { serverCameraImgRef.current = null }
   }, [])
 
-  // Ensure video element always has the stream attached (handles phase transitions and idle wake-up)
-  useEffect(() => {
-    if (videoRef.current && streamRef.current && videoRef.current.srcObject !== streamRef.current) {
-      videoRef.current.srcObject = streamRef.current
-      videoRef.current.play().catch(() => {})
-    }
-  }, [phase, isIdle])
+  // ============ Server Camera Frame Drawing ============
 
-  // ============ Phase 1: Professor Face Scan ============
+  const drawServerFrame = useCallback((data: CameraStreamFrame) => {
+    const canvas = serverCameraCanvasRef.current
+    const img = serverCameraImgRef.current
+    if (!canvas || !img) return
 
-  useEffect(() => {
-    if (phase !== 'professor-scan' || !serverHealthy || !modelsLoaded) return
-
-    const MEDIAPIPE_THROTTLE_MS = 150  // ~6-7 fps — safe for MediaPipe WASM
-    const FACENET_THROTTLE_MS = 600    // fast enough for professor detection
-
-    const loop = async () => {
-      const video = videoRef.current
-      if (!video) { rafRef.current = requestAnimationFrame(loop); return }
-
-      const now = Date.now()
-
-      // Respect cooldown after session reset (prevents instant re-login)
-      if (now < scanCooldownUntilRef.current) {
-        rafRef.current = requestAnimationFrame(loop)
-        return
-      }
-
-      // --- MediaPipe: throttled bounding box ---
-      if (
-        !isDetectingRef.current &&
-        now - lastMediaPipeCallRef.current >= MEDIAPIPE_THROTTLE_MS &&
-        video.readyState === 4 &&
-        video.videoWidth > 0
-      ) {
-        lastMediaPipeCallRef.current = now
-        isDetectingRef.current = true
-        try {
-          const mediapipeResult = await detectFaceInVideo(video)
-          if (mediapipeResult.detected && mediapipeResult.boundingBox && videoRef.current) {
-            const v = videoRef.current
-            const { xCenter, yCenter, width, height } = mediapipeResult.boundingBox
-            const cx = xCenter * v.videoWidth
-            const cy = yCenter * v.videoHeight
-            const pw = width * v.videoWidth
-            const ph = height * v.videoHeight
-            const pad = 40
-            const side = Math.max(pw, ph) + pad * 2
-            setBoundingBox({
-              x: Math.max(0, cx - side / 2),
-              y: Math.max(0, cy - side / 2),
-              width: Math.min(v.videoWidth, side),
-              height: Math.min(v.videoHeight, side),
-            })
-            setFaceDetected(true)
-          } else {
-            setBoundingBox(null)
-            setFaceDetected(false)
-          }
-        } catch (err) {
-          console.warn('MediaPipe detection error (ignored):', err)
-        } finally {
-          isDetectingRef.current = false
-        }
-      }
-
-      // --- FaceNet: throttled, only when video is ready ---
-      if (
-        !isMatchingRef.current &&
-        now - lastFaceNetCallRef.current >= FACENET_THROTTLE_MS &&
-        video.readyState === 4 &&
-        video.videoWidth > 0
-      ) {
-        lastFaceNetCallRef.current = now
-        try {
-          const pythonResult = await extractFaceNetFromVideo(video)
-
-          if (pythonResult.detected && pythonResult.embedding) {
-            setFaceDetected(true)
-            isMatchingRef.current = true
-            setProfessorScanStatus('scanning')
-
-            try {
-              const res = await fetch('/api/professor/face-login', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ faceDescriptor: pythonResult.embedding })
-              })
-              const data = await res.json()
-
-              if (data.matched && data.professor) {
-                setProfessorScanStatus('matched')
-                const prof: ProfessorInfo = {
-                  id: data.professor.id,
-                  firstName: data.professor.firstName,
-                  lastName: data.professor.lastName,
-                  email: data.professor.email,
-                  role: data.professor.role,
-                  employeeId: data.professor.employeeId
-                }
-                setProfessor(prof)
-                playSound('success')
-
-                const schedRes = await fetch(`/api/kiosk/professor-schedule?professorId=${prof.id}`)
-                const schedData = await schedRes.json()
-
-                if (schedData.success && schedData.schedules.length > 0) {
-                  setSchedules(schedData.schedules)
-                  if (schedData.schedules.length === 1) {
-                    selectSchedule(schedData.schedules[0])
-                  } else {
-                    setPhase('schedule-select')
-                  }
-                } else {
-                  setStatusMessage('No classes scheduled for today')
-                  setTimeout(() => { resetToScan() }, 3000)
-                }
-              } else {
-                setProfessorScanStatus('not-found')
-                isMatchingRef.current = false
-                setTimeout(() => setProfessorScanStatus('idle'), 1500)
-              }
-            } catch (err) {
-              console.error('Professor match error:', err)
-              setProfessorScanStatus('idle')
-              isMatchingRef.current = false
-            }
-          } else {
-            if (professorScanStatus === 'scanning') setProfessorScanStatus('idle')
-          }
-        } catch { /* ignore — server may still be warming up */ }
-      }
-
-      rafRef.current = requestAnimationFrame(loop)
+    const { width, height } = data
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width
+      canvas.height = height
     }
 
-    rafRef.current = requestAnimationFrame(loop)
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
+    img.onload = () => {
+      ctx.save()
+      // Mirror horizontally
+      ctx.translate(width, 0)
+      ctx.scale(-1, 1)
+      ctx.drawImage(img, 0, 0, width, height)
+      ctx.restore()
+    }
+    img.src = `data:image/jpeg;base64,${data.frame}`
+  }, [])
+
+  // ============ Server Camera Result Handlers ============
+
+  const handleServerResults = useCallback((data: CameraStreamFrame) => {
+    if (phase === 'professor-scan') {
+      handleProfessorScanResult(data)
+    } else if (phase === 'attendance-active') {
+      handleAttendanceResult(data)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase])
+
+  // rAF loop — draws the latest queued frame and routes results
+  useEffect(() => {
+    let running = true
+    const tick = () => {
+      if (!running) return
+      const frame = pendingFrameRef.current
+      if (frame) {
+        pendingFrameRef.current = null
+        drawServerFrame(frame)
+        handleServerResults(frame)
+      }
+      rafRef.current = requestAnimationFrame(tick)
+    }
+    rafRef.current = requestAnimationFrame(tick)
     return () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current)
+      running = false
+      cancelAnimationFrame(rafRef.current)
     }
-  }, [phase, serverHealthy, modelsLoaded])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drawServerFrame, handleServerResults])
+
+  // Server camera stream — connects once, mode changes dynamically
+  useEffect(() => {
+    if (!serverHealthy) return
+
+    const stream = new ServerCameraStream()
+    serverStreamRef.current = stream
+
+    const initialMode = phase === 'attendance-active' ? 'recognize' : 'extract'
+    setCameraMode(initialMode)
+
+    stream.start(
+      initialMode,
+      (data: CameraStreamFrame) => {
+        if (!cameraConnectedRef.current) {
+          cameraConnectedRef.current = true
+          setCameraConnected(true)
+        }
+        // Throttle FPS state to once per second
+        const now = performance.now()
+        if (now - lastFpsUpdateRef.current > 1000) {
+          lastFpsUpdateRef.current = now
+          setCameraFps(data.fps)
+        }
+        // Queue frame for rAF rendering
+        pendingFrameRef.current = data
+      },
+      (errMsg: string) => {
+        setCameraConnected(false)
+        cameraConnectedRef.current = false
+        console.warn('Server camera error:', errMsg)
+      },
+      60
+    )
+
+    return () => {
+      stream.stop()
+      serverStreamRef.current = null
+      setCameraConnected(false)
+      cameraConnectedRef.current = false
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverHealthy])
+
+  // Switch camera mode when phase changes
+  useEffect(() => {
+    const newMode: CameraStreamMode = phase === 'attendance-active' ? 'recognize' : 'extract'
+    if (newMode !== cameraMode) {
+      setCameraMode(newMode)
+      serverStreamRef.current?.setMode(newMode)
+    }
+  }, [phase, cameraMode])
+
+  // Phase 1: Handle extract results for professor identification
+  const handleProfessorScanResult = useCallback(async (data: CameraStreamFrame) => {
+    const result = data.results as FaceNetEmbedding | null
+    if (!result) return
+
+    // Respect cooldown
+    if (Date.now() < scanCooldownUntilRef.current) return
+
+    if (result.detected && result.box) {
+      // Face is present in this frame — keep the kiosk awake
+      lastActivityRef.current = Date.now()
+      setFaceDetected(true)
+      setSpoofDetected(!!(result.spoofDetected ?? result.spoof_detected))
+      // Use the box from the server for bounding box overlay
+      const box = result.box as { x?: number; y?: number; width?: number; height?: number; left?: number; top?: number; right?: number; bottom?: number }
+      const bx = box.x ?? box.left ?? 0
+      const by = box.y ?? box.top ?? 0
+      const bw = box.width ?? ((box.right ?? 0) - bx)
+      const bh = box.height ?? ((box.bottom ?? 0) - by)
+      const pad = 40
+      const side = Math.max(bw, bh) + pad * 2
+      setBoundingBox({
+        x: Math.max(0, bx + bw / 2 - side / 2),
+        y: Math.max(0, by + bh / 2 - side / 2),
+        width: side,
+        height: side,
+      })
+    } else {
+      setFaceDetected(false)
+      setSpoofDetected(false)
+      setBoundingBox(null)
+      if (professorScanStatus === 'scanning') setProfessorScanStatus('idle')
+      return
+    }
+
+    if (!result.embedding || isMatchingRef.current) return
+
+    // Anti-spoof gate
+    if (result.spoofDetected ?? result.spoof_detected) return
+
+    isMatchingRef.current = true
+    setProfessorScanStatus('scanning')
+
+    try {
+      const res = await fetch('/api/professor/face-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ faceDescriptor: result.embedding })
+      })
+      const matchData = await res.json()
+
+      if (matchData.matched && matchData.professor) {
+        setProfessorScanStatus('matched')
+        const prof: ProfessorInfo = {
+          id: matchData.professor.id,
+          firstName: matchData.professor.firstName,
+          lastName: matchData.professor.lastName,
+          email: matchData.professor.email,
+          role: matchData.professor.role,
+          employeeId: matchData.professor.employeeId
+        }
+        setProfessor(prof)
+        playSound('success')
+
+        const schedRes = await fetch(`/api/kiosk/professor-schedule?professorId=${prof.id}`)
+        const schedData = await schedRes.json()
+
+        if (schedData.success && schedData.schedules.length > 0) {
+          setSchedules(schedData.schedules)
+          if (schedData.schedules.length === 1) {
+            selectSchedule(schedData.schedules[0])
+          } else {
+            setPhase('schedule-select')
+          }
+        } else {
+          setStatusMessage('No classes scheduled for today')
+          setTimeout(() => { resetToScan() }, 3000)
+        }
+      } else {
+        setProfessorScanStatus('not-found')
+        isMatchingRef.current = false
+        setTimeout(() => setProfessorScanStatus('idle'), 1500)
+      }
+    } catch (err) {
+      console.error('Professor match error:', err)
+      setProfessorScanStatus('idle')
+      isMatchingRef.current = false
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [professorScanStatus])
+
+  // Phase 3: Handle recognize results for attendance marking
+  const handleAttendanceResult = useCallback((data: CameraStreamFrame) => {
+    const result = data.results as RecognitionResult | null
+    if (!result || !selectedSchedule || attendanceLocked) return
+
+    if (!result.detected || !result.faces || result.faces.length === 0) {
+      setDetectedFaces([])
+      setFaceMatchResults([])
+      setScanStatus('idle')
+      return
+    }
+
+    // Faces present in this frame — keep the kiosk awake
+    lastActivityRef.current = Date.now()
+
+    setDetectedFaces(result.faces.map(f => ({
+      index: f.index,
+      embedding: [],
+      embedding_size: 0,
+      box: f.box
+    })))
+
+    const uiResults: Array<{ box: DetectedFace['box']; name: string; status: 'matched' | 'no-match' | 'already-marked' }> = []
+
+    for (const face of result.faces) {
+      if (face.matched && face.studentId) {
+        if (markedStudentIdsRef.current.has(face.studentId)) {
+          uiResults.push({ box: face.box, name: face.name, status: 'already-marked' })
+        } else {
+          uiResults.push({ box: face.box, name: face.name, status: 'matched' })
+
+          if (!markingStudentIdsRef.current.has(face.studentId)) {
+            markingStudentIdsRef.current.add(face.studentId)
+
+            fetch('/api/attendance/mark', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                sectionId: selectedSchedule.sectionId,
+                studentId: face.studentId,
+                faceMatchConfidence: face.confidence,
+                scheduleId: selectedSchedule.id
+              })
+            }).then(async res => {
+              const markData = await res.json()
+              if (markData.alreadyMarked) {
+                markedStudentIdsRef.current.add(face.studentId!)
+                markingStudentIdsRef.current.delete(face.studentId!)
+              } else if (markData.locked) {
+                setAttendanceLocked(true)
+                setPhase('attendance-locked')
+                markingStudentIdsRef.current.delete(face.studentId!)
+              } else if (markData.success) {
+                markedStudentIdsRef.current.add(face.studentId!)
+                markingStudentIdsRef.current.delete(face.studentId!)
+                const recStatus = markData.record?.status || 'present'
+                playSound(recStatus === 'late' ? 'late' : 'success')
+                refreshStudentList()
+              }
+            }).catch(() => {
+              markingStudentIdsRef.current.delete(face.studentId!)
+            })
+          }
+        }
+      } else {
+        uiResults.push({ box: face.box, name: 'Unknown', status: 'no-match' })
+      }
+    }
+
+    setFaceMatchResults(uiResults)
+
+    const hasNewMatch = uiResults.some(r => r.status === 'matched')
+    const hasNoMatch = uiResults.some(r => r.status === 'no-match')
+    const allAlready = uiResults.length > 0 && uiResults.every(r => r.status === 'already-marked')
+
+    if (allAlready) {
+      setScanStatus('already-marked')
+      setStatusMessage('All detected faces already recorded')
+    } else if (hasNewMatch) {
+      setScanStatus('matched')
+      const names = uiResults.filter(r => r.status === 'matched').map(r => r.name).join(', ')
+      setStatusMessage(names)
+    } else if (hasNoMatch) {
+      setScanStatus('no-match')
+      setStatusMessage(`${result.faces.length} face(s) detected \u2014 not recognized`)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSchedule, attendanceLocked])
 
   // ============ Phase 2: Schedule Select ============
 
@@ -461,106 +645,6 @@ export default function Home() {
     return () => clearInterval(interval)
   }, [phase, selectedSchedule])
 
-  // Multi-face real-time scanning via WebSocket
-  useEffect(() => {
-    if (phase !== 'attendance-active' || !serverHealthy || !selectedSchedule || attendanceLocked) return
-    if (!videoRef.current) return
-
-    const recognizer = new RealtimeRecognizer()
-    recognizerRef.current = recognizer
-
-    recognizer.start(videoRef.current, (result: RecognitionResult) => {
-      if (!result.detected || result.faces.length === 0) {
-        setDetectedFaces([])
-        setFaceMatchResults([])
-        setScanStatus('idle')
-        return
-      }
-
-      // Update detected faces for canvas drawing
-      setDetectedFaces(result.faces.map(f => ({
-        index: f.index,
-        embedding: [],
-        embedding_size: 0,
-        box: f.box
-      })))
-
-      // Build UI match results
-      const uiResults: Array<{ box: DetectedFace['box']; name: string; status: 'matched' | 'no-match' | 'already-marked' }> = []
-
-      for (const face of result.faces) {
-        if (face.matched && face.studentId) {
-          // Check if already marked
-          if (markedStudentIdsRef.current.has(face.studentId)) {
-            uiResults.push({ box: face.box, name: face.name, status: 'already-marked' })
-          } else {
-            uiResults.push({ box: face.box, name: face.name, status: 'matched' })
-
-            // Mark attendance (only once per student)
-            if (!markingStudentIdsRef.current.has(face.studentId)) {
-              markingStudentIdsRef.current.add(face.studentId)
-
-              fetch('/api/attendance/mark', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  sectionId: selectedSchedule.sectionId,
-                  studentId: face.studentId,
-                  faceMatchConfidence: face.confidence,
-                  scheduleId: selectedSchedule.id
-                })
-              }).then(async res => {
-                const markData = await res.json()
-                if (markData.alreadyMarked) {
-                  markedStudentIdsRef.current.add(face.studentId!)
-                  markingStudentIdsRef.current.delete(face.studentId!)
-                } else if (markData.locked) {
-                  setAttendanceLocked(true)
-                  setPhase('attendance-locked')
-                  markingStudentIdsRef.current.delete(face.studentId!)
-                } else if (markData.success) {
-                  markedStudentIdsRef.current.add(face.studentId!)
-                  markingStudentIdsRef.current.delete(face.studentId!)
-                  const recStatus = markData.record?.status || 'present'
-                  playSound(recStatus === 'late' ? 'late' : 'success')
-                  refreshStudentList()
-                }
-              }).catch(() => {
-                markingStudentIdsRef.current.delete(face.studentId!)
-              })
-            }
-          }
-        } else {
-          uiResults.push({ box: face.box, name: 'Unknown', status: 'no-match' })
-        }
-      }
-
-      setFaceMatchResults(uiResults)
-
-      // Update aggregate scan status
-      const hasNewMatch = uiResults.some(r => r.status === 'matched')
-      const hasNoMatch = uiResults.some(r => r.status === 'no-match')
-      const allAlready = uiResults.length > 0 && uiResults.every(r => r.status === 'already-marked')
-
-      if (allAlready) {
-        setScanStatus('already-marked')
-        setStatusMessage('All detected faces already recorded')
-      } else if (hasNewMatch) {
-        setScanStatus('matched')
-        const names = uiResults.filter(r => r.status === 'matched').map(r => r.name).join(', ')
-        setStatusMessage(names)
-      } else if (hasNoMatch) {
-        setScanStatus('no-match')
-        setStatusMessage(`${result.faces.length} face(s) detected \u2014 not recognized`)
-      }
-    })
-
-    return () => {
-      recognizer.stop()
-      recognizerRef.current = null
-    }
-  }, [phase, serverHealthy, selectedSchedule, attendanceLocked])
-
   // ============ Helpers ============
 
   const refreshStudentList = async () => {
@@ -592,11 +676,7 @@ export default function Home() {
   }
 
   const resetToScan = () => {
-    // Stop real-time recognizer
-    if (recognizerRef.current) {
-      recognizerRef.current.stop()
-      recognizerRef.current = null
-    }
+    try { sessionStorage.removeItem(SESSION_KEY) } catch {}
     clearSessionEncodings()
 
     setProfessor(null)
@@ -609,18 +689,19 @@ export default function Home() {
     setProfessorScanStatus('idle')
     setStatusMessage('')
     setFaceDetected(false)
+    setSpoofDetected(false)
     setBoundingBox(null)
     setDetectedFaces([])
     setFaceMatchResults([])
     isMatchingRef.current = false
-    isDetectingRef.current = false
-    lastMediaPipeCallRef.current = 0
-    lastFaceNetCallRef.current = 0
     // 4-second cooldown so the professor isn't instantly re-detected after reset
     scanCooldownUntilRef.current = Date.now() + 4000
     hasMarkedAbsentRef.current = false
     markedStudentIdsRef.current = new Set()
     markingStudentIdsRef.current = new Set()
+    // Switch back to extract mode for professor scan
+    setCameraMode('extract')
+    serverStreamRef.current?.setMode('extract')
     setPhase('professor-scan')
   }
 
@@ -682,18 +763,18 @@ export default function Home() {
   // ============ Canvas Drawing (Professor Phase) ============
 
   useEffect(() => {
-    if (phase !== 'professor-scan' || !canvasRef.current || !videoRef.current) return
+    if (phase !== 'professor-scan' || !professorOverlayRef.current || !serverCameraCanvasRef.current) return
 
-    const canvas = canvasRef.current
-    const video = videoRef.current
+    const canvas = professorOverlayRef.current
+    const source = serverCameraCanvasRef.current
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
     let animationId: number
 
     const drawFrame = () => {
-      canvas.width = video.videoWidth
-      canvas.height = video.videoHeight
+      canvas.width = source.width || 560
+      canvas.height = source.height || 420
       ctx.clearRect(0, 0, canvas.width, canvas.height)
 
       if (boundingBox) {
@@ -774,17 +855,17 @@ export default function Home() {
   // ============ Canvas Drawing (Attendance Phase — Multi-face boxes) ============
 
   useEffect(() => {
-    if ((phase !== 'attendance-active' && phase !== 'attendance-locked') || !attendanceCanvasRef.current || !videoRef.current) return
+    if ((phase !== 'attendance-active' && phase !== 'attendance-locked') || !attendanceCanvasRef.current || !serverCameraCanvasRef.current) return
 
     const canvas = attendanceCanvasRef.current
-    const video = videoRef.current
+    const source = serverCameraCanvasRef.current
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
     // When locked, clear the canvas once and stop — no more animated boxes
     if (phase === 'attendance-locked') {
-      canvas.width = video.videoWidth || canvas.width
-      canvas.height = video.videoHeight || canvas.height
+      canvas.width = source.width || canvas.width
+      canvas.height = source.height || canvas.height
       ctx.clearRect(0, 0, canvas.width, canvas.height)
       return
     }
@@ -792,8 +873,8 @@ export default function Home() {
     let animationId: number
 
     const drawFrame = () => {
-      canvas.width = video.videoWidth
-      canvas.height = video.videoHeight
+      canvas.width = source.width || 560
+      canvas.height = source.height || 420
       ctx.clearRect(0, 0, canvas.width, canvas.height)
 
       // Draw boxes for match results (colored by status)
@@ -804,8 +885,8 @@ export default function Home() {
                         status === 'already-marked' ? '#3b82f6' :
                         '#ef4444'
 
-          // Canvas is CSS-flipped (scaleX -1) so draw at original coordinates
-          const x = box.left
+          // Mirror X because drawServerFrame flips pixels horizontally
+          const x = canvas.width - box.left - box.width
           const y = box.top
           const w = box.width
           const h = box.height
@@ -829,7 +910,7 @@ export default function Home() {
           // Name label
           const labelText = status === 'matched' ? `\u2713 ${name}` :
                             status === 'already-marked' ? `\u25CF ${name}` :
-                            '\u2717 Unknown'
+                            '\u26A0 Spoof Detected'
           ctx.font = 'bold 14px system-ui, sans-serif'
           const tw = ctx.measureText(labelText).width
           const pd = 10
@@ -846,19 +927,17 @@ export default function Home() {
           ctx.roundRect(lx, ly, tw + pd * 2, lh, 5)
           ctx.fill()
 
-          ctx.save()
-          ctx.scale(-1, 1)
           ctx.fillStyle = 'white'
-          ctx.fillText(labelText, -(lx + pd + tw), ly + 19)
-          ctx.restore()
+          ctx.fillText(labelText, lx + pd, ly + 19)
         }
       } else if (detectedFaces.length > 0 && scanStatus === 'scanning') {
         // Draw neutral boxes for detected faces while scanning
         for (const face of detectedFaces) {
+          const x = canvas.width - face.box.left - face.box.width
           ctx.strokeStyle = '#eab308'
           ctx.lineWidth = 2
           ctx.setLineDash([8, 4])
-          ctx.strokeRect(face.box.left, face.box.top, face.box.width, face.box.height)
+          ctx.strokeRect(x, face.box.top, face.box.width, face.box.height)
           ctx.setLineDash([])
         }
       }
@@ -887,7 +966,7 @@ export default function Home() {
         {/* Top bar */}
         <div className="flex items-center justify-between px-6 py-3 bg-white border-b border-gray-100 shadow-sm shrink-0">
           <div className="flex items-center gap-3">
-            <Image src="/verifaceqcu.jpg" alt="VeriFace" width={36} height={36} className="rounded-lg" />
+            <NextImage src="/verifaceqcu.jpg" alt="VeriFace" width={36} height={36} className="rounded-lg" />
             <div>
               <h1 className="text-sm font-bold tracking-tight text-gray-900">VeriFace Attendance</h1>
               <p className="text-xs text-gray-400">Quezon City University</p>
@@ -1003,7 +1082,7 @@ export default function Home() {
   const TopBar = ({ children }: { children?: React.ReactNode }) => (
     <div className="flex items-center justify-between px-6 py-3 bg-white border-b border-gray-100 shadow-sm">
       <div className="flex items-center gap-3">
-        <Image src="/verifaceqcu.jpg" alt="VeriFace" width={40} height={40} className="rounded-lg" />
+        <NextImage src="/verifaceqcu.jpg" alt="VeriFace" width={40} height={40} className="rounded-lg" />
         <div>
           <h1 className="text-base font-bold tracking-tight text-gray-900">VeriFace Attendance</h1>
           {children}
@@ -1033,7 +1112,7 @@ export default function Home() {
   // --- Phase 1: Professor Scan ---
   if (phase === 'professor-scan') {
     return (
-      <div className="h-screen overflow-hidden bg-gray-50 text-gray-900 flex flex-col">
+      <div className="min-h-screen overflow-y-auto bg-gray-50 text-gray-900 flex flex-col">
         {idleOverlay}
         <TopBar>
           <p className="text-xs text-gray-400">Professor verification required</p>
@@ -1066,13 +1145,11 @@ export default function Home() {
             {/* Camera Feed */}
             <div className={`relative rounded-2xl overflow-hidden border-2 shadow-lg transition-all duration-500 mx-auto ${getProfessorBorderColor()}`}
                  style={{ width: '560px', height: '420px' }}>
-              <video
-                ref={videoRef}
+              <canvas
+                ref={serverCameraCanvasRef}
                 className="w-full h-full object-cover"
-                autoPlay playsInline muted
-                style={{ transform: 'scaleX(-1)' }}
               />
-              <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" style={{ transform: 'scaleX(-1)' }} />
+              <canvas ref={professorOverlayRef} className="absolute inset-0 w-full h-full pointer-events-none" />
 
               {/* Status Overlay */}
               <div className="absolute top-3 inset-x-0 flex justify-center">
@@ -1080,6 +1157,7 @@ export default function Home() {
                   professorScanStatus === 'matched' ? 'bg-emerald-600/90' :
                   professorScanStatus === 'not-found' ? 'bg-red-500/90' :
                   professorScanStatus === 'scanning' ? 'bg-blue-500/90' :
+                  spoofDetected ? 'bg-orange-500/90' :
                   faceDetected ? 'bg-gray-700/80' : 'bg-gray-900/60'
                 }`}>
                   {professorScanStatus === 'matched' ? (
@@ -1088,6 +1166,8 @@ export default function Home() {
                     <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Verifying...</>
                   ) : professorScanStatus === 'not-found' ? (
                     'Face not recognized'
+                  ) : spoofDetected ? (
+                    <><span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" /> Spoof Detected</>
                   ) : faceDetected ? (
                     <><span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" /> Face detected</>
                   ) : (
@@ -1129,7 +1209,7 @@ export default function Home() {
   // --- Phase 2: Schedule Select ---
   if (phase === 'schedule-select') {
     return (
-      <div className="h-screen overflow-hidden bg-gray-50 text-gray-900 flex flex-col">
+      <div className="min-h-screen overflow-y-auto bg-gray-50 text-gray-900 flex flex-col">
         {idleOverlay}
         <TopBar>
           {professor && <p className="text-xs text-emerald-600">Prof. {professor.firstName} {professor.lastName}</p>}
@@ -1188,12 +1268,12 @@ export default function Home() {
 
   // --- Phase 3 & 4: Attendance Active / Locked ---
   return (
-    <div className="h-screen overflow-hidden bg-gray-50 text-gray-900 flex flex-col">
+    <div className="min-h-screen overflow-y-auto bg-gray-50 text-gray-900 flex flex-col">
       {idleOverlay}
       {/* Top Bar */}
       <div className="flex items-center justify-between px-6 py-3 bg-white border-b border-gray-100 shadow-sm shrink-0">
         <div className="flex items-center gap-3">
-          <Image src="/verifaceqcu.jpg" alt="VeriFace" width={40} height={40} className="rounded-lg" />
+          <NextImage src="/verifaceqcu.jpg" alt="VeriFace" width={40} height={40} className="rounded-lg" />
           <div>
             <h1 className="text-base font-bold tracking-tight text-gray-900">VeriFace Attendance</h1>
             {professor && selectedSchedule && (
@@ -1235,6 +1315,23 @@ export default function Home() {
             {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
           </button>
 
+          {/* Escape to admin/faculty login — does NOT clear kiosk session */}
+          <div className="flex items-center gap-1.5 border-l border-gray-100 pl-4">
+            <button
+              onClick={() => router.push('/admin/login')}
+              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-gray-400 hover:text-emerald-600 bg-gray-50 hover:bg-emerald-50 border border-gray-200 hover:border-emerald-200 rounded-lg transition-all"
+            >
+              <ShieldCheck className="w-3 h-3" />
+              Admin
+            </button>
+            <button
+              onClick={() => router.push('/professor/login')}
+              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-gray-400 hover:text-emerald-600 bg-gray-50 hover:bg-emerald-50 border border-gray-200 hover:border-emerald-200 rounded-lg transition-all"
+            >
+              Faculty
+            </button>
+          </div>
+
           <div className="text-right">
             <p className="text-lg font-mono font-semibold tabular-nums text-gray-800" suppressHydrationWarning>
               {currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
@@ -1247,7 +1344,8 @@ export default function Home() {
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 overflow-hidden flex">
+      <div className="flex-1 min-h-0 flex">
+
         {/* Left: Camera Feed */}
         <div className="flex-1 overflow-hidden flex flex-col items-center justify-center p-8">
           {/* Locked Banner */}
@@ -1266,16 +1364,13 @@ export default function Home() {
             phase === 'attendance-locked' ? 'border-red-300 opacity-60' : getStatusColor()
           }`}
                style={{ width: '560px', height: '420px' }}>
-            <video
-              ref={videoRef}
+            <canvas
+              ref={serverCameraCanvasRef}
               className="w-full h-full object-cover"
-              autoPlay playsInline muted
-              style={{ transform: 'scaleX(-1)' }}
             />
             <canvas
               ref={attendanceCanvasRef}
               className="absolute inset-0 w-full h-full pointer-events-none"
-              style={{ transform: 'scaleX(-1)' }}
             />
 
             {/* Face count */}
@@ -1391,69 +1486,104 @@ export default function Home() {
             <p className="text-[10px] text-gray-400 mt-1.5 text-right">{stats.present + stats.late} / {stats.total} checked in</p>
           </div>
 
-          {/* Student List */}
-          <div className="flex-1 overflow-y-auto p-4">
-            <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-2 px-1">
-              Students ({enrolledStudents.length})
-            </h2>
-            {enrolledStudents.length === 0 ? (
-              <div className="text-center py-10 text-gray-300">
-                <p className="text-xs">No students enrolled</p>
-              </div>
-            ) : (
-              <div className="space-y-1">
-                {enrolledStudents.map(student => (
-                  <div
-                    key={student.id}
-                    className={`flex items-center gap-2.5 px-3 py-2 rounded-lg border transition-all ${
-                      student.status === 'present'
-                        ? 'bg-emerald-50/50 border-emerald-100'
-                        : student.status === 'late'
-                        ? 'bg-amber-50/50 border-amber-100'
-                        : student.status === 'absent'
-                        ? 'bg-red-50/50 border-red-100'
-                        : 'bg-gray-50/50 border-gray-100'
-                    }`}
-                  >
-                    <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${
-                      student.status === 'present' ? 'bg-emerald-100 text-emerald-600' :
-                      student.status === 'late' ? 'bg-amber-100 text-amber-600' :
-                      student.status === 'absent' ? 'bg-red-100 text-red-500' :
-                      'bg-gray-100 text-gray-400'
-                    }`}>
-                      {student.status === 'present' ? <CheckCircle className="w-3.5 h-3.5" /> :
-                       student.status === 'late' ? <Clock className="w-3.5 h-3.5" /> :
-                       student.status === 'absent' ? <XCircle className="w-3.5 h-3.5" /> :
-                       <span className="w-1.5 h-1.5 rounded-full bg-gray-300" />}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className={`text-xs font-medium truncate ${
-                        student.status === 'pending' ? 'text-gray-400' : 'text-gray-800'
-                      }`}>
-                        {student.lastName}, {student.firstName}
-                      </p>
-                      <p className="text-[10px] text-gray-400">{student.studentNumber}</p>
-                    </div>
-                    <div className="text-right shrink-0">
-                      <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
-                        student.status === 'present' ? 'bg-emerald-100 text-emerald-600' :
-                        student.status === 'late' ? 'bg-amber-100 text-amber-600' :
-                        student.status === 'absent' ? 'bg-red-100 text-red-500' :
-                        'bg-gray-100 text-gray-400'
-                      }`}>
-                        {student.status.toUpperCase()}
+          {/* Student List with Pagination */}
+          {(() => {
+            const PAGE_SIZE = 10
+            const totalPages = Math.ceil(enrolledStudents.length / PAGE_SIZE)
+            const pagedStudents = enrolledStudents.slice(studentPage * PAGE_SIZE, (studentPage + 1) * PAGE_SIZE)
+            return (
+              <div className="flex flex-col flex-1 min-h-0">
+                {/* List header + pagination controls */}
+                <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100 shrink-0">
+                  <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">
+                    Students ({enrolledStudents.length})
+                  </h2>
+                  {totalPages > 1 && (
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => setStudentPage(p => Math.max(0, p - 1))}
+                        disabled={studentPage === 0}
+                        className="p-1 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed transition"
+                      >
+                        <ChevronLeft className="w-3.5 h-3.5" />
+                      </button>
+                      <span className="text-xs text-gray-400 tabular-nums min-w-12 text-center">
+                        {studentPage + 1} / {totalPages}
                       </span>
-                      {student.checkedInAt && (
-                        <p className="text-[10px] text-gray-400 mt-0.5">
-                          {new Date(student.checkedInAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
-                        </p>
-                      )}
+                      <button
+                        onClick={() => setStudentPage(p => Math.min(totalPages - 1, p + 1))}
+                        disabled={studentPage >= totalPages - 1}
+                        className="p-1 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed transition"
+                      >
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
                     </div>
-                  </div>
-                ))}
+                  )}
+                </div>
+
+                {/* Scrollable rows */}
+                <div className="flex-1 overflow-y-auto p-4">
+                  {enrolledStudents.length === 0 ? (
+                    <div className="text-center py-10 text-gray-300">
+                      <p className="text-xs">No students enrolled</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-1">
+                      {pagedStudents.map(student => (
+                        <div
+                          key={student.id}
+                          className={`flex items-center gap-2.5 px-3 py-2 rounded-lg border transition-all ${
+                            student.status === 'present'
+                              ? 'bg-emerald-50/50 border-emerald-100'
+                              : student.status === 'late'
+                              ? 'bg-amber-50/50 border-amber-100'
+                              : student.status === 'absent'
+                              ? 'bg-red-50/50 border-red-100'
+                              : 'bg-gray-50/50 border-gray-100'
+                          }`}
+                        >
+                          <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${
+                            student.status === 'present' ? 'bg-emerald-100 text-emerald-600' :
+                            student.status === 'late' ? 'bg-amber-100 text-amber-600' :
+                            student.status === 'absent' ? 'bg-red-100 text-red-500' :
+                            'bg-gray-100 text-gray-400'
+                          }`}>
+                            {student.status === 'present' ? <CheckCircle className="w-3.5 h-3.5" /> :
+                             student.status === 'late' ? <Clock className="w-3.5 h-3.5" /> :
+                             student.status === 'absent' ? <XCircle className="w-3.5 h-3.5" /> :
+                             <span className="w-1.5 h-1.5 rounded-full bg-gray-300" />}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className={`text-xs font-medium truncate ${
+                              student.status === 'pending' ? 'text-gray-400' : 'text-gray-800'
+                            }`}>
+                              {student.lastName}, {student.firstName}
+                            </p>
+                            <p className="text-[10px] text-gray-400">{student.studentNumber}</p>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
+                              student.status === 'present' ? 'bg-emerald-100 text-emerald-600' :
+                              student.status === 'late' ? 'bg-amber-100 text-amber-600' :
+                              student.status === 'absent' ? 'bg-red-100 text-red-500' :
+                              'bg-gray-100 text-gray-400'
+                            }`}>
+                              {student.status.toUpperCase()}
+                            </span>
+                            {student.checkedInAt && (
+                              <p className="text-[10px] text-gray-400 mt-0.5">
+                                {new Date(student.checkedInAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
-            )}
-          </div>
+            )
+          })()}
         </div>
       </div>
     </div>
