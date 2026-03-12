@@ -50,8 +50,12 @@ next-env.d.ts
 /face-ml-training/models/
 /face-ml-training/runs/
 /face-ml-training/datasets/
-/face-ml-training/api/database/
-/face-ml-training/database/
+/face-ml-training/api/database/*.db
+/face-ml-training/api/database/*.db-shm
+/face-ml-training/api/database/*.db-wal
+/face-ml-training/database/*.db
+/face-ml-training/database/*.db-shm
+/face-ml-training/database/*.db-wal
 
 # Python cache
 __pycache__/
