@@ -433,6 +433,24 @@ class RecognitionEngine:
 
         t0 = time.perf_counter()
         faces = self._detect_faces(img_bgr)
+
+        # Filter weak detections to avoid false positives (e.g., background patterns
+        # incorrectly detected as faces). These guardrails are especially important
+        # for kiosk attendance where a false match is worse than a miss.
+        min_det_conf = float(getattr(self, "min_det_conf", 0.75))
+        min_face_size = int(getattr(self, "min_face_size", 60))
+        filtered_faces = []
+        for f in faces:
+            fa = f.get("facial_area", {})
+            w = int(fa.get("w", 0) or 0)
+            h = int(fa.get("h", 0) or 0)
+            det_conf = float(f.get("confidence", 0.0) or 0.0)
+            if det_conf < min_det_conf:
+                continue
+            if w < min_face_size or h < min_face_size:
+                continue
+            filtered_faces.append(f)
+        faces = filtered_faces
         result_faces = []
 
         for idx, face in enumerate(faces):

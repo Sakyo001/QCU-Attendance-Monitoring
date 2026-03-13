@@ -444,6 +444,10 @@ def create_legacy_router(engine_ref: dict, session_store: dict) -> APIRouter:
         section_id = body.get("sectionId", "default")
         students = body.get("students", [])
 
+        # Kiosk runs one active class session at a time.
+        # If we keep multiple sections loaded, recognition can match against
+        # students from other sections and incorrectly mark attendance.
+        session_store.clear()
         session_store[section_id] = {}
         for s in students:
             sid = s.get("id") or s.get("studentId")

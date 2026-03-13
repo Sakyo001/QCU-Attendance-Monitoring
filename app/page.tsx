@@ -458,6 +458,10 @@ export default function Home() {
     const result = data.results as RecognitionResult | null
     if (!result || !selectedSchedule || attendanceLocked) return
 
+    // Extra guardrail: require a minimum confidence before we persist attendance.
+    // This protects against misconfigured backend thresholds or transient false matches.
+    const MIN_MARK_CONFIDENCE = 0.6
+
     if (!result.detected || !result.faces || result.faces.length === 0) {
       setDetectedFaces([])
       setFaceMatchResults([])
@@ -478,7 +482,13 @@ export default function Home() {
     const uiResults: Array<{ box: DetectedFace['box']; name: string; status: 'matched' | 'no-match' | 'already-marked' }> = []
 
     for (const face of result.faces) {
-      if (face.matched && face.studentId) {
+      const confidentMatch =
+        face.matched &&
+        !!face.studentId &&
+        !face.spoofDetected &&
+        (typeof face.confidence === 'number' && face.confidence >= MIN_MARK_CONFIDENCE)
+
+      if (confidentMatch) {
         if (markedStudentIdsRef.current.has(face.studentId)) {
           uiResults.push({ box: face.box, name: face.name, status: 'already-marked' })
         } else {

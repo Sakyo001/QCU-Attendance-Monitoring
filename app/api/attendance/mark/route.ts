@@ -120,7 +120,7 @@ export async function POST(request: NextRequest) {
     // First, get the student registration by ID (coming from face match)
     const { data: registration, error: registrationError } = await supabase
       .from('student_face_registrations')
-      .select('id, first_name, last_name, student_number')
+      .select('id, first_name, last_name, student_number, section_id, is_active')
       .eq('id', studentId)
       .single()
 
@@ -129,6 +129,39 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ 
         error: 'Student registration not found' 
       }, { status: 404 })
+    }
+
+    // Prevent marking attendance for students from other sections due to
+    // false face matches or stale encodings.
+    if ((registration as any).is_active === false) {
+      return NextResponse.json({
+        success: false,
+        error: 'Student registration is inactive'
+      }, { status: 400 })
+    }
+
+    if ((registration as any).section_id && (registration as any).section_id !== sectionId) {
+      return NextResponse.json({
+        success: false,
+        error: 'Student is not enrolled in this section'
+      }, { status: 400 })
+    }
+
+    // If scheduleId provided, ensure it belongs to the same section.
+    if (scheduleId) {
+      const { data: schedRow, error: schedErr } = await supabase
+        .from('class_sessions')
+        .select('id, section_id')
+        .eq('id', scheduleId)
+        .single()
+      if (schedErr) {
+        console.error('❌ Failed to validate scheduleId:', schedErr)
+      } else if (schedRow?.section_id && schedRow.section_id !== sectionId) {
+        return NextResponse.json({
+          success: false,
+          error: 'Schedule does not belong to this section'
+        }, { status: 400 })
+      }
     }
 
     console.log('✅ Found registration:', (registration as any).first_name, (registration as any).last_name)

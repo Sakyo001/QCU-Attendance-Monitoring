@@ -49,6 +49,13 @@ pydantic>=2.4.0
 python-dotenv>=1.0.0
 loguru>=0.7.2
 
+# --- Face Detection / Embedding (facenet-pytorch) ---
+facenet-pytorch>=2.5.3           # MTCNN detector + InceptionResnetV1 embedder
+
+# --- DeepFace (fallback embedder in recognition_engine) ---
+deepface>=0.0.93
+tf-keras>=2.16.0                 # Keras backend required by deepface
+
 # --- Face Alignment ---
 dlib>=19.24.0                    # 68-point landmark detection
 face-alignment>=1.4.1            # Fan-based 3D face alignment
