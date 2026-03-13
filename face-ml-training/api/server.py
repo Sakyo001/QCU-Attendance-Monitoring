@@ -84,10 +84,10 @@ async def lifespan(app: FastAPI):
     db_path      = os.getenv("DB_PATH",             "database/embeddings.db")
     model_name   = os.getenv("MODEL_NAME",          "Facenet512")
     det_backend  = os.getenv("DETECTOR_BACKEND",    "mtcnn")
-    # Similarity threshold: too low causes false positives (unknown faces being
-    # mislabeled as registered users). Default to a stricter value and clamp.
-    sim_thr_raw  = float(os.getenv("SIM_THRESHOLD", "0.7"))
-    sim_thr      = max(0.7, min(0.95, sim_thr_raw))
+    # Similarity threshold: too low causes false positives (students marked present incorrectly).
+    # Default to a safer value and clamp to a reasonable range.
+    sim_thr_raw  = float(os.getenv("SIM_THRESHOLD", "0.65"))
+    sim_thr      = max(0.6, min(0.9, sim_thr_raw))
     anti_spoof   = os.getenv("ANTI_SPOOFING",       "true").lower() == "true"
 
     logger.info(f"  DB_PATH:             {db_path}")
