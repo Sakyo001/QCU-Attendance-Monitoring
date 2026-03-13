@@ -86,7 +86,7 @@ async def lifespan(app: FastAPI):
     det_backend  = os.getenv("DETECTOR_BACKEND",    "mtcnn")
     # Similarity threshold: too low causes false positives (unknown faces being
     # mislabeled as registered users). Default to a stricter value and clamp.
-    sim_thr_raw  = float(os.getenv("SIM_THRESHOLD", "0.75"))
+    sim_thr_raw  = float(os.getenv("SIM_THRESHOLD", "0.7"))
     sim_thr      = max(0.7, min(0.95, sim_thr_raw))
     anti_spoof   = os.getenv("ANTI_SPOOFING",       "true").lower() == "true"
 
