@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import sys
 import time
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -115,6 +116,15 @@ class RecognitionEngine:
         self.sim_threshold = sim_threshold
         self.anti_spoofing_enabled = anti_spoofing
         self._db = db_manager
+
+        # Session (kiosk) matching guardrails.
+        # Unknown faces should remain Unknown instead of being forced to the
+        # closest identity.
+        self.session_sim_threshold = float(os.getenv("SESSION_SIM_THRESHOLD", str(sim_threshold)))
+        self.session_sim_threshold = max(0.75, min(0.95, self.session_sim_threshold))
+        self.min_match_margin = float(os.getenv("MIN_MATCH_MARGIN", "0.06"))
+        self.min_match_margin = max(0.0, min(0.2, self.min_match_margin))
+        self.session_faiss_fallback = os.getenv("SESSION_FAISS_FALLBACK", "false").lower() == "true"
 
         logger.info("Initialising RecognitionEngine (DeepFace)")
         logger.info(f"  model_name:       {model_name}")
@@ -470,30 +480,53 @@ class RecognitionEngine:
                 emb = self._get_embedding(face_crop) if (face_crop is not None and face_crop.size > 0) else None
 
                 if emb is not None:
-                    # 1. Search active session store
+                    # 1) Session store match (best vs runner-up margin)
+                    a = emb.astype(np.float32)
+                    best_sim = -1.0
+                    second_sim = -1.0
+                    best_sid = None
+                    best_data = None
+
                     for _sec, students in session_store.items():
                         for sid, sdata in students.items():
-                            a = emb.astype(np.float32)
                             b = sdata["embedding"].astype(np.float32)
                             na, nb = np.linalg.norm(a), np.linalg.norm(b)
                             sim = float(np.dot(a / (na + 1e-8), b / (nb + 1e-8)))
-                            if sim > match_confidence and sim >= self.sim_threshold:
-                                match_confidence = sim
-                                student_id = sid
-                                student_name = sdata["name"]
-                                student_number = sdata.get("student_number")
-                                matched = True
+                            if sim > best_sim:
+                                second_sim = best_sim
+                                best_sim = sim
+                                best_sid = sid
+                                best_data = sdata
+                            elif sim > second_sim:
+                                second_sim = sim
 
-                    # 2. FAISS fallback
-                    if not matched and len(self._index) > 0:
+                    if (
+                        best_sid is not None
+                        and best_sim >= self.session_sim_threshold
+                        and (best_sim - second_sim) >= self.min_match_margin
+                    ):
+                        matched = True
+                        student_id = best_sid
+                        student_name = (best_data or {}).get("name", "Unknown")
+                        student_number = (best_data or {}).get("student_number")
+                        match_confidence = float(best_sim)
+
+                    # 2) Optional global fallback (OFF by default for kiosk)
+                    if (
+                        not matched
+                        and self.session_faiss_fallback
+                        and len(session_store) == 0
+                        and len(self._index) > 0
+                    ):
                         try:
-                            results = self._index.search(emb, threshold=self.sim_threshold, top_k=1)
-                            uid, sim = results[0]
-                            if uid is not None:
+                            results = self._index.search(emb, threshold=self.session_sim_threshold, top_k=2)
+                            uid1, sim1 = results[0]
+                            sim2 = results[1][1] if len(results) > 1 else -1.0
+                            if uid1 is not None and (float(sim1) - float(sim2)) >= self.min_match_margin:
                                 matched = True
-                                student_id = uid
-                                student_name = self._name_cache.get(uid, "Unknown")
-                                match_confidence = float(sim)
+                                student_id = uid1
+                                student_name = self._name_cache.get(uid1, "Unknown")
+                                match_confidence = float(sim1)
                         except Exception:
                             pass
 
