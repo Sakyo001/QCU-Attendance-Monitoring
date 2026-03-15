@@ -173,9 +173,9 @@ export default function SchedulesPage() {
 
       if (editingSession) {
         // Update existing
-        const { error } = await supabase
+        const { error } = await (supabase as any)
           .from('class_sessions')
-          .update(sessionData)
+          .update(sessionData as any)
           .eq('id', editingSession.id)
 
         if (error) throw error
@@ -188,9 +188,9 @@ export default function SchedulesPage() {
         })
       } else {
         // Create new
-        const { error } = await supabase
+        const { error } = await (supabase as any)
           .from('class_sessions')
-          .insert([sessionData])
+          .insert([sessionData] as any)
 
         if (error) throw error
 
@@ -229,12 +229,21 @@ export default function SchedulesPage() {
 
     if (result.isConfirmed) {
       try {
-        const { error } = await supabase
-          .from('class_sessions')
-          .delete()
-          .eq('id', session.id)
+        const response = await fetch('/api/admin/schedules', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: session.id }),
+        })
 
-        if (error) throw error
+        const data = await response.json().catch(() => null)
+
+        if (!response.ok) {
+          const message =
+            data?.details?.message ||
+            data?.error ||
+            `Failed to delete schedule (HTTP ${response.status})`
+          throw new Error(message)
+        }
 
         await Swal.fire({
           title: 'Deleted!',
