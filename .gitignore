@@ -36,6 +36,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # vercel
 .vercel
@@ -47,6 +48,7 @@ next-env.d.ts
 # Large ML/dataset directories (local only)
 /deepface/
 /dataset/samples/
+/attendance-monitoring-api/
 /face-ml-training/models/
 /face-ml-training/runs/
 /face-ml-training/datasets/

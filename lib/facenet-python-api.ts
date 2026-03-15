@@ -7,7 +7,9 @@
  * - Real-time multi-face recognition via session cache + fast detection + WebSocket
  */
 
-const PRODUCTION_URL = 'https://qcu-attendance-monitoring-production.up.railway.app'
+// Default Railway deployment for the face-recognition backend.
+// Override in Vercel/locally via NEXT_PUBLIC_FACENET_API_URL.
+const PRODUCTION_URL = 'https://attendance-monitoring-api-production.up.railway.app'
 const LOCAL_FALLBACK_URL = process.env.NEXT_PUBLIC_LOCAL_API_URL || 'http://localhost:8000'
 
 // Runtime-mutable — switches to local fallback automatically when Railway is unreachable

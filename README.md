@@ -34,3 +34,19 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+## Vercel + Railway (this project)
+
+This frontend expects:
+
+- Supabase env vars (for auth + database)
+- A Face Recognition API (FastAPI) deployed on Railway
+
+Set these Environment Variables in Vercel (Project Settings → Environment Variables):
+
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY` (server-side only; used by Next.js route handlers)
+- `NEXT_PUBLIC_FACENET_API_URL` (example: `https://attendance-monitoring-api-production.up.railway.app`)
+
+See `.env.example` for the full list.

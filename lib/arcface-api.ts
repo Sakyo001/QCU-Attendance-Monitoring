@@ -3,7 +3,9 @@
  * Interfaces with Python FastAPI server for face recognition
  */
 
-const ARCFACE_PRODUCTION_URL = 'https://qcu-attendance-monitoring-production.up.railway.app'
+// Default Railway deployment for the face-recognition backend.
+// Override in Vercel/locally via NEXT_PUBLIC_ARCFACE_API_URL.
+const ARCFACE_PRODUCTION_URL = 'https://attendance-monitoring-api-production.up.railway.app'
 const ARCFACE_LOCAL_FALLBACK_URL = process.env.NEXT_PUBLIC_LOCAL_API_URL || 'http://localhost:8000'
 
 // Runtime-mutable — switches to local fallback automatically when Railway is unreachable
