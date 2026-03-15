@@ -245,7 +245,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         firstName: data.user.firstName,
         lastName: data.user.lastName,
         studentId: data.user.studentId,
-        employeeId: data.user.employeeId
+        employeeId: data.user.employeeId,
+        isActive: Boolean((data.user as any).isActive ?? (data.user as any).is_active ?? true)
       }
 
       setUser(mappedUser)

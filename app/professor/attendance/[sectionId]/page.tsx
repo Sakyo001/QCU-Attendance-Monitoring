@@ -1029,7 +1029,15 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
     // Only process results on frames that ran through the pipeline
     if (data.results === null || data.results === undefined) return
 
-    if (!data.results || data.results.length === 0) {
+    // Server stream in 'extract' mode returns a FaceNetEmbedding-like object.
+    // Some variants may wrap multiple faces; normalize defensively.
+    const rawResults = data.results as any
+    const face: any =
+      (Array.isArray(rawResults) ? rawResults[0] : null) ??
+      (rawResults && Array.isArray(rawResults.faces) ? rawResults.faces[0] : null) ??
+      rawResults
+
+    if (!face || !face.embedding) {
       setBoundingBox(null)
       consecutiveFaceDetectionsRef.current = 0
       faceStableStartRef.current = null
@@ -1040,9 +1048,7 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
       return
     }
 
-    const face = data.results[0]
-
-    if (face.spoof_detected || !face.embedding) {
+    if (face.spoofDetected ?? face.spoof_detected) {
       consecutiveFaceDetectionsRef.current = 0
       faceStableStartRef.current = null
       setCaptureCountdown(null)
@@ -1055,7 +1061,21 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
     savedFaceDescriptorRef.current = descriptor
 
     if (face.box) {
-      setBoundingBox(face.box)
+      const box = face.box as {
+        x?: number
+        y?: number
+        width?: number
+        height?: number
+        left?: number
+        top?: number
+        right?: number
+        bottom?: number
+      }
+      const x = box.x ?? box.left ?? 0
+      const y = box.y ?? box.top ?? 0
+      const width = box.width ?? Math.max(0, (box.right ?? 0) - x)
+      const height = box.height ?? Math.max(0, (box.bottom ?? 0) - y)
+      setBoundingBox({ x, y, width, height })
     }
 
     consecutiveFaceDetectionsRef.current += 1
@@ -1874,6 +1894,7 @@ interface FaceRegistrationModalProps {
   professorName: string
   onComplete: () => void
   onSkip?: () => void
+  onCancel?: () => void
 }
 
 type LivenessStep = 'center' | 'left' | 'right' | 'up' | 'complete'
@@ -1886,7 +1907,7 @@ interface LivenessProgress {
   rotate: boolean
 }
 
-function FaceRegistrationModal({ professorId, professorName, onComplete, onSkip }: FaceRegistrationModalProps) {
+function FaceRegistrationModal({ professorId, professorName, onComplete, onSkip, onCancel }: FaceRegistrationModalProps) {
   // Parse professor name into first and last name
   const [firstName, lastName] = professorName.split(' ').length > 1 
     ? [professorName.split(' ')[0], professorName.split(' ').slice(1).join(' ')] 
@@ -2155,9 +2176,11 @@ function FaceRegistrationModal({ professorId, professorName, onComplete, onSkip 
           
           <div className="flex items-center justify-between p-6 pt-0">
              <div>
-              {onSkip && (
+              {onCancel ? (
+                <Button type="button" variant="ghost" onClick={onCancel} className="mr-2">Cancel</Button>
+              ) : onSkip ? (
                 <Button type="button" variant="ghost" onClick={onSkip} className="mr-2">Skip</Button>
-              )}
+              ) : null}
              </div>
              <Button type="submit" disabled={isSubmitting || !capturedImage}>
                 {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}

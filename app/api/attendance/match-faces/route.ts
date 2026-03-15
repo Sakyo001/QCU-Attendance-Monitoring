@@ -71,7 +71,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Pre-process stored descriptors once (avoid re-parsing for each input face)
-    const processedStudents = students.map(student => {
+    const processedStudents = students.map((student: any) => {
       let storedDescriptor = student.face_descriptor
       if (!storedDescriptor) return null
 

@@ -1,6 +1,43 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/utils/supabase/admin'
 
+function csvEscape(value: unknown): string {
+  const s = value == null ? '' : String(value)
+  if (/[\r\n",]/.test(s)) {
+    return `"${s.replace(/"/g, '""')}"`
+  }
+  return s
+}
+
+function buildCsv(headers: string[], rows: Array<Record<string, unknown>>): string {
+  const headerLine = headers.map(csvEscape).join(',')
+  const lines = rows.map(r => headers.map(h => csvEscape(r[h])).join(','))
+  // Add UTF-8 BOM so Excel opens it cleanly
+  return `\ufeff${[headerLine, ...lines].join('\r\n')}\r\n`
+}
+
+function listDatesInclusive(dateFrom: string, dateTo: string): string[] {
+  const start = new Date(`${dateFrom}T00:00:00.000Z`)
+  const end = new Date(`${dateTo}T00:00:00.000Z`)
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return []
+  if (start > end) return []
+
+  const dates: string[] = []
+  const d = new Date(start)
+  while (d <= end) {
+    dates.push(d.toISOString().slice(0, 10))
+    d.setUTCDate(d.getUTCDate() + 1)
+  }
+  return dates
+}
+
+function deriveYearLevelFromSectionCode(sectionCode: string): string {
+  if (!sectionCode) return ''
+  // Common formats: "1A", "1-A", "BSIT-1A", etc. We take the first digit found.
+  const m = sectionCode.match(/\d/)
+  return m ? m[0] : ''
+}
+
 // GET /api/professor/attendance/export
 // Query params:
 //   professorId  – required
@@ -25,6 +62,7 @@ export async function GET(request: NextRequest) {
     const semester     = searchParams.get('semester') || ''
     const academicYear = searchParams.get('academicYear') || ''
     const statusFilter = searchParams.get('status') || ''
+    const format       = (searchParams.get('format') || '').toLowerCase()
 
     if (!professorId) {
       return NextResponse.json({ error: 'professorId is required' }, { status: 400 })
@@ -51,6 +89,7 @@ export async function GET(request: NextRequest) {
       academicYear: string
       subjectCodes: string[]
       subjectNames: string[]
+      subjectByCode: Record<string, string>
     }>()
 
     ;(classrooms || []).forEach((c: any) => {
@@ -64,6 +103,7 @@ export async function GET(request: NextRequest) {
           academicYear: sec.academic_year || '',
           subjectCodes: [],
           subjectNames: [],
+          subjectByCode: {},
         })
       }
       const entry = sectionMap.get(sid)!
@@ -72,6 +112,9 @@ export async function GET(request: NextRequest) {
       }
       if (c.subject_name && !entry.subjectNames.includes(c.subject_name)) {
         entry.subjectNames.push(c.subject_name)
+      }
+      if (c.subject_code && c.subject_name) {
+        entry.subjectByCode[c.subject_code] = c.subject_name
       }
     })
 
@@ -129,10 +172,6 @@ export async function GET(request: NextRequest) {
       .lte('checked_in_at', dateToTs)
       .order('checked_in_at', { ascending: true })
 
-    if (statusFilter) {
-      recordsQuery = recordsQuery.eq('status', statusFilter)
-    }
-
     const { data: records, error: recErr } = await recordsQuery
     if (recErr) {
       return NextResponse.json({ error: recErr.message }, { status: 500 })
@@ -151,12 +190,8 @@ export async function GET(request: NextRequest) {
       recordMap.set(key, r)
     })
 
-    // Collect all dates that have any records in this range
-    const datesWithRecords = new Set<string>()
-    ;(records || []).forEach((r: any) => {
-      const date = r.checked_in_at ? r.checked_in_at.split('T')[0] : ''
-      if (date) datesWithRecords.add(date)
-    })
+    // Use the full date range so exports match the chosen filters
+    const datesInRange = listDatesInclusive(dateFrom, dateTo)
 
     // Build flat rows: for each section × student × date(with records)
     const rows: any[] = []
@@ -165,7 +200,14 @@ export async function GET(request: NextRequest) {
       const secInfo = sectionMap.get(sectionId)!
       const sectionStudents = studentsBySection.get(sectionId) || []
 
-      datesWithRecords.forEach(date => {
+      const subjectCodeOut = subjectCode
+        ? subjectCode
+        : [...secInfo.subjectCodes].sort().join(', ')
+      const subjectNameOut = subjectCode
+        ? (secInfo.subjectByCode[subjectCode] || [...secInfo.subjectNames].sort().join(', '))
+        : [...secInfo.subjectNames].sort().join(', ')
+
+      datesInRange.forEach(date => {
         sectionStudents.forEach(student => {
           const key = recordKey(sectionId, student.student_number, date)
           const rec = recordMap.get(key)
@@ -178,10 +220,11 @@ export async function GET(request: NextRequest) {
           rows.push({
             date,
             sectionCode: secInfo.sectionCode,
+            yearLevel: deriveYearLevelFromSectionCode(secInfo.sectionCode),
             semester: secInfo.semester,
             academicYear: secInfo.academicYear,
-            subjectCode: secInfo.subjectCodes.join(', '),
-            subjectName: secInfo.subjectNames.join(', '),
+            subjectCode: subjectCodeOut,
+            subjectName: subjectNameOut,
             studentNumber: student.student_number,
             lastName: student.last_name,
             firstName: student.first_name,
@@ -199,6 +242,34 @@ export async function GET(request: NextRequest) {
       a.sectionCode.localeCompare(b.sectionCode) ||
       a.lastName.localeCompare(b.lastName)
     )
+
+    if (format === 'csv') {
+      const headers = [
+        'date',
+        'sectionCode',
+        'yearLevel',
+        'semester',
+        'academicYear',
+        'subjectCode',
+        'subjectName',
+        'studentNumber',
+        'lastName',
+        'firstName',
+        'status',
+        'checkedInAt',
+        'faceMatchConfidence',
+      ]
+      const csv = buildCsv(headers, rows)
+      const filename = `Attendance_${dateFrom}_to_${dateTo}.csv`
+      return new NextResponse(csv, {
+        status: 200,
+        headers: {
+          'Content-Type': 'text/csv; charset=utf-8',
+          'Content-Disposition': `attachment; filename="${filename}"`,
+          'Cache-Control': 'no-store',
+        },
+      })
+    }
 
     return NextResponse.json({ success: true, rows, total: rows.length })
   } catch (error: any) {

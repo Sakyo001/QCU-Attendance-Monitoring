@@ -20,6 +20,28 @@ export async function POST(request: Request) {
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     )
 
+    // Validate section exists (sections are global)
+    const { data: section, error: sectionError } = await supabase
+      .from('sections')
+      .select('id')
+      .eq('id', sectionId)
+      .maybeSingle()
+
+    if (sectionError) {
+      console.error('Error validating section ownership:', sectionError)
+      return NextResponse.json(
+        { error: 'Failed to validate section' },
+        { status: 400 }
+      )
+    }
+
+    if (!section) {
+      return NextResponse.json(
+        { error: 'Section not found' },
+        { status: 404 }
+      )
+    }
+
     // Create class session record
     const { data: classSession, error: sessionError } = await supabase
       .from('class_sessions')

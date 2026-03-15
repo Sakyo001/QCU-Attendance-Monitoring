@@ -19,7 +19,13 @@ export async function GET(request: NextRequest) {
         .from('class_sessions')
         .select('section_id')
         .eq('professor_id', professorId)
-      sectionIds = [...new Set((sessions || []).map((s: any) => s.section_id))]
+      sectionIds = [
+        ...new Set(
+          ((sessions as any[]) || [])
+            .map((s: any) => (s?.section_id != null ? String(s.section_id) : ''))
+            .filter((sid: string) => !!sid)
+        )
+      ]
     } else if (sectionId) {
       sectionIds = [sectionId]
     }

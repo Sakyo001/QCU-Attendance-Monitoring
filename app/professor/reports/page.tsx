@@ -6,6 +6,29 @@ import { useEffect, useState, useMemo } from 'react'
 import { ArrowLeft, BarChart3, Calendar, Users, CheckCircle, Clock, XCircle, Search, Download, ChevronLeft, ChevronRight, Eye, Filter, FileDown, Loader2 } from 'lucide-react'
 import * as XLSX from 'xlsx'
 
+function csvEscape(value: unknown): string {
+  const s = value == null ? '' : String(value)
+  if (/[\r\n",]/.test(s)) {
+    return `"${s.replace(/"/g, '""')}"`
+  }
+  return s
+}
+
+function downloadCsv(filename: string, headers: string[], rows: Array<Record<string, unknown>>) {
+  const headerLine = headers.map(csvEscape).join(',')
+  const lines = rows.map(r => headers.map(h => csvEscape(r[h])).join(','))
+  const csv = `\ufeff${[headerLine, ...lines].join('\r\n')}\r\n`
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
 interface AvailableClassroom {
   classSessionId: string
   sectionId: string
@@ -43,6 +66,12 @@ interface OverallSummary {
   late: number
   absent: number
   total: number
+}
+
+function deriveYearLevelFromSectionCode(sectionCode: string) {
+  if (!sectionCode) return ''
+  const m = sectionCode.match(/\d/)
+  return m ? m[0] : ''
 }
 
 function formatTimeString(iso: string | null) {
@@ -210,7 +239,7 @@ export default function ProfessorReportsPage() {
           dayOfWeek: c.day_of_week || '',
           semester: c.sections?.semester || '',
           academicYear: c.sections?.academic_year || '',
-          yearLevel: '',
+          yearLevel: deriveYearLevelFromSectionCode(c.sections?.section_code || c.section_id),
         }))
         setAllClassrooms(classrooms)
       }
@@ -239,34 +268,49 @@ export default function ProfessorReportsPage() {
       if (!data.success) throw new Error(data.error)
       setExportPreview({ rows: data.rows, total: data.total })
       if (data.total === 0) return
-      const wsData: any[][] = [
-        ['Date', 'Section', 'Semester', 'Academic Year', 'Subject Code', 'Subject Name',
-         'Student No.', 'Last Name', 'First Name', 'Status', 'Time In', 'Confidence'],
-        ...data.rows.map((r: any) => [
-          r.date,
-          r.sectionCode,
-          r.semester,
-          r.academicYear,
-          r.subjectCode,
-          r.subjectName,
-          r.studentNumber,
-          r.lastName,
-          r.firstName,
-          r.status ? r.status.charAt(0).toUpperCase() + r.status.slice(1) : '',
-          r.checkedInAt
-            ? new Date(r.checkedInAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-            : '—',
-          r.faceMatchConfidence != null ? `${(r.faceMatchConfidence * 100).toFixed(1)}%` : '—',
-        ]),
-      ]
-      const wb = XLSX.utils.book_new()
-      const ws = XLSX.utils.aoa_to_sheet(wsData)
-      ws['!cols'] = [12, 14, 12, 14, 14, 20, 14, 18, 18, 10, 12, 12].map(w => ({ wch: w }))
-      XLSX.utils.book_append_sheet(wb, ws, 'Attendance')
       const label = exportSectionIds.length === 1
         ? (exportFilteredSections.find(s => s.id === exportSectionIds[0])?.sectionCode ?? 'export')
         : `${exportSectionIds.length}_sections`
-      XLSX.writeFile(wb, `Attendance_${label}_${exportDateFrom}_to_${exportDateTo}.xlsx`)
+
+      const headers = [
+        'Date',
+        'Section',
+        'Year Level',
+        'Semester',
+        'Academic Year',
+        'Subject Code',
+        'Subject Name',
+        'Student No.',
+        'Last Name',
+        'First Name',
+        'Status',
+        'Time In',
+        'Confidence',
+      ]
+
+      const rows = (data.rows || []).map((r: any) => ({
+        'Date': r.date,
+        'Section': r.sectionCode,
+        'Year Level': r.yearLevel ? `${r.yearLevel}` : '',
+        'Semester': r.semester,
+        'Academic Year': r.academicYear,
+        'Subject Code': r.subjectCode,
+        'Subject Name': r.subjectName,
+        'Student No.': r.studentNumber,
+        'Last Name': r.lastName,
+        'First Name': r.firstName,
+        'Status': r.status ? r.status.charAt(0).toUpperCase() + r.status.slice(1) : '',
+        'Time In': r.checkedInAt
+          ? new Date(r.checkedInAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+          : '—',
+        'Confidence': r.faceMatchConfidence != null ? `${(r.faceMatchConfidence * 100).toFixed(1)}%` : '—',
+      }))
+
+      downloadCsv(
+        `Attendance_${label}_${exportDateFrom}_to_${exportDateTo}.csv`,
+        headers,
+        rows,
+      )
     } catch (err: any) {
       console.error('Export error:', err)
     } finally {
@@ -1039,7 +1083,7 @@ export default function ProfessorReportsPage() {
                   ) : (
                     <FileDown className="w-4 h-4" />
                   )}
-                  {exportLoading ? 'Exporting…' : 'Fetch & Export Excel'}
+                  {exportLoading ? 'Exporting…' : 'Fetch & Export CSV'}
                 </button>
                 {exportSectionIds.length === 0 && (
                   <p className="text-xs text-amber-600">Select at least one section to export.</p>

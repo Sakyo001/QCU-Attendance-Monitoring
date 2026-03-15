@@ -1,6 +1,19 @@
 import { createServiceRoleClient } from '@/utils/supabase/service-role'
 import { NextRequest, NextResponse } from 'next/server'
 
+async function readScheduleId(request: NextRequest): Promise<string | null> {
+  const idFromQuery = request.nextUrl.searchParams.get('id')
+  if (idFromQuery) return idFromQuery
+
+  try {
+    const body = await request.json()
+    const idFromBody = body?.id
+    return typeof idFromBody === 'string' && idFromBody.trim() ? idFromBody : null
+  } catch {
+    return null
+  }
+}
+
 export async function GET(request: NextRequest) {
   try {
     const supabase = createServiceRoleClient()
@@ -88,6 +101,45 @@ export async function GET(request: NextRequest) {
     })
   } catch (error) {
     console.error('API Error:', error)
+    return NextResponse.json(
+      { error: 'Internal server error', details: String(error) },
+      { status: 500 }
+    )
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const supabase = createServiceRoleClient()
+    const id = await readScheduleId(request)
+
+    if (!id) {
+      return NextResponse.json({ error: 'Missing schedule id' }, { status: 400 })
+    }
+
+    const { data, error } = await supabase
+      .from('class_sessions')
+      .delete()
+      .eq('id', id)
+      .select('id')
+
+    if (error) {
+      // Common case: FK constraint prevents delete if there are dependent rows.
+      const status = error.code === '23503' ? 409 : 500
+      return NextResponse.json(
+        { error: 'Failed to delete schedule', details: error },
+        { status }
+      )
+    }
+
+    if (!data || data.length === 0) {
+      return NextResponse.json({ error: 'Schedule not found' }, { status: 404 })
+    }
+
+    const deletedId = (data as any[])?.[0]?.id ?? id
+    return NextResponse.json({ ok: true, deletedId })
+  } catch (error) {
+    console.error('API Error (DELETE /api/admin/schedules):', error)
     return NextResponse.json(
       { error: 'Internal server error', details: String(error) },
       { status: 500 }

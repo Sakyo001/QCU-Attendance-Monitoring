@@ -87,7 +87,7 @@ export async function GET(request: NextRequest) {
 
     // Get attendance stats for each classmate
     const classmatesWithStats = await Promise.all(
-      classmates.map(async (classmate) => {
+      classmates.map(async (classmate: any) => {
         const { data: attendanceRecords } = await supabase
           .from('attendance_records')
           .select('status')
@@ -95,7 +95,7 @@ export async function GET(request: NextRequest) {
           .eq('section_id', sectionId)
 
         const totalDays = attendanceRecords?.length || 0
-        const presentDays = attendanceRecords?.filter(r => r.status === 'present').length || 0
+        const presentDays = attendanceRecords?.filter((r: any) => r.status === 'present').length || 0
         const attendanceRate = totalDays > 0 ? Math.round((presentDays / totalDays) * 100) : 0
 
         return {

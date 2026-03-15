@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { Suspense, useEffect, useState, useCallback, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Image from 'next/image'
 import { Megaphone, Lightbulb } from 'lucide-react'
@@ -30,7 +30,7 @@ const TRIVIA_ITEMS = [
   { question: 'Study Hack', answer: 'The Pomodoro Technique - 25 minutes of focused study followed by a 5-minute break - can boost productivity by up to 25%.' },
 ]
 
-export default function KioskIdlePage() {
+function KioskIdleInner() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const sectionId = searchParams.get('sectionId') || ''
@@ -184,5 +184,13 @@ export default function KioskIdlePage() {
         <p className="text-gray-400 text-xs animate-pulse">Tap anywhere to return to attendance</p>
       </div>
     </div>
+  )
+}
+
+export default function KioskIdlePage() {
+  return (
+    <Suspense fallback={<div className="h-screen w-screen bg-gray-50" />}>
+      <KioskIdleInner />
+    </Suspense>
   )
 }

@@ -76,11 +76,14 @@ export async function POST(request: NextRequest) {
     for (const sectionPayload of sections) {
       try {
         // ── 1. Upsert Section ────────────────────────────────────────────────
-        // Check if section already exists by section_code
+        // Sections are global (not professor-scoped). Some deployments don't
+        // have `sections.professor_id`, so we key by section identity fields.
         const { data: existingSection } = await supabase
           .from('sections')
           .select('id')
           .eq('section_code', sectionPayload.sectionCode)
+          .eq('semester', sectionPayload.semester)
+          .eq('academic_year', sectionPayload.academicYear)
           .maybeSingle()
 
         let sectionId: string

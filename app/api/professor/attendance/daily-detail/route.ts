@@ -63,9 +63,9 @@ export async function GET(request: NextRequest) {
     })
 
     // Summary for this date
-    const present = students.filter(s => s.status === 'present').length
-    const late = students.filter(s => s.status === 'late').length
-    const absent = students.filter(s => s.status === 'absent').length
+    const present = students.filter((s: any) => s.status === 'present').length
+    const late = students.filter((s: any) => s.status === 'late').length
+    const absent = students.filter((s: any) => s.status === 'absent').length
 
     // Get section info
     const { data: sectionData } = await supabase

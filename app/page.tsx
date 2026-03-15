@@ -482,48 +482,50 @@ export default function Home() {
     const uiResults: Array<{ box: DetectedFace['box']; name: string; status: 'matched' | 'no-match' | 'already-marked' }> = []
 
     for (const face of result.faces) {
-      const confidentMatch =
+      if (
         face.matched &&
+        typeof face.studentId === 'string' &&
         !!face.studentId &&
         !face.spoofDetected &&
         (typeof face.confidence === 'number' && face.confidence >= MIN_MARK_CONFIDENCE)
+      ) {
+        const studentId = face.studentId
 
-      if (confidentMatch) {
-        if (markedStudentIdsRef.current.has(face.studentId)) {
+        if (markedStudentIdsRef.current.has(studentId)) {
           uiResults.push({ box: face.box, name: face.name, status: 'already-marked' })
         } else {
           uiResults.push({ box: face.box, name: face.name, status: 'matched' })
 
-          if (!markingStudentIdsRef.current.has(face.studentId)) {
-            markingStudentIdsRef.current.add(face.studentId)
+          if (!markingStudentIdsRef.current.has(studentId)) {
+            markingStudentIdsRef.current.add(studentId)
 
             fetch('/api/attendance/mark', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 sectionId: selectedSchedule.sectionId,
-                studentId: face.studentId,
+                studentId,
                 faceMatchConfidence: face.confidence,
                 scheduleId: selectedSchedule.id
               })
             }).then(async res => {
               const markData = await res.json()
               if (markData.alreadyMarked) {
-                markedStudentIdsRef.current.add(face.studentId!)
-                markingStudentIdsRef.current.delete(face.studentId!)
+                markedStudentIdsRef.current.add(studentId)
+                markingStudentIdsRef.current.delete(studentId)
               } else if (markData.locked) {
                 setAttendanceLocked(true)
                 setPhase('attendance-locked')
-                markingStudentIdsRef.current.delete(face.studentId!)
+                markingStudentIdsRef.current.delete(studentId)
               } else if (markData.success) {
-                markedStudentIdsRef.current.add(face.studentId!)
-                markingStudentIdsRef.current.delete(face.studentId!)
+                markedStudentIdsRef.current.add(studentId)
+                markingStudentIdsRef.current.delete(studentId)
                 const recStatus = markData.record?.status || 'present'
                 playSound(recStatus === 'late' ? 'late' : 'success')
                 refreshStudentList()
               }
             }).catch(() => {
-              markingStudentIdsRef.current.delete(face.studentId!)
+              markingStudentIdsRef.current.delete(studentId)
             })
           }
         }

@@ -27,8 +27,8 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Failed to fetch stats' }, { status: 400 })
     }
 
-    const present = records?.filter(r => r.status === 'present').length || 0
-    const late = records?.filter(r => r.status === 'late').length || 0
+    const present = (((records as any[]) || []).filter((r: any) => r.status === 'present').length) || 0
+    const late = (((records as any[]) || []).filter((r: any) => r.status === 'late').length) || 0
 
     // Get total registered students for this section
     const { count: totalStudents } = await supabase

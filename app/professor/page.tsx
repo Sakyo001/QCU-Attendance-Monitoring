@@ -21,11 +21,15 @@ interface ClassSession {
   section_id: string
   room: string
   max_capacity: number
+  subject_code?: string | null
+  subject_name?: string | null
   day_of_week: string
   start_time: string
   end_time: string
   sections: Section
 }
+
+type ClassroomViewMode = 'folder' | 'file'
 
 export default function ProfessorDashboard() {
   const { user, loading, signOut } = useAuth()
@@ -42,6 +46,27 @@ export default function ProfessorDashboard() {
   const [selectedScheduleId, setSelectedScheduleId] = useState<string>('')
   const [showUploadModal, setShowUploadModal] = useState(false)
   const hasFetchedRef = useRef(false)
+  const [classroomViewMode, setClassroomViewMode] = useState<ClassroomViewMode>('folder')
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('professorDashboard:classroomView')
+      if (saved === 'folder' || saved === 'file') {
+        setClassroomViewMode(saved)
+      }
+    } catch {
+      // ignore
+    }
+  }, [])
+
+  const setAndPersistClassroomViewMode = (mode: ClassroomViewMode) => {
+    setClassroomViewMode(mode)
+    try {
+      localStorage.setItem('professorDashboard:classroomView', mode)
+    } catch {
+      // ignore
+    }
+  }
 
   useEffect(() => {
     // Authentication check
@@ -234,6 +259,30 @@ export default function ProfessorDashboard() {
         <div className="mt-8">
           <div className="flex items-center justify-between mb-6">
             <h2 className="text-xl font-semibold text-gray-800">My Classrooms</h2>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setAndPersistClassroomViewMode('folder')}
+                className={`px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors ${
+                  classroomViewMode === 'folder'
+                    ? 'bg-emerald-600 text-white border-emerald-600'
+                    : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                }`}
+              >
+                Folder view
+              </button>
+              <button
+                type="button"
+                onClick={() => setAndPersistClassroomViewMode('file')}
+                className={`px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors ${
+                  classroomViewMode === 'file'
+                    ? 'bg-emerald-600 text-white border-emerald-600'
+                    : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                }`}
+              >
+                File view
+              </button>
+            </div>
           </div>
           
           {classrooms.length === 0 ? (
@@ -241,6 +290,75 @@ export default function ProfessorDashboard() {
               <BookOpen className="w-12 h-12 text-gray-300 mx-auto mb-4" />
               <p className="text-gray-500 font-medium">No classrooms created yet</p>
               <p className="text-sm text-gray-400 mt-1">Create your first classroom to see it here</p>
+            </div>
+          ) : classroomViewMode === 'file' ? (
+            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr className="text-left text-gray-600">
+                      <th className="px-4 py-3 font-medium">Section</th>
+                      <th className="px-4 py-3 font-medium">Subject</th>
+                      <th className="px-4 py-3 font-medium">Day</th>
+                      <th className="px-4 py-3 font-medium">Time</th>
+                      <th className="px-4 py-3 font-medium">Room</th>
+                      <th className="px-4 py-3 font-medium">Capacity</th>
+                      <th className="px-4 py-3 font-medium">Status</th>
+                      <th className="px-4 py-3 font-medium text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {classrooms.map((classroom) => {
+                      const isToday = classroom.day_of_week === today
+                      const subjectLabel = classroom.subject_code || classroom.subject_name || ''
+                      return (
+                        <tr key={classroom.id} className="hover:bg-gray-50 transition-colors">
+                          <td className="px-4 py-3 text-gray-900 font-medium whitespace-nowrap">
+                            BSIT {classroom.sections.section_code}
+                          </td>
+                          <td className="px-4 py-3 text-gray-700">
+                            {subjectLabel ? (
+                              <span className="font-mono text-xs text-gray-600">{subjectLabel}</span>
+                            ) : (
+                              <span className="text-gray-400">—</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-gray-700 whitespace-nowrap">{classroom.day_of_week}</td>
+                          <td className="px-4 py-3 text-gray-700 whitespace-nowrap">
+                            {formatTime12h(classroom.start_time)} - {formatTime12h(classroom.end_time)}
+                          </td>
+                          <td className="px-4 py-3 text-gray-700 whitespace-nowrap">{classroom.room}</td>
+                          <td className="px-4 py-3 text-gray-700 whitespace-nowrap">{classroom.max_capacity}</td>
+                          <td className="px-4 py-3">
+                            {isToday ? (
+                              <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">
+                                Today
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-700">
+                                Scheduled
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-right whitespace-nowrap">
+                            <button
+                              onClick={() => handleStartSession(classroom.section_id, classroom.id)}
+                              className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+                                isToday
+                                  ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                                  : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 hover:border-gray-400'
+                              }`}
+                            >
+                              <Play className="w-4 h-4" />
+                              {isToday ? 'Start Class' : 'View Class'}
+                            </button>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -341,6 +459,7 @@ export default function ProfessorDashboard() {
       {showCreateModal && (
         <CreateClassroomModal
           sections={sections}
+          professorId={user.id}
           professorName={`${user?.firstName} ${user?.lastName}`}
           onClose={() => setShowCreateModal(false)}
           onSubmit={handleCreateClassroom}
@@ -373,13 +492,13 @@ export default function ProfessorDashboard() {
 
 interface CreateClassroomModalProps {
   sections: Section[]
+  professorId: string
   professorName: string
   onClose: () => void
   onSubmit: (data: any) => void
 }
 
-function CreateClassroomModal({ sections: initialSections, professorName, onClose, onSubmit }: CreateClassroomModalProps) {
-  const supabase = createClient()
+function CreateClassroomModal({ sections: initialSections, professorId, professorName, onClose, onSubmit }: CreateClassroomModalProps) {
   const [formData, setFormData] = useState({
     sectionId: '',
     subjectCode: '',
@@ -401,18 +520,16 @@ function CreateClassroomModal({ sections: initialSections, professorName, onClos
   const fetchSectionsForModal = async () => {
     setLoadingSections(true)
     try {
-      const { data, error } = await (supabase as any)
-        .from('sections')
-        .select('id, section_code, semester, academic_year, max_students')
-        .order('section_code')
+      const res = await fetch(`/api/professor/sections?professorId=${encodeURIComponent(professorId)}`)
+      const payload = await res.json()
 
-      if (error) {
-        console.error('Error fetching sections:', error)
+      if (!res.ok) {
+        console.error('Error fetching sections:', payload?.error || payload)
         setSections(initialSections)
         return
       }
 
-      setSections((data as any) || [])
+      setSections((payload?.sections as any) || [])
     } catch (err) {
       console.error('Exception fetching sections:', err)
       setSections(initialSections)

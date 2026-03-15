@@ -40,22 +40,22 @@ export async function GET(request: NextRequest) {
     }
 
     const sectionsMap = new Map(
-      sections?.map(s => [s.id, s.section_code]) || []
+      ((sections as any[]) || []).map((s: any) => [s.id, s.section_code])
     )
 
     // Get emails from users table
-    const studentNumbers = faceRegs.map(f => f.student_number)
+    const studentNumbers = ((faceRegs as any[]) || []).map((f: any) => f.student_number)
     const { data: usersData, error: usersError } = await supabase
       .from('users')
       .select('student_id, email')
       .in('student_id', studentNumbers)
 
     const emailMap = new Map(
-      usersData?.map(u => [u.student_id, u.email]) || []
+      ((usersData as any[]) || []).map((u: any) => [u.student_id, u.email])
     )
 
     // Combine all data
-    const studentsWithSections = faceRegs.map(reg => ({
+    const studentsWithSections = ((faceRegs as any[]) || []).map((reg: any) => ({
       id: reg.student_number,
       first_name: reg.first_name,
       last_name: reg.last_name,

@@ -52,12 +52,12 @@ export async function POST(request: NextRequest) {
     }
 
     const markedStudentNumbers = new Set(
-      (existingRecords || []).map(r => r.student_number)
+      (existingRecords || []).map((r: any) => r.student_number)
     )
 
     // Find students without attendance records
     const absentStudents = allStudents.filter(
-      s => !markedStudentNumbers.has(s.student_number)
+      (s: any) => !markedStudentNumbers.has(s.student_number)
     )
 
     if (absentStudents.length === 0) {
@@ -69,7 +69,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Insert absent records for all unscanned students
-    const absentRecords = absentStudents.map(student => ({
+    const absentRecords = absentStudents.map((student: any) => ({
       attendance_session_id: sessionId,
       student_registration_id: student.id,
       student_number: student.student_number,
@@ -94,7 +94,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       markedAbsent: absentStudents.length,
-      absentStudents: absentStudents.map(s => ({
+      absentStudents: absentStudents.map((s: any) => ({
         studentNumber: s.student_number,
         name: `${s.first_name} ${s.last_name}`
       }))

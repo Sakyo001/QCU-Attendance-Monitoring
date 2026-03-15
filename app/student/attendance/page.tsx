@@ -115,7 +115,13 @@ export default function StudentAttendancePage() {
     // Process results
     if (status === 'success' || status === 'error') return
 
-    if (!data.results || data.results.length === 0) {
+    const rawResults = data.results as any
+    const face: any =
+      (Array.isArray(rawResults) ? rawResults[0] : null) ??
+      (rawResults && Array.isArray(rawResults.faces) ? rawResults.faces[0] : null) ??
+      rawResults
+
+    if (!face || face.detected === false) {
       setFaceDetected(false)
       setAntiSpoofStatus('unknown')
       livenessFramesRef.current = 0
@@ -125,11 +131,9 @@ export default function StudentAttendancePage() {
       }
       return
     }
-
-    const face = data.results[0]
     setFaceDetected(true)
 
-    if (face.spoof_detected) {
+    if (face.spoofDetected ?? face.spoof_detected) {
       livenessFramesRef.current = 0
       setAntiSpoofStatus('spoof')
       setErrorMessage('⚠️ Spoof attempt detected. Please use your real face.')

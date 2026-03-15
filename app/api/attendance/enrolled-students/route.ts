@@ -44,13 +44,13 @@ export async function GET(request: NextRequest) {
     }
 
     // Map records by student number
-    const recordMap = new Map(
-      (records || []).map(r => [r.student_number, r])
+    const recordMap = new Map<string, any>(
+      ((records as any[]) || []).map((r: any) => [String(r.student_number), r])
     )
 
     // Build student list with status
-    const studentList = (students || []).map(s => {
-      const record = recordMap.get(s.student_number)
+    const studentList = (students || []).map((s: any) => {
+      const record = recordMap.get(String(s.student_number))
       return {
         id: s.id,
         studentNumber: s.student_number,
@@ -62,10 +62,10 @@ export async function GET(request: NextRequest) {
       }
     })
 
-    const present = studentList.filter(s => s.status === 'present').length
-    const late = studentList.filter(s => s.status === 'late').length
-    const absent = studentList.filter(s => s.status === 'absent').length
-    const pending = studentList.filter(s => s.status === 'pending').length
+    const present = studentList.filter((s: any) => s.status === 'present').length
+    const late = studentList.filter((s: any) => s.status === 'late').length
+    const absent = studentList.filter((s: any) => s.status === 'absent').length
+    const pending = studentList.filter((s: any) => s.status === 'pending').length
 
     return NextResponse.json({
       success: true,

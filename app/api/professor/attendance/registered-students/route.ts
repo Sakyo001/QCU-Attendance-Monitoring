@@ -31,7 +31,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Rename student_number to student_id for frontend consistency
-    const registeredStudents = (students || []).map(student => ({
+    const registeredStudents = (students || []).map((student: any) => ({
       ...student,
       student_id: student.student_number
     }))

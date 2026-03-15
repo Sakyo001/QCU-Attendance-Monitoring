@@ -68,7 +68,7 @@ export async function GET(request: NextRequest) {
 
     // Get section details for each record
     const recordsWithSection = await Promise.all(
-      records.map(async (record) => {
+      records.map(async (record: any) => {
         const { data: section } = await supabase
           .from('sections')
           .select('section_code, semester, academic_year')
@@ -88,7 +88,7 @@ export async function GET(request: NextRequest) {
 
     // Calculate stats
     const totalDays = records.length
-    const presentDays = records.filter(r => r.status === 'present').length
+    const presentDays = records.filter((r: any) => r.status === 'present').length
     const absentDays = totalDays - presentDays
     const attendanceRate = totalDays > 0 ? Math.round((presentDays / totalDays) * 100) : 0
 

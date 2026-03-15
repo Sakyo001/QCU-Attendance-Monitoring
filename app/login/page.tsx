@@ -254,9 +254,7 @@ export default function UnifiedLoginPage() {
                 setMatchStatus('not-found')
                 // Reset after 2 seconds
                 setTimeout(() => {
-                  if (matchStatus !== 'matched') {
-                    setMatchStatus('idle')
-                  }
+                  setMatchStatus((current) => (current === 'matched' ? current : 'idle'))
                 }, 2000)
               }
             } catch (err) {

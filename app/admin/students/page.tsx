@@ -58,7 +58,7 @@ export default function StudentsPage() {
       setLoadingStudents(true)
       
       // Get all sections first
-      const { data: allSections } = await supabase
+      const { data: allSections } = await (supabase as any)
         .from('sections')
         .select('id, section_code')
         .order('section_code')
@@ -66,7 +66,7 @@ export default function StudentsPage() {
       console.log('📚 Sections loaded:', allSections?.length || 0)
 
       const sectionsMap = new Map(
-        allSections?.map(s => [s.id, s.section_code]) || []
+        (allSections as any[])?.map((s: any) => [s.id, s.section_code]) || []
       )
 
       // Fetch students with sections from API (bypasses RLS)

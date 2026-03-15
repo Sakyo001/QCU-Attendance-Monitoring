@@ -2,7 +2,7 @@
 
 import { useAuth } from '@/contexts/AuthContext'
 import { useRouter } from 'next/navigation'
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { Camera, ArrowLeft } from 'lucide-react'
 import { checkFaceNetHealth, waitForModelReady, ServerCameraStream } from '@/lib/facenet-python-api'
 import type { CameraStreamFrame } from '@/lib/facenet-python-api'
@@ -296,8 +296,14 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
     // Only process results on frames that ran through the pipeline
     if (data.results === null || data.results === undefined) return
 
+    const rawResults = data.results as any
+    const face: any =
+      (Array.isArray(rawResults) ? rawResults[0] : null) ??
+      (rawResults && Array.isArray(rawResults.faces) ? rawResults.faces[0] : null) ??
+      rawResults
+
     // Process detection results
-    if (!data.results || data.results.length === 0) {
+    if (!face || face.detected === false) {
       // Face lost
       if (consecutiveFaceDetectionsRef.current > 0) {
         consecutiveFaceDetectionsRef.current -= 0.25
@@ -315,10 +321,8 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
       return
     }
 
-    const face = data.results[0]
-
     // Spoof check
-    if (face.spoof_detected || !face.embedding) {
+    if ((face.spoofDetected ?? face.spoof_detected) || !face.embedding) {
       consecutiveFaceDetectionsRef.current = 0
       faceStableStartRef.current = null
       setCaptureCountdown(0)
@@ -331,7 +335,21 @@ function FaceRegistrationModal({ studentId, studentName, onComplete }: FaceRegis
     savedFaceDescriptorRef.current = descriptor
 
     if (face.box) {
-      setBoundingBox(face.box)
+      const box = face.box as {
+        x?: number
+        y?: number
+        width?: number
+        height?: number
+        left?: number
+        top?: number
+        right?: number
+        bottom?: number
+      }
+      const x = box.x ?? box.left ?? 0
+      const y = box.y ?? box.top ?? 0
+      const width = box.width ?? Math.max(0, (box.right ?? 0) - x)
+      const height = box.height ?? Math.max(0, (box.bottom ?? 0) - y)
+      setBoundingBox({ x, y, width, height })
     }
 
     // Recognition

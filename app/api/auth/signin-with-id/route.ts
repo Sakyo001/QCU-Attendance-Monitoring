@@ -26,10 +26,10 @@ export async function POST(request: NextRequest) {
     console.log('API signInWithId: Query result:', { 
       found: !!dbUser, 
       dbUser: dbUser ? { 
-        id: dbUser.id, 
-        name: `${dbUser.first_name} ${dbUser.last_name}`, 
-        role: dbUser.role, 
-        is_active: dbUser.is_active 
+        id: (dbUser as any).id, 
+        name: `${(dbUser as any).first_name} ${(dbUser as any).last_name}`, 
+        role: (dbUser as any).role, 
+        is_active: (dbUser as any).is_active 
       } : null,
       error 
     })
@@ -50,7 +50,9 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    if (!dbUser.is_active) {
+    const user = dbUser as any
+
+    if (!user.is_active) {
       console.warn('API signInWithId: User is inactive')
       return NextResponse.json(
         { error: 'Account is inactive' },
@@ -61,14 +63,14 @@ export async function POST(request: NextRequest) {
     // Return user data
     return NextResponse.json({
       user: {
-        id: dbUser.id,
-        email: dbUser.email,
-        role: dbUser.role,
-        firstName: dbUser.first_name,
-        lastName: dbUser.last_name,
-        studentId: dbUser.student_id,
-        employeeId: dbUser.employee_id,
-        isActive: dbUser.is_active
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        firstName: user.first_name,
+        lastName: user.last_name,
+        studentId: user.student_id,
+        employeeId: user.employee_id,
+        isActive: user.is_active
       }
     })
 

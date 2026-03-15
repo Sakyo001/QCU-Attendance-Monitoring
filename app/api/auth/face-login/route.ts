@@ -97,8 +97,8 @@ export async function POST(request: NextRequest) {
     const threshold = 0.7 // 70% match required
 
     // Compare with professors
-    if (professors && professors.length > 0) {
-      for (const prof of professors) {
+    if (professors && (professors as any[]).length > 0) {
+      for (const prof of ((professors as any[]) || [])) {
         if (!prof.face_descriptor) {
           continue
         }
@@ -137,8 +137,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Compare with students
-    if (students && students.length > 0) {
-      for (const student of students) {
+    if (students && (students as any[]).length > 0) {
+      for (const student of ((students as any[]) || [])) {
         if (!student.face_descriptor) {
           continue
         }
