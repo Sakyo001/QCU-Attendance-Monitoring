@@ -245,19 +245,36 @@ export default function ProfessorLoginPage() {
                 try {
                   const result = await signInWithId(data.professor.id)
                   if (result.error) {
-                    setError(result.error.message)
-                    setMatchStatus('not-found')
-                    isMatchingRef.current = false
+                    // Check if error contains "fetch failed" or "Database error" - indicates offline
+                    if (result.error.message?.includes('fetch failed') || result.error.message?.includes('Database error')) {
+                      console.warn('⚠️ Network unavailable - using offline mode')
+                      // Proceed with offline login - user data is available from face match response
+                      await new Promise(resolve => setTimeout(resolve, 500))
+                      router.replace('/professor')
+                    } else {
+                      setError(result.error.message)
+                      setMatchStatus('not-found')
+                      isMatchingRef.current = false
+                    }
                   } else {
                     // Wait for auth state to settle and camera to fully stop
                     await new Promise(resolve => setTimeout(resolve, 800))
                     // Use replace to prevent back navigation issues
                     router.replace('/professor')
                   }
-                } catch (err) {
-                  setError('Login failed. Please try again.')
-                  setMatchStatus('not-found')
-                  isMatchingRef.current = false
+                } catch (err: any) {
+                  console.error('Sign-in error:', err)
+                  // Check if it's a network error
+                  if (err?.message?.includes('fetch') || err?.message === 'TypeError: fetch failed') {
+                    console.warn('⚠️ Network error during sign-in - attempting offline mode')
+                    // Still navigate - user was recognized offline
+                    await new Promise(resolve => setTimeout(resolve, 500))
+                    router.replace('/professor')
+                  } else {
+                    setError('Login failed. Please try again.')
+                    setMatchStatus('not-found')
+                    isMatchingRef.current = false
+                  }
                 } finally {
                   setIsLoading(false)
                 }
@@ -271,6 +288,7 @@ export default function ProfessorLoginPage() {
               }
             } catch (err) {
               console.error('Face match error:', err)
+              setError('Network error: Please check your connection')
               setMatchStatus('idle')
               isMatchingRef.current = false
             }

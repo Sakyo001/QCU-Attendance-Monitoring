@@ -101,17 +101,31 @@ export default function ProfessorDashboard() {
       const response = await fetch(`/api/professor/classrooms?professorId=${user.id}`)
       const data = await response.json()
 
+      console.log('API Response:', {
+        ok: response.ok,
+        status: response.status,
+        classroomsCount: data.classrooms?.length || 0,
+        usingOfflineCache: data.usingOfflineCache,
+        reason: data.reason
+      })
+
       if (!response.ok) {
         console.error('Error fetching classrooms:', data.error)
         setLoadingSections(false)
         return
       }
 
+      if (!data.classrooms || data.classrooms.length === 0) {
+        console.warn('⚠️ No classrooms returned from API')
+      }
+
       console.log('Classrooms data received:', data.classrooms?.length || 0, 'classrooms')
+      console.log('Data:', JSON.stringify(data.classrooms || [], null, 2))
       setClassrooms(data.classrooms || [])
 
     } catch (error: any) {
       console.error('Exception in fetchSections:', error)
+      setLoadingSections(false)
     } finally {
       setLoadingSections(false)
     }

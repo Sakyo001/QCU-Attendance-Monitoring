@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/utils/supabase/admin'
+import { getOfflineStudentsWithFaceDescriptors } from '@/app/api/_utils/offline-kiosk-cache'
 
 /**
  * Batch face matching — accepts multiple face embeddings from a single frame
@@ -39,24 +40,77 @@ export async function POST(request: NextRequest) {
 
     console.log(`🔍 Batch face matching: ${faces.length} face(s), section=${sectionId || 'ALL'}`)
 
-    // Fetch all registered students in this section
-    let query = supabase
-      .from('student_face_registrations')
-      .select('id, student_number, first_name, last_name, face_descriptor, is_active, section_id')
-      .eq('is_active', true)
+    // Try to fetch from Supabase first
+    let students: any[] = []
+    let usingOfflineCache = false
 
-    if (sectionId) {
-      query = query.eq('section_id', sectionId)
-    }
+    try {
+      // Fetch all registered students in this section
+      let query = supabase
+        .from('student_face_registrations')
+        .select('id, student_number, first_name, last_name, face_descriptor, is_active, section_id')
+        .eq('is_active', true)
 
-    const { data: students, error: fetchError } = await query
+      if (sectionId) {
+        query = query.eq('section_id', sectionId)
+      }
 
-    if (fetchError) {
-      console.error('❌ Error fetching student face data:', fetchError)
-      return NextResponse.json({
-        error: 'Failed to fetch student face data',
-        matches: []
-      }, { status: 400 })
+      const { data: supabaseStudents, error: fetchError } = await query
+
+      if (fetchError) {
+        throw fetchError
+      }
+
+      students = supabaseStudents || []
+      
+      if (students.length === 0) {
+        throw new Error('Supabase returned no students')
+      }
+
+      console.log('✅ Fetched', students.length, 'students from Supabase for face matching')
+    } catch (dbError) {
+      // Fallback to offline cache
+      console.warn('⚠️ Supabase unavailable, using offline student cache for face matching:', dbError)
+      usingOfflineCache = true
+
+      try {
+        const offlineStudents = await getOfflineStudentsWithFaceDescriptors(sectionId)
+        
+        if (offlineStudents.length === 0) {
+          return NextResponse.json({
+            error: 'No registered student faces found in offline cache',
+            matches: faces.map((f: any) => ({
+              faceIndex: f.index,
+              matched: false,
+              error: 'No registered faces available'
+            })),
+            usingOfflineCache: true
+          })
+        }
+
+        // Transform offline students to match Supabase format
+        students = offlineStudents.map((s) => ({
+          id: s.id,
+          student_number: s.studentNumber,
+          first_name: s.firstName,
+          last_name: s.lastName,
+          face_descriptor: s.faceDescriptor,
+          is_active: s.isActive,
+          section_id: s.sectionId
+        }))
+
+        console.log('📦 Loaded', students.length, 'students from offline cache for face matching')
+      } catch (cacheError) {
+        console.error('❌ Error loading offline cache:', cacheError)
+        return NextResponse.json({
+          error: 'No online or offline student data available',
+          matches: faces.map((f: any) => ({
+            faceIndex: f.index,
+            matched: false,
+            error: 'No student data available'
+          }))
+        })
+      }
     }
 
     if (!students || students.length === 0) {
@@ -66,7 +120,8 @@ export async function POST(request: NextRequest) {
           faceIndex: f.index,
           matched: false,
           error: 'No registered faces in section'
-        }))
+        })),
+        usingOfflineCache
       })
     }
 

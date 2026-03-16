@@ -6,6 +6,8 @@ import { createClient } from '@/utils/supabase/client'
 import { AuthUser, LoginCredentials, SignUpData, AuthContextType } from '@/types/auth.types'
 import { signInWithEmail, signUpWithEmail, signOut as authSignOut } from '@/lib/auth/auth-helpers.client'
 import { mapDbUserToAuthUser } from '@/lib/auth/utils'
+import { offlineSyncService } from '@/lib/offline-sync'
+import { OfflineSyncInitializer } from '@/components/OfflineSyncInitializer'
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
@@ -256,9 +258,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.log('AuthContext signInWithId: User logged in successfully', mappedUser)
       
       return { user: mappedUser, error: null }
-    } catch (error) {
+    } catch (error: any) {
       console.error('AuthContext signInWithId: Error', error)
       setLoading(false)
+      
+      // If it's a network error, return a special error that allows offline mode
+      if (error.message?.includes('fetch') || error.message === 'TypeError: fetch failed') {
+        console.warn('⚠️ Network unavailable during sign-in - offline mode may be available')
+        return { user: null, error: new Error('Network error: offline mode active') }
+      }
+      
       return { user: null, error: error as Error }
     }
   }
@@ -271,9 +280,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, loading, signIn, signInWithId, signOut, signUp, refreshUser }}>
-      {children}
-    </AuthContext.Provider>
+    <>
+      <OfflineSyncInitializer />
+      <AuthContext.Provider value={{ user, loading, signIn, signInWithId, signOut, signUp, refreshUser }}>
+        {children}
+      </AuthContext.Provider>
+    </>
   )
 }
 

@@ -96,6 +96,10 @@ export default function Home() {
   const [currentTime, setCurrentTime] = useState(new Date())
   const [soundEnabled, setSoundEnabled] = useState(true)
 
+  // --- Offline mode (for Supabase-backed APIs) ---
+  const [systemOffline, setSystemOffline] = useState(false)
+  const [queuedMarksCount, setQueuedMarksCount] = useState(0)
+
   // --- Professor scan UI ---
   const [professorScanStatus, setProfessorScanStatus] = useState<'idle' | 'scanning' | 'matched' | 'not-found'>('idle')
   const [faceDetected, setFaceDetected] = useState(false)
@@ -126,6 +130,21 @@ export default function Home() {
 
   // ============ Effects ============
 
+  // Track browser online/offline events (network availability)
+  useEffect(() => {
+    const update = () => {
+      // navigator.onLine is a best-effort signal; we also flip to offline on fetch network errors.
+      setSystemOffline(!navigator.onLine)
+    }
+    update()
+    window.addEventListener('online', update)
+    window.addEventListener('offline', update)
+    return () => {
+      window.removeEventListener('online', update)
+      window.removeEventListener('offline', update)
+    }
+  }, [])
+
   // Clock
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000)
@@ -134,6 +153,275 @@ export default function Home() {
 
   // ============ Session Persistence (survives tab discard / page reload) ============
   const SESSION_KEY = 'kiosk-session-v1'
+
+  const MARK_QUEUE_KEY = 'kiosk-attendance-mark-queue-v1'
+  const rosterCacheKey = (sectionId: string) => `kiosk-roster-cache-v1:${sectionId}`
+  const encodingsCacheKey = (sectionId: string) => `kiosk-encodings-cache-v1:${sectionId}`
+  const localMarksCacheKey = (sectionId: string) => `kiosk-local-marks-v1:${sectionId}`
+
+  type AttendanceMarkQueueItem = {
+    id: string
+    sectionId: string
+    studentId: string
+    scheduleId?: string
+    faceMatchConfidence?: number
+    queuedAt: string
+  }
+
+  type LocalMarkedStudent = {
+    studentId: string
+    studentNumber: string
+    firstName: string
+    lastName: string
+    status: 'present' | 'late'
+    checkedInAt: string
+    confidence: number | null
+  }
+
+  const isLikelyNetworkError = (err: unknown) => {
+    // In browsers, fetch() network failures typically surface as TypeError.
+    return err instanceof TypeError
+  }
+
+  const loadQueue = (): AttendanceMarkQueueItem[] => {
+    try {
+      const raw = localStorage.getItem(MARK_QUEUE_KEY)
+      if (!raw) return []
+      const parsed = JSON.parse(raw)
+      if (!Array.isArray(parsed)) return []
+      return parsed as AttendanceMarkQueueItem[]
+    } catch {
+      return []
+    }
+  }
+
+  const saveQueue = (items: AttendanceMarkQueueItem[]) => {
+    try {
+      localStorage.setItem(MARK_QUEUE_KEY, JSON.stringify(items))
+      setQueuedMarksCount(items.length)
+    } catch {
+      // If storage is full or blocked, we still want the UI to behave gracefully.
+      setQueuedMarksCount(items.length)
+    }
+  }
+
+  const loadLocalMarks = (sectionId: string): Record<string, LocalMarkedStudent> => {
+    try {
+      const raw = sessionStorage.getItem(localMarksCacheKey(sectionId))
+      if (!raw) return {}
+      const parsed = JSON.parse(raw)
+      if (!parsed || typeof parsed !== 'object') return {}
+      return parsed as Record<string, LocalMarkedStudent>
+    } catch {
+      return {}
+    }
+  }
+
+  const saveLocalMarks = (sectionId: string, marks: Record<string, LocalMarkedStudent>) => {
+    try {
+      sessionStorage.setItem(localMarksCacheKey(sectionId), JSON.stringify(marks))
+    } catch {
+      // Ignore storage failures; state will still reflect local marks.
+    }
+  }
+
+  const upsertLocalMark = (sectionId: string, mark: LocalMarkedStudent) => {
+    const marks = loadLocalMarks(sectionId)
+    marks[mark.studentId] = mark
+    saveLocalMarks(sectionId, marks)
+  }
+
+  const applyLocalMarksToRoster = (sectionId: string, students: EnrolledStudent[]): EnrolledStudent[] => {
+    const marks = loadLocalMarks(sectionId)
+    const markValues = Object.values(marks)
+    if (markValues.length === 0) return students
+
+    const existingIds = new Set(students.map((s) => s.id))
+    const merged = students.map((s) => {
+      const mark = marks[s.id]
+      if (!mark) return s
+      return {
+        ...s,
+        studentNumber: s.studentNumber || mark.studentNumber,
+        status: mark.status,
+        checkedInAt: mark.checkedInAt,
+        confidence: mark.confidence,
+      }
+    })
+
+    for (const mark of markValues) {
+      if (!existingIds.has(mark.studentId)) {
+        merged.unshift({
+          id: mark.studentId,
+          studentNumber: mark.studentNumber,
+          firstName: mark.firstName,
+          lastName: mark.lastName,
+          status: mark.status,
+          checkedInAt: mark.checkedInAt,
+          confidence: mark.confidence,
+        })
+      }
+    }
+
+    return merged
+  }
+
+  const computeLocalAttendanceStatus = (schedule: ScheduleInfo): { status: 'present' | 'late'; locked: boolean } => {
+    const { startTime, dayOfWeek } = schedule
+    if (!startTime || !dayOfWeek) return { status: 'present', locked: false }
+    const now = new Date()
+    const today = now.toLocaleDateString('en-US', { weekday: 'long' })
+    if (today !== dayOfWeek) return { status: 'present', locked: false }
+
+    const [hours, minutes] = startTime.split(':').map(Number)
+    const classStart = new Date(now)
+    classStart.setHours(hours, minutes, 0, 0)
+
+    const diffMinutes = (now.getTime() - classStart.getTime()) / (1000 * 60)
+    const GRACE_PERIOD = 20
+    const LOCK_THRESHOLD = 30
+
+    if (diffMinutes < 0) return { status: 'present', locked: false }
+    if (diffMinutes <= GRACE_PERIOD) return { status: 'present', locked: false }
+    if (diffMinutes <= LOCK_THRESHOLD) return { status: 'late', locked: false }
+    return { status: 'late', locked: true }
+  }
+
+  const splitDisplayName = (fullName: string) => {
+    const parts = fullName.trim().split(/\s+/).filter(Boolean)
+    if (parts.length === 0) return { firstName: 'Unknown', lastName: 'Student' }
+    if (parts.length === 1) return { firstName: parts[0], lastName: '' }
+    return {
+      firstName: parts.slice(0, -1).join(' '),
+      lastName: parts[parts.length - 1],
+    }
+  }
+
+  const buildOfflineRosterFromEncodings = (students: any[]): EnrolledStudent[] => {
+    return students.map((s: any) => {
+      const { firstName, lastName } = splitDisplayName(String(s.name || '').trim())
+      return {
+        id: String(s.id),
+        studentNumber: String(s.student_number || ''),
+        firstName,
+        lastName,
+        status: 'pending',
+        checkedInAt: null,
+        confidence: null,
+      }
+    })
+  }
+
+  const computeStatsFromStudents = (students: EnrolledStudent[]) => {
+    const present = students.filter(s => s.status === 'present').length
+    const late = students.filter(s => s.status === 'late').length
+    const absent = students.filter(s => s.status === 'absent').length
+    const pending = students.filter(s => s.status === 'pending').length
+    return { present, late, absent, pending, total: students.length }
+  }
+
+  const queueAttendanceMark = (payload: Omit<AttendanceMarkQueueItem, 'id' | 'queuedAt'>) => {
+    const items = loadQueue()
+    // Avoid duplicates per day/section/student as best-effort
+    const today = new Date().toISOString().split('T')[0]
+    const exists = items.some(i => i.sectionId === payload.sectionId && i.studentId === payload.studentId && i.queuedAt.startsWith(today))
+    if (exists) {
+      setQueuedMarksCount(items.length)
+      return
+    }
+    const next: AttendanceMarkQueueItem = {
+      id: `${payload.sectionId}:${payload.studentId}:${Date.now()}`,
+      ...payload,
+      queuedAt: new Date().toISOString(),
+    }
+    items.push(next)
+    saveQueue(items)
+  }
+
+  const flushAttendanceQueue = async () => {
+    if (!navigator.onLine) {
+      setSystemOffline(true)
+      return
+    }
+
+    const items = loadQueue()
+    if (items.length === 0) {
+      setQueuedMarksCount(0)
+      return
+    }
+
+    // Process sequentially to avoid flooding and to preserve ordering.
+    const remaining: AttendanceMarkQueueItem[] = []
+    for (const item of items) {
+      try {
+        const res = await fetch('/api/attendance/mark', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sectionId: item.sectionId,
+            studentId: item.studentId,
+            faceMatchConfidence: item.faceMatchConfidence,
+            scheduleId: item.scheduleId,
+          }),
+        })
+
+        const data = await res.json().catch(() => ({} as any))
+
+        // If we got a response at all, the system is reachable.
+        setSystemOffline(false)
+
+        if (data?.locked) {
+          // Locked sessions won't accept marks; drop the item to avoid retry loops.
+          continue
+        }
+
+        if (data?.success || data?.alreadyMarked) {
+          continue
+        }
+
+        // Unexpected response: keep it for retry.
+        remaining.push(item)
+      } catch (err) {
+        if (isLikelyNetworkError(err)) {
+          setSystemOffline(true)
+        }
+        remaining.push(item)
+      }
+    }
+
+    saveQueue(remaining)
+    setQueuedMarksCount(remaining.length)
+    
+    // Refresh student list to show newly marked students from server
+    if (remaining.length < items.length) {
+      // Some items were successfully flushed, refresh the roster after a brief delay
+      // to ensure the server has fully processed and indexed the new marks
+      setTimeout(() => refreshStudentList(), 500)
+    }
+  }
+
+  const saveEncodingsCache = (sectionId: string, students: any[]) => {
+    try {
+      localStorage.setItem(
+        encodingsCacheKey(sectionId),
+        JSON.stringify({ students, savedAt: Date.now() })
+      )
+    } catch {
+      // Ignore quota / storage failures
+    }
+  }
+
+  const loadEncodingsCache = (sectionId: string): any[] | null => {
+    try {
+      const raw = localStorage.getItem(encodingsCacheKey(sectionId))
+      if (!raw) return null
+      const parsed = JSON.parse(raw) as { students?: any[] }
+      if (!parsed?.students || !Array.isArray(parsed.students)) return null
+      return parsed.students
+    } catch {
+      return null
+    }
+  }
 
   // Restore persisted session on mount
   useEffect(() => {
@@ -165,12 +453,64 @@ export default function Home() {
           .then(r => r.json())
           .then(data => {
             if (data.success && data.students?.length > 0) {
+              saveEncodingsCache(saved.selectedSchedule.sectionId, data.students)
               loadSessionEncodings(saved.selectedSchedule.sectionId, data.students).catch(() => {})
             }
           })
-          .catch(() => {})
+          .catch(() => {
+            // Offline-safe: keep running with whatever is already in memory.
+            setSystemOffline(!navigator.onLine)
+
+            // Try cached encodings so recognition still works offline.
+            const cached = loadEncodingsCache(saved.selectedSchedule.sectionId)
+            if (cached && cached.length > 0) {
+              loadSessionEncodings(saved.selectedSchedule.sectionId, cached).catch(() => {})
+              const offlineRoster = buildOfflineRosterFromEncodings(cached)
+              setEnrolledStudents(offlineRoster)
+              setStats(computeStatsFromStudents(offlineRoster))
+            }
+          })
       }
     } catch {}
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Initialize queued marks count
+  useEffect(() => {
+    setQueuedMarksCount(loadQueue().length)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Auto-flush queued marks when we regain connectivity during an active session
+  useEffect(() => {
+    if (systemOffline) return
+    if (!selectedSchedule) return
+
+    const interval = setInterval(() => {
+      if (!navigator.onLine) {
+        setSystemOffline(true)
+        return
+      }
+      if (loadQueue().length > 0) {
+        flushAttendanceQueue()
+          .then(() => refreshStudentList())
+          .catch(() => {})
+      }
+    }, 5000)
+
+    return () => clearInterval(interval)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [systemOffline, selectedSchedule])
+
+  // Flush immediately when browser reports we're back online
+  useEffect(() => {
+    const onOnline = () => {
+      flushAttendanceQueue()
+        .then(() => refreshStudentList())
+        .catch(() => {})
+    }
+    window.addEventListener('online', onOnline)
+    return () => window.removeEventListener('online', onOnline)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -414,6 +754,7 @@ export default function Home() {
       const matchData = await res.json()
 
       if (matchData.matched && matchData.professor) {
+        setSystemOffline(false)
         setProfessorScanStatus('matched')
         const prof: ProfessorInfo = {
           id: matchData.professor.id,
@@ -430,6 +771,7 @@ export default function Home() {
         const schedData = await schedRes.json()
 
         if (schedData.success && schedData.schedules.length > 0) {
+          setSystemOffline(false)
           setSchedules(schedData.schedules)
           if (schedData.schedules.length === 1) {
             selectSchedule(schedData.schedules[0])
@@ -447,6 +789,7 @@ export default function Home() {
       }
     } catch (err) {
       console.error('Professor match error:', err)
+      if (isLikelyNetworkError(err)) setSystemOffline(true)
       setProfessorScanStatus('idle')
       isMatchingRef.current = false
     }
@@ -493,6 +836,33 @@ export default function Home() {
 
         if (markedStudentIdsRef.current.has(studentId)) {
           uiResults.push({ box: face.box, name: face.name, status: 'already-marked' })
+
+          // Keep the original marked status. Do NOT recompute on re-scan,
+          // otherwise a previously 'present' student can flip to 'late'.
+          setEnrolledStudents(prev => {
+            const index = prev.findIndex(s => s.id === studentId)
+            let next: EnrolledStudent[]
+
+            if (index >= 0) {
+              next = prev
+            } else {
+              const { firstName, lastName } = splitDisplayName(face.name || 'Unknown Student')
+              next = [
+                {
+                  id: studentId,
+                  studentNumber: face.studentNumber || '',
+                  firstName,
+                  lastName,
+                  status: 'present',
+                  checkedInAt: null,
+                  confidence: face.confidence ?? null,
+                },
+                ...prev,
+              ]
+            }
+            setStats(computeStatsFromStudents(next))
+            return next
+          })
         } else {
           uiResults.push({ box: face.box, name: face.name, status: 'matched' })
 
@@ -511,20 +881,131 @@ export default function Home() {
             }).then(async res => {
               const markData = await res.json()
               if (markData.alreadyMarked) {
+                setSystemOffline(false)
                 markedStudentIdsRef.current.add(studentId)
+                const recStatus = markData.record?.status === 'late' ? 'late' : 'present'
+                const nowIso = markData.record?.checked_in_at || new Date().toISOString()
+                const { firstName, lastName } = splitDisplayName(face.name || 'Unknown Student')
+                upsertLocalMark(selectedSchedule.sectionId, {
+                  studentId,
+                  studentNumber: face.studentNumber || '',
+                  firstName,
+                  lastName,
+                  status: recStatus,
+                  checkedInAt: nowIso,
+                  confidence: face.confidence ?? null,
+                })
+                setEnrolledStudents(prev => {
+                  const index = prev.findIndex(s => s.id === studentId)
+                  let next: EnrolledStudent[]
+                  if (index >= 0) {
+                    next = prev.map((s, i) => (
+                      i === index
+                        ? { ...s, status: recStatus, checkedInAt: nowIso, confidence: face.confidence ?? null }
+                        : s
+                    ))
+                  } else {
+                    next = [
+                      {
+                        id: studentId,
+                        studentNumber: face.studentNumber || '',
+                        firstName,
+                        lastName,
+                        status: recStatus,
+                        checkedInAt: nowIso,
+                        confidence: face.confidence ?? null,
+                      },
+                      ...prev,
+                    ]
+                  }
+                  setStats(computeStatsFromStudents(next))
+                  return next
+                })
                 markingStudentIdsRef.current.delete(studentId)
               } else if (markData.locked) {
+                setSystemOffline(false)
                 setAttendanceLocked(true)
                 setPhase('attendance-locked')
                 markingStudentIdsRef.current.delete(studentId)
               } else if (markData.success) {
+                setSystemOffline(false)
                 markedStudentIdsRef.current.add(studentId)
                 markingStudentIdsRef.current.delete(studentId)
                 const recStatus = markData.record?.status || 'present'
+                const nowIso = markData.record?.checked_in_at || new Date().toISOString()
+                const { firstName, lastName } = splitDisplayName(face.name || 'Unknown Student')
+                upsertLocalMark(selectedSchedule.sectionId, {
+                  studentId,
+                  studentNumber: face.studentNumber || '',
+                  firstName,
+                  lastName,
+                  status: recStatus === 'late' ? 'late' : 'present',
+                  checkedInAt: nowIso,
+                  confidence: face.confidence ?? null,
+                })
                 playSound(recStatus === 'late' ? 'late' : 'success')
                 refreshStudentList()
               }
             }).catch(() => {
+              // Offline-safe: queue the mark and update UI immediately.
+              setSystemOffline(true)
+
+              try {
+                queueAttendanceMark({
+                  sectionId: selectedSchedule.sectionId,
+                  studentId,
+                  faceMatchConfidence: face.confidence ?? undefined,
+                  scheduleId: selectedSchedule.id,
+                })
+              } catch {}
+
+              const { status, locked } = computeLocalAttendanceStatus(selectedSchedule)
+              if (locked) {
+                setAttendanceLocked(true)
+                setPhase('attendance-locked')
+              } else {
+                markedStudentIdsRef.current.add(studentId)
+                const nowIso = new Date().toISOString()
+                const { firstName, lastName } = splitDisplayName(face.name || 'Unknown Student')
+                upsertLocalMark(selectedSchedule.sectionId, {
+                  studentId,
+                  studentNumber: face.studentNumber || '',
+                  firstName,
+                  lastName,
+                  status,
+                  checkedInAt: nowIso,
+                  confidence: face.confidence ?? null,
+                })
+                setEnrolledStudents(prev => {
+                  const index = prev.findIndex(s => s.id === studentId)
+                  let next: EnrolledStudent[]
+
+                  if (index >= 0) {
+                    next = prev.map((s, i) => (
+                      i === index
+                        ? { ...s, status, checkedInAt: nowIso, confidence: face.confidence ?? null }
+                        : s
+                    ))
+                  } else {
+                    next = [
+                      {
+                        id: studentId,
+                        studentNumber: face.studentNumber || '',
+                        firstName,
+                        lastName,
+                        status,
+                        checkedInAt: nowIso,
+                        confidence: face.confidence ?? null,
+                      },
+                      ...prev,
+                    ]
+                  }
+
+                  setStats(computeStatsFromStudents(next))
+                  return next
+                })
+                playSound(status === 'late' ? 'late' : 'success')
+              }
               markingStudentIdsRef.current.delete(studentId)
             })
           }
@@ -568,12 +1049,35 @@ export default function Home() {
       const res = await fetch(`/api/attendance/section-encodings?sectionId=${schedule.sectionId}`)
       const data = await res.json()
       if (data.success && data.students?.length > 0) {
+        setSystemOffline(false)
+        saveEncodingsCache(schedule.sectionId, data.students)
+        const preloadedRoster = buildOfflineRosterFromEncodings(data.students)
+        const mergedRoster = applyLocalMarksToRoster(schedule.sectionId, preloadedRoster)
+        setEnrolledStudents(mergedRoster)
+        setStats(computeStatsFromStudents(mergedRoster))
         await loadSessionEncodings(schedule.sectionId, data.students)
         console.log(`\u{1F4DA} Session loaded: ${data.students.length} students`)
       }
     } catch (err) {
       console.error('Failed to load session encodings:', err)
+      if (isLikelyNetworkError(err)) setSystemOffline(true)
+
+      // Offline: load cached encodings so recognition can continue.
+      const cached = loadEncodingsCache(schedule.sectionId)
+      if (cached && cached.length > 0) {
+        try {
+          const offlineRoster = buildOfflineRosterFromEncodings(cached)
+          const mergedRoster = applyLocalMarksToRoster(schedule.sectionId, offlineRoster)
+          setEnrolledStudents(mergedRoster)
+          setStats(computeStatsFromStudents(mergedRoster))
+          await loadSessionEncodings(schedule.sectionId, cached)
+          console.log(`\u{1F4DA} Session loaded from cache: ${cached.length} students`)
+        } catch {}
+      }
     }
+
+    // Best-effort: try to sync any queued marks immediately when starting.
+    flushAttendanceQueue().catch(() => {})
 
     setPhase('attendance-active')
   }, [])
@@ -594,12 +1098,37 @@ export default function Home() {
         )
         const data = await res.json()
         if (data.success) {
-          setEnrolledStudents(data.students)
-          setStats(data.stats)
+          setSystemOffline(false)
+          const mergedStudents = applyLocalMarksToRoster(selectedSchedule.sectionId, data.students)
+          const mergedStats = computeStatsFromStudents(mergedStudents)
+          setEnrolledStudents(mergedStudents)
+          setStats(mergedStats)
+          try {
+            sessionStorage.setItem(rosterCacheKey(selectedSchedule.sectionId), JSON.stringify({
+              students: mergedStudents,
+              stats: mergedStats,
+              savedAt: Date.now(),
+            }))
+          } catch {}
         }
       } catch (err) {
         if (err instanceof Error && err.name !== 'AbortError') {
           console.error('Failed to fetch students:', err)
+          if (isLikelyNetworkError(err)) {
+            setSystemOffline(true)
+            // Use cached roster if available
+            try {
+              const raw = sessionStorage.getItem(rosterCacheKey(selectedSchedule.sectionId))
+              if (raw) {
+                const cached = JSON.parse(raw) as { students: EnrolledStudent[]; stats: any }
+                if (cached?.students?.length) {
+                  const mergedStudents = applyLocalMarksToRoster(selectedSchedule.sectionId, cached.students)
+                  setEnrolledStudents(mergedStudents)
+                  setStats(computeStatsFromStudents(mergedStudents))
+                }
+              }
+            } catch {}
+          }
         }
       }
     }
@@ -665,10 +1194,22 @@ export default function Home() {
       const res = await fetch(`/api/attendance/enrolled-students?sectionId=${selectedSchedule.sectionId}`)
       const data = await res.json()
       if (data.success) {
-        setEnrolledStudents(data.students)
-        setStats(data.stats)
+        setSystemOffline(false)
+        const mergedStudents = applyLocalMarksToRoster(selectedSchedule.sectionId, data.students)
+        const mergedStats = computeStatsFromStudents(mergedStudents)
+        setEnrolledStudents(mergedStudents)
+        setStats(mergedStats)
+        try {
+          sessionStorage.setItem(rosterCacheKey(selectedSchedule.sectionId), JSON.stringify({
+            students: mergedStudents,
+            stats: mergedStats,
+            savedAt: Date.now(),
+          }))
+        } catch {}
       }
-    } catch {}
+    } catch (err) {
+      if (isLikelyNetworkError(err)) setSystemOffline(true)
+    }
   }
 
   const markRemainingAbsent = async () => {
@@ -684,11 +1225,22 @@ export default function Home() {
       setTimeout(refreshStudentList, 1000)
     } catch (err) {
       console.error('Error marking absences:', err)
+      if (isLikelyNetworkError(err)) setSystemOffline(true)
+
+      // Offline fallback: once locked, mark remaining pending students as absent locally.
+      setEnrolledStudents(prev => {
+        const next = prev.map(s => (s.status === 'pending' ? { ...s, status: 'absent' as const } : s))
+        setStats(computeStatsFromStudents(next))
+        return next
+      })
     }
   }
 
   const resetToScan = () => {
     try { sessionStorage.removeItem(SESSION_KEY) } catch {}
+    if (selectedSchedule?.sectionId) {
+      try { sessionStorage.removeItem(localMarksCacheKey(selectedSchedule.sectionId)) } catch {}
+    }
     clearSessionEncodings()
 
     setProfessor(null)
@@ -1102,9 +1654,20 @@ export default function Home() {
       </div>
 
       <div className="flex items-center gap-5">
-        <div className="flex items-center gap-1.5">
-          <span className={`w-1.5 h-1.5 rounded-full ${serverHealthy ? 'bg-emerald-500' : 'bg-red-400'}`} />
-          <span className="text-xs text-gray-400">{serverHealthy ? 'Online' : 'Offline'}</span>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5">
+            <span className={`w-1.5 h-1.5 rounded-full ${serverHealthy ? 'bg-emerald-500' : 'bg-red-400'}`} />
+            <span className="text-xs text-gray-400">{serverHealthy ? 'Online' : 'Offline'}</span>
+            <span className="text-[10px] text-gray-300">Face</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className={`w-1.5 h-1.5 rounded-full ${systemOffline ? 'bg-red-400' : 'bg-emerald-500'}`} />
+            <span className="text-xs text-gray-400">{systemOffline ? 'Offline' : 'Online'}</span>
+            <span className="text-[10px] text-gray-300">System</span>
+            {queuedMarksCount > 0 && (
+              <span className="text-[10px] text-amber-500 font-medium">({queuedMarksCount} queued)</span>
+            )}
+          </div>
         </div>
         <button onClick={() => setSoundEnabled(!soundEnabled)} className="text-gray-400 hover:text-gray-600 transition">
           {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
@@ -1321,6 +1884,16 @@ export default function Home() {
           <div className="flex items-center gap-1.5">
             <span className={`w-1.5 h-1.5 rounded-full ${serverHealthy ? 'bg-emerald-500' : 'bg-red-400'}`} />
             <span className="text-xs text-gray-400">{serverHealthy ? 'Online' : 'Offline'}</span>
+            <span className="text-[10px] text-gray-300">Face</span>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <span className={`w-1.5 h-1.5 rounded-full ${systemOffline ? 'bg-red-400' : 'bg-emerald-500'}`} />
+            <span className="text-xs text-gray-400">{systemOffline ? 'Offline' : 'Online'}</span>
+            <span className="text-[10px] text-gray-300">System</span>
+            {queuedMarksCount > 0 && (
+              <span className="text-[10px] text-amber-500 font-medium">({queuedMarksCount} queued)</span>
+            )}
           </div>
 
           <button onClick={() => setSoundEnabled(!soundEnabled)} className="text-gray-400 hover:text-gray-600 transition">

@@ -4,6 +4,7 @@ import { writeFile, mkdir, readdir } from 'fs/promises'
 import { join } from 'path'
 import { existsSync } from 'fs'
 import { createClient } from '@supabase/supabase-js'
+import { upsertOfflineProfessor } from '@/app/api/_utils/offline-kiosk-cache'
 
 export async function POST(request: NextRequest) {
   try {
@@ -131,6 +132,21 @@ export async function POST(request: NextRequest) {
         )
       }
 
+      try {
+        await upsertOfflineProfessor({
+          id: professorId,
+          firstName,
+          lastName,
+          email: undefined,
+          role: 'professor',
+          employeeId: undefined,
+          faceDescriptor: faceDescriptor.map((v: any) => Number(v)),
+          isActive: true,
+        })
+      } catch (cacheError) {
+        console.warn('⚠️ Failed to write offline professor cache:', cacheError)
+      }
+
       return NextResponse.json({
         success: true,
         message: 'Facial registration updated successfully',
@@ -158,6 +174,21 @@ export async function POST(request: NextRequest) {
           { error: 'Failed to register facial recognition: ' + error.message },
           { status: 500 }
         )
+      }
+
+      try {
+        await upsertOfflineProfessor({
+          id: professorId,
+          firstName,
+          lastName,
+          email: undefined,
+          role: 'professor',
+          employeeId: undefined,
+          faceDescriptor: faceDescriptor.map((v: any) => Number(v)),
+          isActive: true,
+        })
+      } catch (cacheError) {
+        console.warn('⚠️ Failed to write offline professor cache:', cacheError)
       }
 
       return NextResponse.json({

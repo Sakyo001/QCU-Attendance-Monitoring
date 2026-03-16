@@ -4,6 +4,7 @@ import { join } from 'path'
 import { existsSync } from 'fs'
 import { getSupabaseAdmin } from '@/utils/supabase/admin'
 import bcrypt from 'bcryptjs'
+import { upsertOfflineStudents } from '@/app/api/_utils/offline-kiosk-cache'
 
 export async function POST(request: NextRequest) {
   try {
@@ -213,6 +214,26 @@ export async function POST(request: NextRequest) {
       }
     } catch (faceError) {
       console.error('❌ Face registration try-catch error:', faceError)
+    }
+
+    // Persist to local project cache for kiosk offline recognition.
+    try {
+      await upsertOfflineStudents([
+        {
+          id: String(userId),
+          studentNumber: String(studentId),
+          firstName: String(firstName),
+          lastName: String(lastName),
+          sectionId: sectionId ? String(sectionId) : undefined,
+          faceDescriptor: (Array.isArray(faceDescriptor)
+            ? faceDescriptor
+            : Array.from(faceDescriptor as number[])
+          ).map((value: any) => Number(value)),
+          isActive: true,
+        }
+      ])
+    } catch (cacheError) {
+      console.warn('⚠️ Failed to write offline student cache:', cacheError)
     }
 
     return NextResponse.json({

@@ -216,13 +216,31 @@ export default function UnifiedLoginPage() {
                   const result = await signInWithId(data.user.id)
                   
                   if (result.error) {
-                    setError(`Authentication failed: ${result.error.message}`)
-                    setMatchStatus('not-found')
-                    setIsLoading(false)
-                    return
-                  }
-
-                  if (result.user) {
+                    // Check if it's a network error - allow offline mode
+                    if (result.error.message?.includes('fetch failed') || result.error.message?.includes('offline mode')) {
+                      console.warn('⚠️ Network unavailable - using offline mode')
+                      // Proceed with offline login
+                      const dashboardPath = 
+                        data.user.role === 'admin' ? '/admin' :
+                        data.user.role === 'professor' ? '/professor' :
+                        data.user.role === 'student' ? '/student' :
+                        '/'
+                      
+                      // Stop camera before redirect
+                      stopCamera()
+                      
+                      // Small delay to ensure state is updated and camera is stopped
+                      await new Promise(resolve => setTimeout(resolve, 500))
+                      
+                      // Use replace instead of push to prevent back navigation issues
+                      router.replace(dashboardPath)
+                    } else {
+                      setError(`Authentication failed: ${result.error.message}`)
+                      setMatchStatus('not-found')
+                      setIsLoading(false)
+                      return
+                    }
+                  } else if (result.user) {
                     // Success! Redirect based on role
                     const dashboardPath = 
                       data.user.role === 'admin' ? '/admin' :
@@ -243,10 +261,29 @@ export default function UnifiedLoginPage() {
                     setMatchStatus('not-found')
                     setIsLoading(false)
                   }
-                } catch (err) {
+                } catch (err: any) {
                   console.error('Login exception:', err)
-                  setError('Login failed. Please try again.')
-                  setMatchStatus('not-found')
+                  // Check if it's a network error
+                  if (err?.message?.includes('fetch') || err?.message === 'TypeError: fetch failed') {
+                    console.warn('⚠️ Network error during sign-in - attempting offline mode')
+                    const dashboardPath = 
+                      data.user.role === 'admin' ? '/admin' :
+                      data.user.role === 'professor' ? '/professor' :
+                      data.user.role === 'student' ? '/student' :
+                      '/'
+                    
+                    // Stop camera before redirect
+                    stopCamera()
+                    
+                    // Small delay to ensure state is updated and camera is stopped
+                    await new Promise(resolve => setTimeout(resolve, 500))
+                    
+                    // Use replace instead of push to prevent back navigation issues
+                    router.replace(dashboardPath)
+                  } else {
+                    setError('Login failed. Please try again.')
+                    setMatchStatus('not-found')
+                  }
                 } finally {
                   setIsLoading(false)
                 }

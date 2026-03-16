@@ -1,5 +1,6 @@
 import { createServiceRoleClient } from '@/utils/supabase/service-role'
 import { NextRequest, NextResponse } from 'next/server'
+import { getAllOfflineSections, getAllOfflineClassrooms, upsertOfflineSections, upsertOfflineClassrooms } from '@/app/api/_utils/offline-kiosk-cache'
 
 async function readScheduleId(request: NextRequest): Promise<string | null> {
   const idFromQuery = request.nextUrl.searchParams.get('id')
@@ -18,66 +19,124 @@ export async function GET(request: NextRequest) {
   try {
     const supabase = createServiceRoleClient()
 
-    // Fetch class sessions with professor and section details using service role
-    const { data: sessionsData, error: sessionsError } = await supabase
-      .from('class_sessions')
-      .select(`
-        id,
-        section_id,
-        professor_id,
-        room,
-        day_of_week,
-        start_time,
-        end_time,
-        max_capacity,
-        sections (
+    let sessionsData: any[] = []
+    let sectionsData: any[] = []
+    let professorsData: any[] = []
+    let usingOfflineCache = false
+
+    try {
+      // Fetch class sessions with professor and section details using service role
+      const { data, error: sessionsError } = await supabase
+        .from('class_sessions')
+        .select(`
           id,
-          section_code
-        ),
-        users (
-          id,
-          first_name,
-          last_name
-        )
-      `)
-      .order('day_of_week', { ascending: true })
-      .order('start_time', { ascending: true })
+          section_id,
+          professor_id,
+          room,
+          day_of_week,
+          start_time,
+          end_time,
+          max_capacity,
+          sections (
+            id,
+            section_code
+          ),
+          users (
+            id,
+            first_name,
+            last_name
+          )
+        `)
+        .order('day_of_week', { ascending: true })
+        .order('start_time', { ascending: true })
 
-    if (sessionsError) {
-      console.error('Error fetching class sessions:', sessionsError)
-      return NextResponse.json(
-        { error: 'Failed to fetch schedules', details: sessionsError },
-        { status: 500 }
-      )
-    }
+      if (sessionsError) {
+        throw sessionsError
+      }
+      sessionsData = data || []
 
-    // Fetch sections
-    const { data: sectionsData, error: sectionsError } = await supabase
-      .from('sections')
-      .select('id, section_code')
-      .order('section_code', { ascending: true })
+      // Fetch sections
+      const { data: sections, error: sectionsError } = await supabase
+        .from('sections')
+        .select('id, section_code')
+        .order('section_code', { ascending: true })
 
-    if (sectionsError) {
-      console.error('Error fetching sections:', sectionsError)
-      return NextResponse.json(
-        { error: 'Failed to fetch sections', details: sectionsError },
-        { status: 500 }
-      )
-    }
+      if (sectionsError) {
+        throw sectionsError
+      }
+      sectionsData = sections || []
 
-    // Fetch professors
-    const { data: professorsData, error: professorsError } = await supabase
-      .from('users')
-      .select('id, first_name, last_name, email')
-      .eq('role', 'professor')
-      .order('first_name', { ascending: true })
+      // Fetch professors
+      const { data: professors, error: professorsError } = await supabase
+        .from('users')
+        .select('id, first_name, last_name, email')
+        .eq('role', 'professor')
+        .order('first_name', { ascending: true })
 
-    if (professorsError) {
-      console.error('Error fetching professors:', professorsError)
-      return NextResponse.json(
-        { error: 'Failed to fetch professors', details: professorsError },
-        { status: 500 }
-      )
+      if (professorsError) {
+        throw professorsError
+      }
+      professorsData = professors || []
+
+      // Save to offline cache
+      if (sessionsData.length > 0) {
+        const offlineClassrooms = (sessionsData as any[]).map((s) => ({
+          id: s.id,
+          sectionId: s.section_id,
+          room: s.room,
+          maxCapacity: s.max_capacity,
+          dayOfWeek: s.day_of_week,
+          startTime: s.start_time,
+          endTime: s.end_time,
+          subjectCode: '',
+          subjectName: '',
+          sectionCode: s.sections?.section_code || '',
+          professorId: s.professor_id,
+        }))
+        await upsertOfflineClassrooms(offlineClassrooms)
+        console.log('📦 Saved', offlineClassrooms.length, 'classrooms to offline cache')
+      }
+
+      if (sectionsData.length > 0) {
+        const offlineSections = (sectionsData as any[]).map((s) => ({
+          id: s.id,
+          sectionCode: s.section_code,
+          semester: '',
+          academicYear: '',
+          maxStudents: 0,
+        }))
+        await upsertOfflineSections(offlineSections)
+        console.log('📦 Saved', offlineSections.length, 'sections to offline cache')
+      }
+    } catch (dbError) {
+      console.warn('⚠️ Supabase unavailable, using offline cache:', dbError)
+      usingOfflineCache = true
+      
+      // Load from offline cache
+      const offlineClassrooms = await getAllOfflineClassrooms()
+      const offlineSections = await getAllOfflineSections()
+      
+      sessionsData = (offlineClassrooms as any[]).map((c) => ({
+        id: c.id,
+        section_id: c.sectionId,
+        section_code: c.sectionCode,
+        professor_id: c.professorId,
+        professor_name: 'Cached',
+        room: c.room,
+        day_of_week: c.dayOfWeek,
+        start_time: c.startTime,
+        end_time: c.endTime,
+        max_capacity: c.maxCapacity,
+        sections: { id: c.sectionId, section_code: c.sectionCode },
+        users: { id: c.professorId, first_name: '', last_name: '' }
+      }))
+      
+      sectionsData = offlineSections.map((s) => ({
+        id: s.id,
+        section_code: s.sectionCode
+      }))
+      
+      console.log('📦 Loaded', sessionsData.length, 'class sessions and', sectionsData.length, 'sections from offline cache')
     }
 
     // Format sessions data
@@ -97,7 +156,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       classSessions: formattedSessions,
       sections: sectionsData || [],
-      professors: professorsData || []
+      professors: professorsData || [],
+      usingOfflineCache
     })
   } catch (error) {
     console.error('API Error:', error)

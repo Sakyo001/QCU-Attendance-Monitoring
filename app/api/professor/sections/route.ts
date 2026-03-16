@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
+import { getAllOfflineSections, upsertOfflineSections } from '@/app/api/_utils/offline-kiosk-cache'
 
 export async function GET(request: Request) {
   try {
@@ -13,17 +14,43 @@ export async function GET(request: Request) {
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     )
 
-    const { data: sections, error } = await supabase
-      .from('sections')
-      .select('id, section_code, semester, academic_year, max_students')
-      .order('section_code')
+    try {
+      const { data: sections, error } = await supabase
+        .from('sections')
+        .select('id, section_code, semester, academic_year, max_students')
+        .order('section_code')
 
-    if (error) {
-      console.error('Error fetching sections:', error)
-      return NextResponse.json({ error: error.message }, { status: 400 })
+      if (error) {
+        throw error
+      }
+
+      // Save to offline cache
+      if (sections && sections.length > 0) {
+        const offlineSections = (sections as any[]).map((s) => ({
+          id: s.id,
+          sectionCode: s.section_code,
+          semester: s.semester,
+          academicYear: s.academic_year,
+          maxStudents: s.max_students,
+        }))
+        await upsertOfflineSections(offlineSections)
+        console.log('📦 Saved', offlineSections.length, 'sections to offline cache')
+      }
+
+      return NextResponse.json({ success: true, sections: sections || [] })
+    } catch (dbError) {
+      console.warn('⚠️ Supabase unavailable, using offline section cache:', dbError)
+      
+      // Fallback to offline cache
+      const offlineSections = await getAllOfflineSections()
+      console.log('📦 Loaded', offlineSections.length, 'sections from offline cache')
+      
+      return NextResponse.json({ 
+        success: true, 
+        sections: offlineSections,
+        usingOfflineCache: true,
+      })
     }
-
-    return NextResponse.json({ success: true, sections: sections || [] })
   } catch (error: any) {
     console.error('Unexpected error fetching sections:', error)
     return NextResponse.json(

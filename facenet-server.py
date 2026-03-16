@@ -271,6 +271,10 @@ def _match_against_session_impl(emb_pairs: list, boxes: list, threshold: float =
     results = []
     matched_ids = set()
 
+    # Log session state once per frame
+    if len(emb_pairs) > 0 and len(_session.get("students", [])) == 0:
+        print(f"⚠️  [match] No students loaded in session! Check /load-session was called.")
+
     for (face_idx, emb) in emb_pairs:
         emb_np = np.array(emb, dtype=np.float64)
         best_sim = -1.0
@@ -288,6 +292,7 @@ def _match_against_session_impl(emb_pairs: list, boxes: list, threshold: float =
 
         if best_student and best_sim >= threshold:
             matched_ids.add(best_student["id"])
+            print(f"  ✅ Face #{face_idx}: MATCHED {best_student['name']} (sim={best_sim:.4f})")
             results.append({
                 "index": face_idx,
                 "matched": True,
@@ -298,6 +303,8 @@ def _match_against_session_impl(emb_pairs: list, boxes: list, threshold: float =
                 "box": box,
             })
         else:
+            best_name = best_student["name"] if best_student else "N/A"
+            print(f"  ❌ Face #{face_idx}: NO MATCH (best={best_name}, sim={best_sim:.4f}, threshold={threshold})")
             results.append({
                 "index": face_idx,
                 "matched": False,
@@ -390,10 +397,13 @@ async def load_session(data: dict):
     students_raw = data.get("students", [])
     section_id = data.get("sectionId")
 
+    print(f"🔄 [load-session] Received {len(students_raw)} students from frontend")
+
     processed = []
-    for s in students_raw:
+    for i, s in enumerate(students_raw):
         emb = s.get("embedding")
         if not emb:
+            print(f"  ⚠️  Student {i} ({s.get('name', 'Unknown')}): SKIPPED - no embedding")
             continue
         if isinstance(emb, dict):
             emb = list(emb.values())
@@ -403,6 +413,8 @@ async def load_session(data: dict):
             "student_number": s.get("student_number", ""),
             "embedding": np.array(emb, dtype=np.float64),
         })
+        if i < 3:  # Log first 3 for debugging
+            print(f"  ✅ Student {i} ({s.get('name')}): embedding loaded ({len(emb)} dimensions)")
 
     _session = {
         "active": True,
@@ -410,7 +422,7 @@ async def load_session(data: dict):
         "students": processed,
     }
 
-    print(f"Session loaded: {len(processed)} students for section {section_id}")
+    print(f"✅ [load-session] Session loaded: {len(processed)}/{len(students_raw)} students for section {section_id}")
     return {
         "success": True,
         "students_loaded": len(processed),

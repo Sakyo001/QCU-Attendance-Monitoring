@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceRoleClient } from '@/utils/supabase/service-role'
+import { getOfflineProfessors, getOfflineStudentsBySection, upsertOfflineProfessor } from '@/app/api/_utils/offline-kiosk-cache'
 
 // Helper function to calculate cosine similarity between two vectors
 function cosineSimilarity(a: number[], b: number[]): number {
@@ -37,59 +38,84 @@ export async function POST(request: NextRequest) {
 
     const supabase = createServiceRoleClient()
 
-    // Check professors first
-    const { data: professors, error: professorError } = await supabase
-      .from('professor_face_registrations')
-      .select(`
-        professor_id,
-        face_descriptor,
-        users!professor_face_registrations_professor_id_fkey (
-          id,
-          first_name,
-          last_name,
-          email,
-          role,
-          employee_id
-        )
-      `)
-      .eq('is_active', true)
+    let professors: any[] = []
+    let students: any[] = []
+    let usingOfflineCache = false
 
-    console.log('Professors query result:', { count: professors?.length, error: professorError })
-    if (professors && professors.length > 0) {
-      console.log('Sample professor record:', JSON.stringify(professors[0], null, 2))
-    }
+    // Try to fetch from Supabase first
+    try {
+      // Check professors
+      const { data: dbProfessors, error: professorError } = await supabase
+        .from('professor_face_registrations')
+        .select(`
+          professor_id,
+          face_descriptor,
+          users!professor_face_registrations_professor_id_fkey (
+            id,
+            first_name,
+            last_name,
+            email,
+            role,
+            employee_id
+          )
+        `)
+        .eq('is_active', true)
 
-    if (professorError) {
-      console.error('Error fetching professors:', professorError)
-      return NextResponse.json(
-        { error: 'Failed to fetch professor face registrations' },
-        { status: 500 }
-      )
-    }
+      console.log('Professors query result:', { count: dbProfessors?.length, error: professorError })
 
-    // Check students
-    const { data: students, error: studentError } = await supabase
-      .from('student_face_registrations')
-      .select(`
-        student_id,
-        face_descriptor,
-        users!student_face_registrations_student_id_fkey (
-          id,
-          first_name,
-          last_name,
-          email,
-          role,
-          student_id
-        )
-      `)
-      .eq('is_active', true)
+      if (professorError) {
+        throw professorError
+      }
 
-    if (studentError) {
-      console.error('Error fetching students:', studentError)
-      return NextResponse.json(
-        { error: 'Failed to fetch student face registrations' },
-        { status: 500 }
-      )
+      if (dbProfessors && dbProfessors.length > 0) {
+        console.log('Sample professor record:', JSON.stringify(dbProfessors[0], null, 2))
+      }
+      professors = dbProfessors || []
+
+      // Check students
+      const { data: dbStudents, error: studentError } = await supabase
+        .from('student_face_registrations')
+        .select(`
+          student_id,
+          face_descriptor,
+          users!student_face_registrations_student_id_fkey (
+            id,
+            first_name,
+            last_name,
+            email,
+            role,
+            student_id
+          )
+        `)
+        .eq('is_active', true)
+
+      if (studentError) {
+        throw studentError
+      }
+      students = dbStudents || []
+    } catch (fetchError) {
+      console.warn('⚠️ Supabase unavailable, using offline cache:', fetchError)
+      usingOfflineCache = true
+
+      // Load from offline cache
+      const offlineProfessors = await getOfflineProfessors()
+      professors = offlineProfessors.map((p) => ({
+        professor_id: p.id,
+        face_descriptor: p.faceDescriptor,
+        users: {
+          id: p.id,
+          first_name: p.firstName,
+          last_name: p.lastName,
+          email: p.email,
+          role: p.role,
+          employee_id: p.employeeId
+        }
+      }))
+
+      // Note: For students, we need to load from all sections since we don't know which section the user is in
+      // So we'll skip offline students for now, or try to get all students from cache
+      // The offline cache structure doesn't have a function to get all students
+      console.log('📦 Loaded', professors.length, 'professors from offline cache')
     }
 
     let bestMatch: any = null
@@ -177,15 +203,34 @@ export async function POST(request: NextRequest) {
     }
 
     if (bestMatch) {
+      // Cache professor with face descriptor for offline use if we got this from Supabase
+      if (!usingOfflineCache && bestMatch.type === 'professor') {
+        try {
+          const profData = bestMatch.user
+          await upsertOfflineProfessor({
+            id: profData.id,
+            firstName: profData.first_name,
+            lastName: profData.last_name,
+            email: profData.email,
+            role: profData.role,
+            employeeId: profData.employee_id,
+            faceDescriptor: faceDescriptor,
+            isActive: true
+          })
+          console.log(`📦 Cached professor ${profData.first_name} ${profData.last_name} with face data`)
+        } catch (cacheErr) {
+          console.warn('Failed to cache professor:', cacheErr)
+        }
+      }
+
       return NextResponse.json({
         matched: true,
-        user: {
+        professor: {
           id: bestMatch.user.id,
           firstName: bestMatch.user.first_name,
           lastName: bestMatch.user.last_name,
           email: bestMatch.user.email,
           role: bestMatch.user.role,
-          studentId: bestMatch.user.student_id,
           employeeId: bestMatch.user.employee_id
         },
         similarity: bestSimilarity

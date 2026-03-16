@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/utils/supabase/admin'
+import { getOfflineProfessors, upsertOfflineProfessor } from '@/app/api/_utils/offline-kiosk-cache'
 
 // Cosine similarity
 function cosineSimilarity(a: number[], b: number[]): number {
@@ -28,7 +29,6 @@ function cosineSimilarity(a: number[], b: number[]): number {
 
 export async function POST(request: NextRequest) {
   try {
-    const supabase = getSupabaseAdmin()
     const body = await request.json()
     const { faceDescriptor } = body
 
@@ -44,23 +44,36 @@ export async function POST(request: NextRequest) {
       }, { status: 400 })
     }
 
-    // Get all professors with face descriptors
-    const { data: professors, error: fetchError } = await supabase
-      .from('professor_face_registrations')
-      .select('id, professor_id, first_name, last_name, face_descriptor, is_active')
-      .eq('is_active', true)
+    let professors: any[] = []
+    let usingOfflineCache = false
 
-    if (fetchError) {
-      console.error('❌ Error fetching professor face data:', fetchError)
-      return NextResponse.json({ 
-        error: 'Failed to fetch professor face data',
-        matched: false
-      }, { status: 400 })
+    try {
+      const supabase = getSupabaseAdmin()
+      const { data, error: fetchError } = await supabase
+        .from('professor_face_registrations')
+        .select('id, professor_id, first_name, last_name, face_descriptor, is_active')
+        .eq('is_active', true)
+
+      if (fetchError) {
+        throw fetchError
+      }
+
+      professors = data || []
+      console.log('📊 Found', professors.length, 'registered professors with face data (online)')
+    } catch (fetchError) {
+      console.warn('⚠️ Supabase unavailable, using offline professor cache:', fetchError)
+      usingOfflineCache = true
+      professors = (await getOfflineProfessors()).map((p) => ({
+        professor_id: p.id,
+        first_name: p.firstName,
+        last_name: p.lastName,
+        face_descriptor: p.faceDescriptor,
+        is_active: p.isActive,
+      }))
+      console.log('📦 Loaded', professors.length, 'professors from offline cache')
     }
 
-    console.log('📊 Found', professors?.length || 0, 'registered professors with face data')
-
-    if (!professors || professors.length === 0) {
+    if (professors.length === 0) {
       return NextResponse.json({ 
         error: 'No registered professor faces found',
         matched: false
@@ -103,26 +116,80 @@ export async function POST(request: NextRequest) {
     }
 
     if (bestMatch && bestSimilarity >= SIMILARITY_THRESHOLD) {
-      // Get full professor data from users table
-      const { data: userData, error: userError } = await supabase
-        .from('users')
-        .select('*')
-        .eq('id', bestMatch.professor_id)
-        .single()
+      let professorResponse: {
+        id: string
+        firstName: string
+        lastName: string
+        email: string
+        role: string
+        employeeId: string
+      } | null = null
 
-      if (userError || !userData) {
-        return NextResponse.json({ 
-          error: 'Professor user record not found',
-          matched: false
-        }, { status: 404 })
-      }
+      if (!usingOfflineCache) {
+        // Get full professor data from users table
+        const supabase = getSupabaseAdmin()
+        const { data: userData, error: userError } = await supabase
+          .from('users')
+          .select('*')
+          .eq('id', bestMatch.professor_id)
+          .single()
 
-      // Check if the user is actually a professor
-      if (userData.role !== 'professor' && userData.role !== 'adviser') {
-        return NextResponse.json({ 
-          error: 'Access denied. Faculty credentials required.',
-          matched: false
-        }, { status: 403 })
+        if (userError || !userData) {
+          return NextResponse.json({
+            error: 'Professor user record not found',
+            matched: false
+          }, { status: 404 })
+        }
+
+        // Check if the user is actually a professor
+        if (userData.role !== 'professor' && userData.role !== 'adviser') {
+          return NextResponse.json({
+            error: 'Access denied. Faculty credentials required.',
+            matched: false
+          }, { status: 403 })
+        }
+
+        professorResponse = {
+          id: userData.id,
+          firstName: userData.first_name,
+          lastName: userData.last_name,
+          email: userData.email,
+          role: userData.role,
+          employeeId: userData.employee_id
+        }
+
+        // Save to offline cache for kiosk Step 1 fallback.
+        const storedDescriptor = Array.isArray(bestMatch.face_descriptor)
+          ? bestMatch.face_descriptor
+          : Object.values(bestMatch.face_descriptor as Record<string, number>)
+
+        await upsertOfflineProfessor({
+          id: userData.id,
+          firstName: userData.first_name,
+          lastName: userData.last_name,
+          email: userData.email,
+          role: userData.role,
+          employeeId: userData.employee_id,
+          faceDescriptor: storedDescriptor.map((value: any) => Number(value)),
+          isActive: true,
+        })
+      } else {
+        const fallbackRole = bestMatch.role || 'professor'
+        professorResponse = {
+          id: bestMatch.professor_id,
+          firstName: bestMatch.first_name,
+          lastName: bestMatch.last_name,
+          email: bestMatch.email || `${bestMatch.first_name.toLowerCase()}.${bestMatch.last_name.toLowerCase()}@offline.local`,
+          role: fallbackRole,
+          employeeId: bestMatch.employee_id || ''
+        }
+
+        if (fallbackRole !== 'professor' && fallbackRole !== 'adviser') {
+          return NextResponse.json({
+            error: 'Access denied. Faculty credentials required.',
+            matched: false
+          }, { status: 403 })
+        }
       }
 
       console.log(`✅ Professor matched: ${bestMatch.first_name} ${bestMatch.last_name} (${(bestSimilarity * 100).toFixed(1)}%)`)
@@ -131,14 +198,7 @@ export async function POST(request: NextRequest) {
         success: true,
         matched: true,
         confidence: bestSimilarity,
-        professor: {
-          id: userData.id,
-          firstName: userData.first_name,
-          lastName: userData.last_name,
-          email: userData.email,
-          role: userData.role,
-          employeeId: userData.employee_id
-        }
+        professor: professorResponse
       })
     }
 

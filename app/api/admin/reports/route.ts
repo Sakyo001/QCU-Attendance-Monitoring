@@ -1,5 +1,6 @@
 import { createServiceRoleClient } from '@/utils/supabase/service-role'
 import { NextRequest, NextResponse } from 'next/server'
+import { getAllOfflineSections, upsertOfflineSections } from '@/app/api/_utils/offline-kiosk-cache'
 
 export async function GET(request: NextRequest) {
   try {
@@ -46,13 +47,43 @@ export async function GET(request: NextRequest) {
     }
 
     // Fetch all sections with their data
-    const { data: sections, error: sectionsError } = await supabase
-      .from('sections')
-      .select('id, section_code, course_id, semester')
+    let sections: any[] = []
+    
+    try {
+      const { data: dbSections, error: sectionsError } = await supabase
+        .from('sections')
+        .select('id, section_code, course_id, semester')
 
-    if (sectionsError) {
-      console.error('Error fetching sections:', sectionsError)
-      throw sectionsError
+      if (sectionsError) {
+        throw sectionsError
+      }
+
+      sections = dbSections || []
+
+      // Save to offline cache
+      if (sections.length > 0) {
+        const offlineSections = (sections as any[]).map((s) => ({
+          id: s.id,
+          sectionCode: s.section_code,
+          semester: s.semester || '',
+          academicYear: '',
+          maxStudents: 0,
+        }))
+        await upsertOfflineSections(offlineSections)
+        console.log('📦 Saved', offlineSections.length, 'sections to offline cache')
+      }
+    } catch (dbError) {
+      console.warn('⚠️ Supabase unavailable, using offline section cache:', dbError)
+      
+      // Load from offline cache
+      const offlineSections = await getAllOfflineSections()
+      sections = offlineSections.map((s) => ({
+        id: s.id,
+        section_code: s.sectionCode,
+        course_id: null,
+        semester: s.semester
+      }))
+      console.log('📦 Loaded', sections.length, 'sections from offline cache')
     }
 
     console.log('✅ Found', sections?.length || 0, 'sections')

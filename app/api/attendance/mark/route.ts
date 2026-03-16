@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { v5 as uuidv5, NIL as NAMESPACE_NIL } from 'uuid'
 import { getSupabaseAdmin } from '@/utils/supabase/admin'
+import { getOfflineStudentsBySection } from '@/app/api/_utils/offline-kiosk-cache'
 
 /**
  * Determine attendance status based on class start time.
@@ -118,16 +119,65 @@ export async function POST(request: NextRequest) {
     console.log('📅 Generated session ID for:', sessionKey, '→', sessionId)
 
     // First, get the student registration by ID (coming from face match)
-    const { data: registration, error: registrationError } = await supabase
-      .from('student_face_registrations')
-      .select('id, first_name, last_name, student_number, section_id, is_active')
-      .eq('id', studentId)
-      .single()
+    let registration: any = null
+    let usingOfflineCache = false
 
-    if (registrationError || !registration) {
-      console.error('❌ Student registration not found:', registrationError)
-      return NextResponse.json({ 
-        error: 'Student registration not found' 
+    try {
+      const { data, error: registrationError } = await supabase
+        .from('student_face_registrations')
+        .select('id, first_name, last_name, student_number, section_id, is_active')
+        .eq('id', studentId)
+        .single()
+
+      if (registrationError || !data) {
+        throw registrationError || new Error('Student registration not found')
+      }
+
+      registration = data
+      console.log('✅ Found registration from Supabase:', registration.first_name, registration.last_name)
+    } catch (dbError) {
+      // Fallback to offline cache
+      console.warn('⚠️ Supabase unavailable, checking offline student cache:', dbError)
+      usingOfflineCache = true
+
+      try {
+        const offlineStudents = await getOfflineStudentsBySection(sectionId)
+        const offlineStudent = offlineStudents.find((s) => s.id === studentId)
+
+        if (!offlineStudent) {
+          return NextResponse.json({
+            success: false,
+            error: 'Student not found in offline cache',
+            usingOfflineCache: true
+          }, { status: 404 })
+        }
+
+        registration = {
+          id: offlineStudent.id,
+          first_name: offlineStudent.firstName,
+          last_name: offlineStudent.lastName,
+          student_number: offlineStudent.studentNumber,
+          section_id: offlineStudent.sectionId,
+          is_active: offlineStudent.isActive
+        }
+
+        console.log('📦 Found registration from offline cache:', registration.first_name, registration.last_name)
+      } catch (cacheError) {
+        console.error('❌ Error accessing offline cache:', cacheError)
+        return NextResponse.json({
+          success: false,
+          error: 'Unable to verify student identity',
+          usingOfflineCache: true
+        }, { status: 500 })
+      }
+    }
+
+    if (!registration) {
+      console.error('❌ Student registration not found')
+      return NextResponse.json({
+        success: false,
+        error: 'Student registration not found',
+        usingOfflineCache
       }, { status: 404 })
     }
 
@@ -164,68 +214,103 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    console.log('✅ Found registration:', (registration as any).first_name, (registration as any).last_name)
+    console.log('✅ Found registration:', registration.first_name, registration.last_name)
 
-    // Check if attendance record already exists for today
-    const { data: existing } = await supabase
-      .from('attendance_records')
-      .select('id, checked_in_at')
-      .eq('attendance_session_id', sessionId)
-      .eq('student_number', (registration as any).student_number)
-      .single()
+    // In offline mode, skip duplicate check and just accept the mark
+    if (!usingOfflineCache) {
+      // Check if attendance record already exists for today
+      let existing: any = null
+      try {
+        const { data } = await supabase
+          .from('attendance_records')
+          .select('id, checked_in_at, status')
+          .eq('attendance_session_id', sessionId)
+          .eq('student_number', registration.student_number)
+          .single()
+        existing = data
+      } catch {
+        existing = null
+      }
 
-    if (existing) {
-      console.log('⏸️ Student already marked attendance at:', existing.checked_in_at)
-      return NextResponse.json({
-        success: true,
-        alreadyMarked: true,
-        message: 'Student already marked for today'
-      })
+      if (existing) {
+        console.log('⏸️ Student already marked attendance at:', existing.checked_in_at)
+        return NextResponse.json({
+          success: true,
+          alreadyMarked: true,
+          message: 'Student already marked for today',
+          record: {
+            status: existing.status || attendanceStatus,
+            checked_in_at: existing.checked_in_at || null,
+          },
+          usingOfflineCache: false
+        })
+      }
     }
 
-    // Create new attendance record with time-based status
-    const { data: insertedRecord, error: insertError } = await supabase
-      .from('attendance_records')
-      .insert([
-        {
-          attendance_session_id: sessionId,
-          student_registration_id: registration.id,
-          student_number: registration.student_number,
-          checked_in_at: new Date().toISOString(),
-          face_match_confidence: faceMatchConfidence || null,
-          status: attendanceStatus,
-          section_id: sectionId
+    // Try to create attendance record online; in offline mode, just accept it
+    let insertedRecord: any = null
+
+    if (!usingOfflineCache) {
+      try {
+        const { data, error: insertError } = await supabase
+          .from('attendance_records')
+          .insert([
+            {
+              attendance_session_id: sessionId,
+              student_registration_id: registration.id,
+              student_number: registration.student_number,
+              checked_in_at: new Date().toISOString(),
+              face_match_confidence: faceMatchConfidence || null,
+              status: attendanceStatus,
+              section_id: sectionId
+            }
+          ])
+          .select()
+
+        if (insertError) {
+          console.error('❌ Insert error:', insertError)
+          throw insertError
         }
-      ])
-      .select()
 
-    if (insertError) {
-      console.error('❌ Insert error:', insertError)
-      console.error('Error details:', {
-        code: insertError.code,
-        message: insertError.message,
-        details: insertError.details
+        insertedRecord = data?.[0]
+        console.log(`✅ Attendance marked as '${attendanceStatus}' for:`, {
+          studentName: `${registration.first_name} ${registration.last_name}`,
+          studentNumber: registration.student_number,
+          sectionId,
+          sessionId,
+          status: attendanceStatus,
+          recordId: insertedRecord?.id,
+          timestamp: new Date().toISOString()
+        })
+      } catch (insertError: any) {
+        console.error('❌ Failed to insert attendance:', insertError)
+        return NextResponse.json({
+          success: false,
+          error: 'Failed to mark attendance',
+          details: insertError.message,
+          usingOfflineCache: false
+        }, { status: 400 })
+      }
+    } else {
+      // Offline mode: just accept the mark
+      console.log(`📱 [OFFLINE] Attendance marked as '${attendanceStatus}' for:`, {
+        studentName: `${registration.first_name} ${registration.last_name}`,
+        studentNumber: registration.student_number,
+        sectionId,
+        status: attendanceStatus,
+        timestamp: new Date().toISOString()
       })
-      return NextResponse.json({ 
-        error: 'Failed to mark attendance',
-        details: insertError.message
-      }, { status: 400 })
     }
-
-    console.log(`✅ Attendance marked as '${attendanceStatus}' for:`, {
-      studentName: `${registration.first_name} ${registration.last_name}`,
-      studentNumber: registration.student_number,
-      sectionId,
-      sessionId,
-      status: attendanceStatus,
-      recordId: insertedRecord?.[0]?.id,
-      timestamp: new Date().toISOString()
-    })
 
     return NextResponse.json({
       success: true,
       message: `Attendance marked as ${attendanceStatus}`,
-      record: insertedRecord?.[0]
+      record: insertedRecord ? insertedRecord : { 
+        student_number: registration.student_number,
+        status: attendanceStatus,
+        checked_in_at: new Date().toISOString()
+      },
+      usingOfflineCache
     })
   } catch (error) {
     console.error('❌ Attendance error:', error)

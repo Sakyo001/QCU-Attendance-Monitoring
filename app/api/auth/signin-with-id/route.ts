@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceRoleClient } from '@/utils/supabase/service-role'
+import { getOfflineProfessors } from '@/app/api/_utils/offline-kiosk-cache'
 
 export async function POST(request: NextRequest) {
   try {
@@ -36,6 +37,28 @@ export async function POST(request: NextRequest) {
 
     if (error) {
       console.error('API signInWithId: Database error', error)
+      console.warn('API signInWithId: Supabase unavailable, trying offline cache...')
+      
+      // Fallback to offline professor cache
+      const offlineProfessors = await getOfflineProfessors()
+      const cachedProf = offlineProfessors.find((p) => p.id === userId)
+      
+      if (cachedProf && cachedProf.isActive) {
+        console.log('API signInWithId: Found professor in offline cache:', cachedProf.firstName, cachedProf.lastName)
+        return NextResponse.json({
+          user: {
+            id: cachedProf.id,
+            email: cachedProf.email || `${cachedProf.firstName.toLowerCase()}.${cachedProf.lastName.toLowerCase()}@offline.local`,
+            role: cachedProf.role || 'professor',
+            firstName: cachedProf.firstName,
+            lastName: cachedProf.lastName,
+            employeeId: cachedProf.employeeId || '',
+            isActive: cachedProf.isActive,
+            offlineMode: true
+          }
+        })
+      }
+      
       return NextResponse.json(
         { error: `Database error: ${error.message}` },
         { status: 500 }
