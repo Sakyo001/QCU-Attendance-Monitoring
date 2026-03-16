@@ -7,6 +7,7 @@ import { GraduationCap, Camera, AlertCircle, CheckCircle2, Loader2, RefreshCw, S
 import { useAuth } from '@/contexts/AuthContext'
 import { initializeFaceDetection, detectFaceInVideo } from '@/lib/mediapipe-face'
 import { extractFaceNetFromVideo, checkFaceNetHealth, waitForModelReady } from '@/lib/facenet-python-api'
+import { useYoloSpoofDetection } from '@/hooks/useYoloSpoofDetection'
 
 export default function ProfessorLoginPage() {
   const router = useRouter()
@@ -18,9 +19,18 @@ export default function ProfessorLoginPage() {
   const [serverHealthy, setServerHealthy] = useState(true)
   const [cameraActive, setCameraActive] = useState(false)
   const [faceDetected, setFaceDetected] = useState(false)
+  const [spoofDetected, setSpoofDetected] = useState(false)
   const [matchStatus, setMatchStatus] = useState<'idle' | 'scanning' | 'matched' | 'not-found'>('idle')
   const [matchedProfessor, setMatchedProfessor] = useState<{ firstName: string; lastName: string } | null>(null)
   const [boundingBox, setBoundingBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null)
+
+  const { spoofDetected: yoloSpoofDetected, runSpoofCheck: runYoloSpoofCheck, resetSpoof: resetYoloSpoof } = useYoloSpoofDetection()
+  const yoloSpoofDetectedRef = useRef(false)
+
+  useEffect(() => {
+    yoloSpoofDetectedRef.current = yoloSpoofDetected
+    setSpoofDetected(yoloSpoofDetected)
+  }, [yoloSpoofDetected])
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -216,6 +226,24 @@ export default function ProfessorLoginPage() {
         // Face matching - Real-time without throttle
         if (pythonResult.detected && pythonResult.embedding) {
           setFaceDetected(true)
+
+          // Anti-spoof gate (YOLO/TFJS)
+          if (videoRef.current) {
+            const yoloRes = await runYoloSpoofCheck(videoRef.current)
+            if (yoloRes.spoofDetected) {
+              setSpoofDetected(true)
+              // Avoid spamming matching while spoof is present
+              if (matchStatus === 'scanning') setMatchStatus('idle')
+              isMatchingRef.current = false
+              return
+            }
+          }
+          if (yoloSpoofDetectedRef.current) {
+            setSpoofDetected(true)
+            if (matchStatus === 'scanning') setMatchStatus('idle')
+            isMatchingRef.current = false
+            return
+          }
           
           // Prevent concurrent requests and stop if already matched or loading
           if (!isMatchingRef.current && matchStatus !== 'matched' && !isLoading) {
@@ -277,6 +305,9 @@ export default function ProfessorLoginPage() {
           }
         } else {
           setFaceDetected(false)
+          setSpoofDetected(false)
+          resetYoloSpoof()
+          yoloSpoofDetectedRef.current = false
           if (matchStatus === 'scanning') {
             setMatchStatus('idle')
           }
@@ -308,6 +339,9 @@ export default function ProfessorLoginPage() {
       setError('')
       setMatchStatus('idle')
       setMatchedProfessor(null)
+      setSpoofDetected(false)
+      resetYoloSpoof()
+      yoloSpoofDetectedRef.current = false
       
       requestAnimationFrame(() => {
         setCameraActive(true)
@@ -328,9 +362,13 @@ export default function ProfessorLoginPage() {
     }
     setCameraActive(false)
     setFaceDetected(false)
+    setSpoofDetected(false)
     setMatchStatus('idle')
     setMatchedProfessor(null)
     isMatchingRef.current = false
+
+    resetYoloSpoof()
+    yoloSpoofDetectedRef.current = false
   }
 
   return (
@@ -414,12 +452,15 @@ export default function ProfessorLoginPage() {
                   {/* Status indicator */}
                   <div className="absolute top-4 inset-x-0 flex justify-center">
                     <div className={`text-white text-sm font-medium px-4 py-2 rounded-full backdrop-blur-md flex items-center gap-2 ${
+                        spoofDetected ? 'bg-orange-600' :
                       matchStatus === 'matched' ? 'bg-emerald-600' :
                       matchStatus === 'not-found' ? 'bg-red-600' :
                       matchStatus === 'scanning' ? 'bg-blue-600' :
                       faceDetected ? 'bg-gray-700' : 'bg-gray-900/80'
                     }`}>
-                      {matchStatus === 'matched' ? (
+                        {spoofDetected ? (
+                          'Spoof detected - Try again'
+                        ) : matchStatus === 'matched' ? (
                         <>
                           <CheckCircle2 className="w-4 h-4" />
                           Logging in...

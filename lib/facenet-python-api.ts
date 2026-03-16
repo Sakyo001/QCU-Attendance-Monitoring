@@ -188,14 +188,17 @@ export async function extractFaceNetEmbedding(
 
     const data = await response.json()
     return {
-      detected: true,
-      embedding: data.embedding,
-      embedding_size: data.dimension,
-      confidence: data.confidence,
-      box: data.box,
-      spoofDetected: data.spoof_detected,
-      spoofLabel: data.spoof_label,
-      realConfidence: data.real_confidence,
+      // Preserve backend truth: detected=false when no face.
+      // This is important for UI state machines that clear the face box.
+      detected: Boolean(data.detected),
+      embedding: data.embedding ?? undefined,
+      embedding_size: data.dimension ?? undefined,
+      confidence: data.confidence ?? undefined,
+      box: data.box ?? undefined,
+      spoofDetected: data.spoof_detected ?? undefined,
+      spoofLabel: data.spoof_label ?? undefined,
+      realConfidence: data.real_confidence ?? undefined,
+      error: data.error ?? undefined,
     }
   } catch (error) {
     console.warn('⚠️ FaceNet extraction error (server may be offline):', error instanceof Error ? error.message : error)
@@ -866,5 +869,332 @@ export class ServerCameraStream {
   /** Whether the stream is currently connected. */
   get connected(): boolean {
     return this.ws?.readyState === WebSocket.OPEN
+  }
+}
+
+
+// ============ Client-Side (Browser) Camera Stream ============
+
+/**
+ * Browser-webcam stream that keeps the same callback contract as ServerCameraStream.
+ *
+ * - Captures frames from `navigator.mediaDevices.getUserMedia()`.
+ * - For `mode='recognize'`, streams frames to `/ws/recognize` and emits results.
+ * - For `mode='extract'`, posts frames to `/extract-embedding` and emits embeddings.
+ * - For `mode='view'`, emits frames with `results=null`.
+ *
+ * This lets the UI switch from *server-owned camera* to *client-owned camera*
+ * without rewriting the drawing / state-machine logic.
+ */
+export class ClientCameraStream {
+  private ws: WebSocket | null = null
+  private onFrame: ((data: CameraStreamFrame) => void) | null = null
+  private onError: ((error: string) => void) | null = null
+  private stopped = false
+  private mode: CameraStreamMode = 'recognize'
+  private jpegQuality = 0.7
+
+  private mediaStream: MediaStream | null = null
+  private video: HTMLVideoElement | null = null
+  private canvas: HTMLCanvasElement
+  private ctx: CanvasRenderingContext2D | null = null
+
+  private rafId: number | null = null
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+
+  private isProcessing = false
+  private pendingFrameB64: string | null = null
+  private frameId = 0
+
+  // Emit-rate control (keeps CPU/network sane)
+  private emitIntervalMs = 100 // ~10 fps
+  private lastEmitAt = 0
+
+  // Simple FPS estimate of emitted frames
+  private fpsWindowStart = 0
+  private fpsFrames = 0
+  private fps = 0
+
+  constructor() {
+    this.canvas = document.createElement('canvas')
+    this.canvas.width = SEND_WIDTH
+    this.canvas.height = SEND_HEIGHT
+    this.ctx = this.canvas.getContext('2d')
+  }
+
+  start(
+    mode: CameraStreamMode,
+    onFrame: (data: CameraStreamFrame) => void,
+    onError?: (error: string) => void,
+    jpegQuality: number = 60,
+  ): void {
+    this.stopped = false
+    this.mode = mode
+    this.onFrame = onFrame
+    this.onError = onError ?? null
+    // Match ServerCameraStream's 30-95 scale to canvas.toDataURL's 0..1
+    const q = Math.max(30, Math.min(95, jpegQuality))
+    this.jpegQuality = q / 100
+
+    void this.ensureCamera()
+      .then(() => this.connectIfNeeded())
+      .then(() => this.startLoop())
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : 'Failed to start client camera'
+        console.error('❌ ClientCameraStream start failed:', err)
+        this.onError?.(msg)
+      })
+  }
+
+  /** Switch mode without re-requesting camera permission. */
+  setMode(mode: CameraStreamMode): void {
+    this.mode = mode
+    // Recognize uses WS; other modes don't.
+    if (mode !== 'recognize') {
+      this.closeWs()
+    } else {
+      void this.connectIfNeeded()
+    }
+  }
+
+  stop(): void {
+    this.stopped = true
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
+    if (this.rafId) {
+      cancelAnimationFrame(this.rafId)
+      this.rafId = null
+    }
+    this.closeWs()
+
+    if (this.mediaStream) {
+      for (const track of this.mediaStream.getTracks()) {
+        try { track.stop() } catch { /* ignore */ }
+      }
+    }
+    this.mediaStream = null
+    this.video = null
+    this.onFrame = null
+    this.onError = null
+    this.isProcessing = false
+    this.pendingFrameB64 = null
+  }
+
+  get connected(): boolean {
+    // Camera is the primary dependency; WS is only required for recognize.
+    if (!this.mediaStream) return false
+    if (this.mode === 'recognize') return this.ws?.readyState === WebSocket.OPEN
+    return true
+  }
+
+  private async ensureCamera(): Promise<void> {
+    if (this.mediaStream && this.video) return
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error('Camera API not available in this browser')
+    }
+
+    this.mediaStream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: 'user',
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+      },
+      audio: false,
+    })
+
+    const video = document.createElement('video')
+    video.playsInline = true
+    video.muted = true
+    video.autoplay = true
+    video.srcObject = this.mediaStream
+    this.video = video
+
+    await new Promise<void>((resolve, reject) => {
+      const onLoaded = () => {
+        video.removeEventListener('loadedmetadata', onLoaded)
+        resolve()
+      }
+      const onError = () => {
+        video.removeEventListener('error', onError)
+        reject(new Error('Failed to load camera stream'))
+      }
+      video.addEventListener('loadedmetadata', onLoaded)
+      video.addEventListener('error', onError)
+    })
+
+    try {
+      await video.play()
+    } catch {
+      // Some browsers require a user gesture. The stream still exists, so we continue.
+    }
+  }
+
+  private connectIfNeeded(): void | Promise<void> {
+    if (this.mode !== 'recognize') return
+    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) return
+    this.openWs()
+  }
+
+  private openWs(): void {
+    const wsUrl = `${getWsUrl()}/ws/recognize`
+    console.log(`🎥 Connecting client camera WS: ${wsUrl} (mode=${this.mode})`)
+
+    try {
+      this.ws = new WebSocket(wsUrl)
+    } catch (error) {
+      const msg = 'Failed to create WebSocket for /ws/recognize'
+      console.error(`❌ ${msg}:`, error)
+      this.onError?.(msg)
+      return
+    }
+
+    this.ws.onopen = () => {
+      if (this.stopped) {
+        this.closeWs()
+        return
+      }
+      console.log('🎥 Client camera WS connected')
+    }
+
+    this.ws.onmessage = (event) => {
+      this.isProcessing = false
+      try {
+        const results: RecognitionResult = JSON.parse(event.data)
+        const frame = this.pendingFrameB64
+        this.pendingFrameB64 = null
+        if (!frame) return
+        this.emitFrame(frame, SEND_WIDTH, SEND_HEIGHT, results)
+      } catch {
+        // ignore parse errors
+      }
+    }
+
+    this.ws.onerror = () => {
+      // If Railway WS is unreachable, activate local fallback so reconnect uses localhost
+      if (!_fallbackActive) {
+        console.warn('⚠️ Client camera WS error — switching to local fallback')
+        activateFallback()
+      }
+    }
+
+    this.ws.onclose = (event) => {
+      if (this.stopped) return
+      if (this.mode !== 'recognize') return
+
+      console.log(`🎥 Client camera WS closed (code: ${event.code})`)
+      // Auto-reconnect (mirrors ServerCameraStream behavior)
+      const delay = _fallbackActive ? 500 : 2000
+      this.reconnectTimer = setTimeout(() => {
+        if (!this.stopped && this.mode === 'recognize') {
+          this.openWs()
+        }
+      }, delay)
+    }
+  }
+
+  private closeWs(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
+    if (!this.ws) return
+    this.ws.onclose = null
+    if (this.ws.readyState === WebSocket.OPEN) {
+      try { this.ws.close() } catch { /* ignore */ }
+    }
+    this.ws = null
+    this.isProcessing = false
+    this.pendingFrameB64 = null
+  }
+
+  private startLoop(): void {
+    this.fpsWindowStart = performance.now()
+    this.fpsFrames = 0
+    this.fps = 0
+    this.lastEmitAt = 0
+
+    const tick = () => {
+      if (this.stopped) return
+      this.rafId = requestAnimationFrame(tick)
+
+      const now = performance.now()
+      if (now - this.lastEmitAt < this.emitIntervalMs) return
+
+      if (!this.video || !this.ctx) return
+      // Draw downscaled frame
+      this.ctx.drawImage(this.video, 0, 0, SEND_WIDTH, SEND_HEIGHT)
+      const dataUrl = this.canvas.toDataURL('image/jpeg', this.jpegQuality)
+      const frameB64 = dataUrl.split(',', 2)[1] || ''
+
+      if (this.mode === 'view') {
+        this.lastEmitAt = now
+        this.emitFrame(frameB64, SEND_WIDTH, SEND_HEIGHT, null)
+        return
+      }
+
+      if (this.mode === 'extract') {
+        if (this.isProcessing) return
+        this.isProcessing = true
+        this.lastEmitAt = now
+        void extractFaceNetEmbedding(dataUrl)
+          .then((results) => {
+            this.emitFrame(frameB64, SEND_WIDTH, SEND_HEIGHT, results)
+          })
+          .catch((err) => {
+            const msg = err instanceof Error ? err.message : 'Extraction failed'
+            this.onError?.(msg)
+          })
+          .finally(() => {
+            this.isProcessing = false
+          })
+        return
+      }
+
+      // recognize
+      if (this.mode === 'recognize') {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
+        if (this.isProcessing) return
+        this.isProcessing = true
+        this.lastEmitAt = now
+        this.pendingFrameB64 = frameB64
+        try {
+          this.ws.send(JSON.stringify({ image: dataUrl }))
+        } catch {
+          this.isProcessing = false
+          this.pendingFrameB64 = null
+        }
+      }
+    }
+
+    this.rafId = requestAnimationFrame(tick)
+  }
+
+  private emitFrame(
+    frame: string,
+    width: number,
+    height: number,
+    results: RecognitionResult | FaceNetEmbedding | null,
+  ): void {
+    const now = performance.now()
+    if (!this.fpsWindowStart) this.fpsWindowStart = now
+    this.fpsFrames += 1
+    const elapsed = now - this.fpsWindowStart
+    if (elapsed >= 1000) {
+      this.fps = Math.round((this.fpsFrames * 1000) / elapsed)
+      this.fpsFrames = 0
+      this.fpsWindowStart = now
+    }
+
+    const payload: CameraStreamFrame = {
+      frame,
+      width,
+      height,
+      results,
+      frame_id: ++this.frameId,
+      fps: this.fps,
+    }
+    this.onFrame?.(payload)
   }
 }

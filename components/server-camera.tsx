@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { ServerCameraStream, type CameraStreamFrame, type CameraStreamMode, type RecognitionResult, type FaceNetEmbedding } from '@/lib/facenet-python-api'
+import { ClientCameraStream, type CameraStreamFrame, type CameraStreamMode, type RecognitionResult, type FaceNetEmbedding } from '@/lib/facenet-python-api'
 
 export interface ServerCameraProps {
   /** Processing mode: 'recognize' (detect+match), 'extract' (detect+embed), 'view' (no processing) */
@@ -46,7 +46,7 @@ export default function ServerCamera({
   style,
 }: ServerCameraProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const streamRef = useRef<ServerCameraStream | null>(null)
+  const streamRef = useRef<ClientCameraStream | null>(null)
   const imgRef = useRef<HTMLImageElement | null>(null)
   const [connected, setConnected] = useState(false)
   const [fps, setFps] = useState(0)
@@ -192,7 +192,7 @@ export default function ServerCamera({
 
   // Connect to server camera stream
   useEffect(() => {
-    const stream = new ServerCameraStream()
+    const stream = new ClientCameraStream()
     streamRef.current = stream
 
     stream.start(

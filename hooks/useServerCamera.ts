@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react'
 import {
-  ServerCameraStream,
+  ClientCameraStream,
   type CameraStreamFrame,
   type CameraStreamMode,
   type RecognitionResult,
@@ -42,7 +42,7 @@ export function useServerCamera({
   onError,
 }: UseServerCameraOptions) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const streamRef = useRef<ServerCameraStream | null>(null)
+  const streamRef = useRef<ClientCameraStream | null>(null)
   const imgRef = useRef<HTMLImageElement | null>(null)
   const rafRef = useRef<number>(0)
   const pendingFrameRef = useRef<CameraStreamFrame | null>(null)
@@ -125,7 +125,7 @@ export function useServerCamera({
       return
     }
 
-    const stream = new ServerCameraStream()
+    const stream = new ClientCameraStream()
     streamRef.current = stream
 
     stream.start(
