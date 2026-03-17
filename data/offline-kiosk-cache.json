@@ -549,7 +549,7 @@
       "lastName": "Albon",
       "sectionId": "988c394d-d860-4d75-a257-4aa734649ecb",
       "isActive": true,
-      "updatedAt": "2026-03-16T15:55:51.203Z"
+      "updatedAt": "2026-03-16T16:11:31.542Z"
     },
     {
       "id": "7be3c0c7-19b0-4836-b5b0-592b6dd86648",
@@ -558,7 +558,7 @@
       "lastName": "Bibal",
       "sectionId": "988c394d-d860-4d75-a257-4aa734649ecb",
       "isActive": true,
-      "updatedAt": "2026-03-16T15:55:51.203Z"
+      "updatedAt": "2026-03-16T16:11:31.542Z"
     },
     {
       "id": "0bb206a4-cfd0-4a3f-89e7-4cca574bc002",
@@ -567,7 +567,7 @@
       "lastName": "Bucio",
       "sectionId": "988c394d-d860-4d75-a257-4aa734649ecb",
       "isActive": true,
-      "updatedAt": "2026-03-16T15:55:51.203Z"
+      "updatedAt": "2026-03-16T16:11:31.542Z"
     },
     {
       "id": "ae5880bf-bdb2-47ce-82eb-3e108cce32c3",
@@ -576,7 +576,7 @@
       "lastName": "Cortez",
       "sectionId": "988c394d-d860-4d75-a257-4aa734649ecb",
       "isActive": true,
-      "updatedAt": "2026-03-16T15:55:51.203Z"
+      "updatedAt": "2026-03-16T16:11:31.542Z"
     },
     {
       "id": "6c092749-0afd-46b8-b1f7-064bf28acd37",
@@ -585,7 +585,7 @@
       "lastName": "Dichoso",
       "sectionId": "988c394d-d860-4d75-a257-4aa734649ecb",
       "isActive": true,
-      "updatedAt": "2026-03-16T15:55:51.203Z"
+      "updatedAt": "2026-03-16T16:11:31.542Z"
     },
     {
       "id": "53964ef2-c319-45fc-8352-513e2286372b",
@@ -1108,7 +1108,7 @@
         0.08368747681379318
       ],
       "isActive": true,
-      "updatedAt": "2026-03-16T15:55:51.203Z"
+      "updatedAt": "2026-03-16T16:11:31.542Z"
     },
     {
       "id": "647f70ca-24a2-4082-8016-ea75eaf77d6e",
@@ -1631,7 +1631,7 @@
         0.011866887100040913
       ],
       "isActive": true,
-      "updatedAt": "2026-03-16T15:55:51.203Z"
+      "updatedAt": "2026-03-16T16:11:31.542Z"
     },
     {
       "id": "d39f2d59-4c06-4e06-b56d-9a71d04a7627",
@@ -1640,7 +1640,7 @@
       "lastName": "Gaor",
       "sectionId": "988c394d-d860-4d75-a257-4aa734649ecb",
       "isActive": true,
-      "updatedAt": "2026-03-16T15:55:51.203Z"
+      "updatedAt": "2026-03-16T16:11:31.542Z"
     },
     {
       "id": "844f21fe-90c6-41f9-9dc6-d73f5485877d",
@@ -1649,7 +1649,7 @@
       "lastName": "HERNANDEZ",
       "sectionId": "988c394d-d860-4d75-a257-4aa734649ecb",
       "isActive": true,
-      "updatedAt": "2026-03-16T15:55:51.203Z"
+      "updatedAt": "2026-03-16T16:11:31.542Z"
     },
     {
       "id": "9b3ceaec-3b8d-4300-ab05-df874c552387",
@@ -1658,7 +1658,7 @@
       "lastName": "Moreno",
       "sectionId": "988c394d-d860-4d75-a257-4aa734649ecb",
       "isActive": true,
-      "updatedAt": "2026-03-16T15:55:51.203Z"
+      "updatedAt": "2026-03-16T16:11:31.542Z"
     },
     {
       "id": "2bc2ed73-7ba5-4f8a-b953-9eddd02c12e7",
@@ -1667,7 +1667,7 @@
       "lastName": "Ong",
       "sectionId": "988c394d-d860-4d75-a257-4aa734649ecb",
       "isActive": true,
-      "updatedAt": "2026-03-16T15:55:51.203Z"
+      "updatedAt": "2026-03-16T16:11:31.542Z"
     },
     {
       "id": "4a6eb584-3da1-4969-90b7-79f961702b2c",
@@ -1676,7 +1676,7 @@
       "lastName": "Pagayon",
       "sectionId": "988c394d-d860-4d75-a257-4aa734649ecb",
       "isActive": true,
-      "updatedAt": "2026-03-16T15:55:51.203Z"
+      "updatedAt": "2026-03-16T16:11:31.542Z"
     },
     {
       "id": "b0e83c76-4029-42f8-924b-92256d64c98f",
@@ -1685,7 +1685,7 @@
       "lastName": "Quilicot",
       "sectionId": "988c394d-d860-4d75-a257-4aa734649ecb",
       "isActive": true,
-      "updatedAt": "2026-03-16T15:55:51.203Z"
+      "updatedAt": "2026-03-16T16:11:31.542Z"
     },
     {
       "id": "28e35825-a1f9-4331-8c35-bebe08c367e7",
@@ -2208,7 +2208,7 @@
         -0.0017831847071647644
       ],
       "isActive": true,
-      "updatedAt": "2026-03-16T15:55:51.203Z"
+      "updatedAt": "2026-03-16T16:11:31.542Z"
     }
   ],
   "classrooms": [
@@ -2224,7 +2224,7 @@
       "subjectName": "",
       "sectionCode": "SBIT4H",
       "professorId": "8e55fafb-d3b8-44a6-a6f2-ca4a682fc6d8",
-      "updatedAt": "2026-03-16T15:55:50.932Z"
+      "updatedAt": "2026-03-16T15:58:39.180Z"
     },
     {
       "id": "b2accd6d-33cd-4683-8492-6c46fb91cdcd",
@@ -2238,7 +2238,7 @@
       "subjectName": "",
       "sectionCode": "SBIT4H",
       "professorId": "8e55fafb-d3b8-44a6-a6f2-ca4a682fc6d8",
-      "updatedAt": "2026-03-16T15:55:50.932Z"
+      "updatedAt": "2026-03-16T15:58:39.180Z"
     },
     {
       "id": "b3467526-b3b2-4280-bb66-91a463e22e95",
@@ -2252,7 +2252,7 @@
       "subjectName": "",
       "sectionCode": "SBIT4H",
       "professorId": "9c0d8d07-f3f9-41a5-94a9-603776cb77de",
-      "updatedAt": "2026-03-16T15:55:50.932Z"
+      "updatedAt": "2026-03-16T15:58:39.180Z"
     }
   ],
   "sections": [
@@ -2262,7 +2262,7 @@
       "semester": "",
       "academicYear": "",
       "maxStudents": 0,
-      "updatedAt": "2026-03-16T15:55:50.948Z"
+      "updatedAt": "2026-03-16T15:58:39.220Z"
     }
   ]
 }
