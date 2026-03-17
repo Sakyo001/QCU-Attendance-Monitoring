@@ -1,0 +1,6 @@
+# Trained ArcFace model weights are saved here by train_arcface.py:
+#   arcface_model.pth    ← best checkpoint
+#   last_checkpoint.pth  ← latest checkpoint
+#
+# Training command:
+#   python training/train_arcface.py --backbone r50 --epochs 50 --device cuda

@@ -1,0 +1,37 @@
+# ============================================================
+# Face Recognition Attendance API (Railway/runtime)
+#
+# This repo contains training code too, but Railway only needs the
+# runtime dependencies to start the FastAPI server.
+# ============================================================
+
+# --- API Server ---
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+
+# --- Database ---
+SQLAlchemy>=2.0.0
+aiosqlite>=0.19.0
+
+# --- Numerical / Images ---
+numpy>=1.24.0
+Pillow>=10.0.0
+
+# --- Similarity Search ---
+faiss-cpu>=1.7.4
+
+# --- Recognition Engine (DeepFace) ---
+deepface>=0.0.93
+tf-keras>=2.16.0
+
+# OpenCV
+# DeepFace depends on OpenCV; force the headless wheel to avoid
+# GUI/X11 runtime dependencies.
+opencv-python-headless>=4.8.0
+
+# --- Utilities ---
+tqdm>=4.66.0
+pydantic>=2.4.0
+python-dotenv>=1.0.0
+loguru>=0.7.2

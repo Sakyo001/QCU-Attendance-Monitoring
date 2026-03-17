@@ -1,0 +1,7 @@
+# Place the two MiniFASNet pretrained weight files here:
+#   2.7_80x80_MiniFASNetV2.pth
+#   4_0_0_80x80_MiniFASNetV1SE.pth
+#
+# Download from:
+#   https://github.com/minivision-ai/Silent-Face-Anti-Spoofing
+#   -> resources/anti_spoof_models/
