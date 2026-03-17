@@ -43,28 +43,35 @@ export async function GET(request: NextRequest) {
       ((sections as any[]) || []).map((s: any) => [s.id, s.section_code])
     )
 
-    // Get emails from users table
+    // Get user UUID and emails from users table
     const studentNumbers = ((faceRegs as any[]) || []).map((f: any) => f.student_number)
     const { data: usersData, error: usersError } = await supabase
       .from('users')
-      .select('student_id, email')
+      .select('id, student_id, email')
       .in('student_id', studentNumbers)
 
-    const emailMap = new Map(
-      ((usersData as any[]) || []).map((u: any) => [u.student_id, u.email])
+    const userMap = new Map(
+      ((usersData as any[]) || []).map((u: any) => [u.student_id, { id: u.id, email: u.email }])
     )
 
-    // Combine all data
-    const studentsWithSections = ((faceRegs as any[]) || []).map((reg: any) => ({
-      id: reg.student_number,
-      first_name: reg.first_name,
-      last_name: reg.last_name,
-      email: emailMap.get(reg.student_number) || `${reg.student_number}@student.edu`,
-      student_id: reg.student_number,
-      is_active: reg.is_active ?? true,
-      section_id: reg.section_id,
-      section_code: reg.section_id ? sectionsMap.get(reg.section_id) : undefined
-    }))
+    // Combine all data - only include students with valid user records
+    const studentsWithSections = ((faceRegs as any[]) || []).map((reg: any) => {
+      const userData = userMap.get(reg.student_number)
+      // Only return students who have a user UUID in the database
+      if (!userData || !userData.id) {
+        return null
+      }
+      return {
+        id: userData.id,
+        first_name: reg.first_name,
+        last_name: reg.last_name,
+        email: userData.email,
+        student_id: reg.student_number,
+        is_active: reg.is_active ?? true,
+        section_id: reg.section_id,
+        section_code: reg.section_id ? sectionsMap.get(reg.section_id) : undefined
+      }
+    }).filter((s: any) => s !== null)
 
     return NextResponse.json(studentsWithSections)
   } catch (error: any) {

@@ -21,7 +21,7 @@ export async function DELETE(request: NextRequest) {
     const { error: deleteFaceError } = await supabase
       .from('student_face_registrations')
       .delete()
-      .eq('id', studentId)
+      .eq('student_id', studentId)
 
     if (deleteFaceError) {
       console.warn('⚠️ Warning deleting face registration:', deleteFaceError)

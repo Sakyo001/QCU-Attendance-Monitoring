@@ -276,6 +276,58 @@ export default function StudentsPage() {
     }
   }
 
+  const handleDeleteAll = async () => {
+    const result = await Swal.fire({
+      title: 'Delete All Students',
+      html: `Are you sure you want to delete <strong>all ${students.length} students</strong>? This action cannot be undone and will also remove them from the authentication system.`,
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: 'Delete All',
+      confirmButtonColor: '#dc2626',
+      cancelButtonText: 'Cancel',
+      reverseButtons: true
+    })
+
+    if (result.isConfirmed) {
+      try {
+        setLoadingStudents(true)
+        
+        const response = await fetch('/api/admin/students/delete-all', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' }
+        })
+
+        const result = await response.json()
+
+        if (!response.ok) {
+          console.error('❌ Delete all error:', result)
+          throw new Error(result.error || 'Failed to delete all students')
+        }
+
+        console.log('✅ All students deleted successfully')
+
+        await Swal.fire({
+          title: 'Success!',
+          text: `Deleted ${result.deletedCount || students.length} students`,
+          icon: 'success',
+          confirmButtonColor: '#7c3aed'
+        })
+
+        await fetchStudents()
+      } catch (error: any) {
+        console.error('Error deleting all students:', error)
+        await Swal.fire({
+          title: 'Error!',
+          text: error.message || 'Failed to delete all students',
+          icon: 'error',
+          confirmButtonColor: '#7c3aed'
+        })
+      } finally {
+        setLoadingStudents(false)
+      }
+    }
+  }
+
   const handleUpdateStudent = async (
     studentId: string,
     firstName: string,
@@ -458,6 +510,16 @@ export default function StudentsPage() {
                 <ChevronsUp className="w-4 h-4" />
                 Collapse All
               </button>
+              {students.length > 0 && (
+                <button
+                  onClick={handleDeleteAll}
+                  className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors flex items-center gap-2"
+                  title="Delete all students"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Delete All
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -557,7 +619,7 @@ export default function StudentsPage() {
                   <div className="divide-y divide-gray-200 border-t border-gray-200">
                     {group.students.map((student) => (
                       <div 
-                        key={student.id}
+                        key={`${group.section_id}-${student.student_id}`}
                         className="px-6 py-4 hover:bg-gray-50 transition-colors flex items-center justify-between"
                       >
                         <div className="flex-1">

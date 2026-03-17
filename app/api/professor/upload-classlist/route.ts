@@ -149,9 +149,44 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        // ── 3. Create Students (face registrations without face data) ────────
+        // ── 3. Create Students (users + face registrations) ─────────────────
         for (const student of sectionPayload.students) {
           try {
+            // Check if user already exists
+            const { data: existingUser } = await supabase
+              .from('users')
+              .select('id')
+              .eq('student_id', student.studentNumber)
+              .maybeSingle()
+
+            let userId: string
+
+            if (existingUser) {
+              userId = existingUser.id
+            } else {
+              // Create new user
+              const { data: newUser, error: userError } = await supabase
+                .from('users')
+                .insert({
+                  student_id: student.studentNumber,
+                  first_name: student.firstName,
+                  last_name: student.lastName,
+                  email: student.email || `${student.studentNumber}@student.edu`,
+                  role: 'student',
+                  is_active: true,
+                })
+                .select('id')
+                .single()
+
+              if (userError) {
+                results.errors.push(
+                  `User creation for ${student.studentNumber}: ${userError.message}`
+                )
+                continue
+              }
+              userId = newUser.id
+            }
+
             // Check if student_face_registrations already has this student
             const { data: existingReg } = await supabase
               .from('student_face_registrations')
@@ -160,11 +195,12 @@ export async function POST(request: NextRequest) {
               .maybeSingle()
 
             if (existingReg) {
-              // Update section_id and email if changed/missing
+              // Update section_id, email, and student_id
               const updateFields: Record<string, any> = {}
               if (existingReg.section_id !== sectionId) updateFields.section_id = sectionId
               if (student.email) updateFields.email = student.email
               if (student.middleName) updateFields.middle_name = student.middleName
+              updateFields.student_id = userId  // Link to user UUID
               if (Object.keys(updateFields).length > 0) {
                 await supabase
                   .from('student_face_registrations')
@@ -178,6 +214,7 @@ export async function POST(request: NextRequest) {
                 .from('student_face_registrations')
                 .insert({
                   student_number: student.studentNumber,
+                  student_id: userId,  // FK to users.id
                   first_name: student.firstName,
                   last_name: student.lastName,
                   middle_name: student.middleName || null,
