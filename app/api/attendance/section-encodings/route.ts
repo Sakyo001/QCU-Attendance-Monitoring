@@ -57,7 +57,13 @@ export async function GET(request: NextRequest) {
         }
       })
 
-      result = normalized
+      const dedupedByStudentNumber = new Map<string, any>()
+      normalized.forEach((s: any) => {
+        const key = String(s.student_number || '').trim().toLowerCase() || `id:${s.id}`
+        dedupedByStudentNumber.set(key, s)
+      })
+
+      result = Array.from(dedupedByStudentNumber.values())
         .filter((s: any) => Array.isArray(s.face_descriptor) && s.face_descriptor.length > 0)
         .map((s: any) => ({
           id: s.id,
@@ -94,7 +100,13 @@ export async function GET(request: NextRequest) {
       console.warn('⚠️ Failed to fetch section encodings from Supabase, falling back to offline cache:', error)
       source = 'offline-cache'
       const cachedStudents = await getOfflineStudentsBySection(sectionId)
-      result = cachedStudents
+      const dedupedCached = new Map<string, any>()
+      cachedStudents.forEach((s) => {
+        const key = String(s.studentNumber || '').trim().toLowerCase() || `id:${s.id}`
+        dedupedCached.set(key, s)
+      })
+
+      result = Array.from(dedupedCached.values())
         .filter((s) => Array.isArray(s.faceDescriptor) && s.faceDescriptor.length > 0)
         .map((s) => ({
           id: s.id,

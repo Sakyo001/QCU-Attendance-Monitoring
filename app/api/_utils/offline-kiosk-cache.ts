@@ -168,7 +168,24 @@ export async function upsertOfflineStudents(students: Array<Omit<OfflineStudent,
 
   for (const student of students) {
     const next = { ...student, updatedAt: now }
-    const idx = cache.students.findIndex((s) => s.id === student.id)
+
+    // Prefer stable identity by (sectionId + studentNumber) to survive delete/re-register
+    // where UUID id changes but student_number stays the same.
+    const normalizedSectionId = String(student.sectionId || '').trim().toLowerCase()
+    const normalizedStudentNumber = String(student.studentNumber || '').trim().toLowerCase()
+
+    let idx = -1
+    if (normalizedSectionId && normalizedStudentNumber) {
+      idx = cache.students.findIndex((s) => (
+        String(s.sectionId || '').trim().toLowerCase() === normalizedSectionId &&
+        String(s.studentNumber || '').trim().toLowerCase() === normalizedStudentNumber
+      ))
+    }
+
+    if (idx < 0) {
+      idx = cache.students.findIndex((s) => s.id === student.id)
+    }
+
     if (idx >= 0) {
       cache.students[idx] = next
     } else {
@@ -176,13 +193,38 @@ export async function upsertOfflineStudents(students: Array<Omit<OfflineStudent,
     }
   }
 
+  // Final cleanup: keep one record per (sectionId + studentNumber), choosing latest updatedAt.
+  const deduped = new Map<string, OfflineStudent>()
+  for (const s of cache.students) {
+    const key = `${String(s.sectionId || '').trim().toLowerCase()}::${String(s.studentNumber || '').trim().toLowerCase()}`
+    if (!String(s.studentNumber || '').trim()) {
+      deduped.set(`id::${s.id}`, s)
+      continue
+    }
+    const existing = deduped.get(key)
+    if (!existing || String(existing.updatedAt || '') < String(s.updatedAt || '')) {
+      deduped.set(key, s)
+    }
+  }
+  cache.students = Array.from(deduped.values())
+
   await writeCache(cache)
 }
 
 export async function getOfflineStudentsBySection(sectionId: string): Promise<OfflineStudent[]> {
   const cache = await readCache()
-  return cache.students
+  const dedup = new Map<string, OfflineStudent>()
+  cache.students
     .filter((s) => s.isActive && s.sectionId === sectionId)
+    .forEach((s) => {
+      const key = String(s.studentNumber || '').trim().toLowerCase() || `id:${s.id}`
+      const existing = dedup.get(key)
+      if (!existing || String(existing.updatedAt || '') < String(s.updatedAt || '')) {
+        dedup.set(key, s)
+      }
+    })
+
+  return Array.from(dedup.values())
     .sort((a, b) => a.lastName.localeCompare(b.lastName))
 }
 
@@ -197,7 +239,16 @@ export async function getOfflineStudentsWithFaceDescriptors(sectionId?: string):
     filtered = filtered.filter((s) => s.sectionId === sectionId)
   }
   
-  return filtered.sort((a, b) => a.lastName.localeCompare(b.lastName))
+  const dedup = new Map<string, OfflineStudent>()
+  filtered.forEach((s) => {
+    const key = `${String(s.sectionId || '').trim().toLowerCase()}::${String(s.studentNumber || '').trim().toLowerCase() || `id:${s.id}`}`
+    const existing = dedup.get(key)
+    if (!existing || String(existing.updatedAt || '') < String(s.updatedAt || '')) {
+      dedup.set(key, s)
+    }
+  })
+
+  return Array.from(dedup.values()).sort((a, b) => a.lastName.localeCompare(b.lastName))
 }
 
 export async function upsertOfflineClassrooms(classrooms: Array<Omit<OfflineClassroom, 'updatedAt'>>): Promise<void> {

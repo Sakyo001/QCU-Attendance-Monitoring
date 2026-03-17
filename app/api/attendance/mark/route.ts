@@ -67,6 +67,7 @@ export async function POST(request: NextRequest) {
     const {
       sectionId,
       studentId,
+      studentNumber,
       faceMatchConfidence,
       scheduleId,
       scheduleStartTime,
@@ -76,6 +77,7 @@ export async function POST(request: NextRequest) {
     console.log('📝 Mark attendance request:', {
       sectionId,
       studentId,
+      studentNumber,
       faceMatchConfidence,
       scheduleId,
       scheduleStartTime,
@@ -156,10 +158,30 @@ export async function POST(request: NextRequest) {
         .single()
 
       if (registrationError || !data) {
-        throw registrationError || new Error('Student registration not found')
+        // Fallback: student may have been deleted/re-registered; resolve by stable student_number.
+        if (studentNumber) {
+          const { data: byNumber, error: byNumberError } = await supabase
+            .from('student_face_registrations')
+            .select('id, first_name, last_name, student_number, section_id, is_active')
+            .eq('student_number', studentNumber)
+            .eq('section_id', sectionId)
+            .eq('is_active', true)
+            .limit(1)
+            .maybeSingle()
+
+          if (!byNumberError && byNumber) {
+            registration = byNumber
+            console.log('✅ Resolved registration by student_number fallback:', byNumber.student_number)
+          } else {
+            throw registrationError || byNumberError || new Error('Student registration not found')
+          }
+        } else {
+          throw registrationError || new Error('Student registration not found')
+        }
+      } else {
+        registration = data
       }
 
-      registration = data
       console.log('✅ Found registration from Supabase:', registration.first_name, registration.last_name)
     } catch (dbError) {
       // Fallback to offline cache
@@ -168,7 +190,12 @@ export async function POST(request: NextRequest) {
 
       try {
         const offlineStudents = await getOfflineStudentsBySection(sectionId)
-        const offlineStudent = offlineStudents.find((s) => s.id === studentId)
+        const normalizedStudentNumber = String(studentNumber || '').trim().toLowerCase()
+        const offlineStudent = offlineStudents.find((s) => {
+          if (s.id === studentId) return true
+          if (!normalizedStudentNumber) return false
+          return String(s.studentNumber || '').trim().toLowerCase() === normalizedStudentNumber
+        })
 
         if (!offlineStudent) {
           return NextResponse.json({

@@ -121,6 +121,7 @@ export default function Home() {
   const attendanceCanvasRef = useRef<HTMLCanvasElement>(null)
   const professorOverlayRef = useRef<HTMLCanvasElement>(null)
   const markedStudentIdsRef = useRef<Set<string>>(new Set())
+  const markedStudentNumbersRef = useRef<Set<string>>(new Set())
   const markingStudentIdsRef = useRef<Set<string>>(new Set())
   const lastActivityRef = useRef<number>(Date.now())
   const [isIdle, setIsIdle] = useState(false)
@@ -163,6 +164,7 @@ export default function Home() {
     id: string
     sectionId: string
     studentId: string
+    studentNumber?: string
     scheduleId?: string
     faceMatchConfidence?: number
     queuedAt: string
@@ -227,7 +229,20 @@ export default function Home() {
 
   const upsertLocalMark = (sectionId: string, mark: LocalMarkedStudent) => {
     const marks = loadLocalMarks(sectionId)
-    marks[mark.studentId] = mark
+    const normalizedStudentNumber = String(mark.studentNumber || '').trim().toLowerCase()
+    const key = normalizedStudentNumber ? `sn:${normalizedStudentNumber}` : `id:${mark.studentId}`
+
+    // Remove stale entries for the same student number to avoid duplicate rows after re-registration.
+    if (normalizedStudentNumber) {
+      for (const [existingKey, existingMark] of Object.entries(marks)) {
+        const existingNumber = String(existingMark.studentNumber || '').trim().toLowerCase()
+        if (existingKey !== key && existingNumber && existingNumber === normalizedStudentNumber) {
+          delete marks[existingKey]
+        }
+      }
+    }
+
+    marks[key] = mark
     saveLocalMarks(sectionId, marks)
   }
 
@@ -236,9 +251,23 @@ export default function Home() {
     const markValues = Object.values(marks)
     if (markValues.length === 0) return students
 
+    const markById = new Map(markValues.map((m) => [m.studentId, m]))
+    const markByStudentNumber = new Map(
+      markValues
+        .filter((m) => String(m.studentNumber || '').trim().length > 0)
+        .map((m) => [String(m.studentNumber).trim().toLowerCase(), m])
+    )
+
     const existingIds = new Set(students.map((s) => s.id))
+    const existingStudentNumbers = new Set(
+      students
+        .map((s) => String(s.studentNumber || '').trim().toLowerCase())
+        .filter(Boolean)
+    )
+
     const merged = students.map((s) => {
-      const mark = marks[s.id]
+      const normalizedStudentNumber = String(s.studentNumber || '').trim().toLowerCase()
+      const mark = (normalizedStudentNumber ? markByStudentNumber.get(normalizedStudentNumber) : undefined) || markById.get(s.id)
       if (!mark) return s
       return {
         ...s,
@@ -250,7 +279,8 @@ export default function Home() {
     })
 
     for (const mark of markValues) {
-      if (!existingIds.has(mark.studentId)) {
+      const normalizedStudentNumber = String(mark.studentNumber || '').trim().toLowerCase()
+      if (!existingIds.has(mark.studentId) && (!normalizedStudentNumber || !existingStudentNumbers.has(normalizedStudentNumber))) {
         merged.unshift({
           id: mark.studentId,
           studentNumber: mark.studentNumber,
@@ -362,13 +392,19 @@ export default function Home() {
     const items = loadQueue()
     // Avoid duplicates per day/section/student as best-effort
     const today = new Date().toISOString().split('T')[0]
-    const exists = items.some(i => i.sectionId === payload.sectionId && i.studentId === payload.studentId && i.queuedAt.startsWith(today))
+    const normalizedPayloadNumber = String(payload.studentNumber || '').trim().toLowerCase()
+    const exists = items.some(i => {
+      if (!(i.sectionId === payload.sectionId && i.queuedAt.startsWith(today))) return false
+      if (i.studentId === payload.studentId) return true
+      const normalizedQueuedNumber = String(i.studentNumber || '').trim().toLowerCase()
+      return !!normalizedPayloadNumber && normalizedQueuedNumber === normalizedPayloadNumber
+    })
     if (exists) {
       setQueuedMarksCount(items.length)
       return
     }
     const next: AttendanceMarkQueueItem = {
-      id: `${payload.sectionId}:${payload.studentId}:${Date.now()}`,
+      id: `${payload.sectionId}:${payload.studentNumber || payload.studentId}:${Date.now()}`,
       ...payload,
       queuedAt: new Date().toISOString(),
     }
@@ -398,6 +434,7 @@ export default function Home() {
           body: JSON.stringify({
             sectionId: item.sectionId,
             studentId: item.studentId,
+            studentNumber: item.studentNumber,
             faceMatchConfidence: item.faceMatchConfidence,
             scheduleId: item.scheduleId,
           }),
@@ -863,21 +900,29 @@ export default function Home() {
     const uiResults: Array<{ box: DetectedFace['box']; name: string; status: 'matched' | 'no-match' | 'already-marked' }> = []
 
     for (const face of result.faces) {
+      const allowOfflineSpoofFallback = !!systemOffline && !!face.spoofDetected && (typeof face.confidence === 'number' && face.confidence >= 0.92)
       if (
         face.matched &&
         typeof face.studentId === 'string' &&
         !!face.studentId &&
-        !face.spoofDetected &&
+        (!face.spoofDetected || allowOfflineSpoofFallback) &&
         (typeof face.confidence === 'number' && face.confidence >= MIN_MARK_CONFIDENCE)
       ) {
+        if (allowOfflineSpoofFallback) {
+          console.warn('⚠️ Offline spoof fallback: allowing high-confidence match despite spoof flag', {
+            studentId: face.studentId,
+            confidence: face.confidence,
+          })
+        }
         const studentId = face.studentId
+        const normalizedStudentNumber = String(face.studentNumber || '').trim().toLowerCase()
 
-        if (markedStudentIdsRef.current.has(studentId)) {
+        if (markedStudentIdsRef.current.has(studentId) || (!!normalizedStudentNumber && markedStudentNumbersRef.current.has(normalizedStudentNumber))) {
           uiResults.push({ box: face.box, name: face.name, status: 'already-marked' })
 
           // Check if student is in the current section's enrolled list
           setEnrolledStudents(prev => {
-            const index = prev.findIndex(s => s.id === studentId)
+            const index = prev.findIndex(s => s.id === studentId || (normalizedStudentNumber && String(s.studentNumber || '').trim().toLowerCase() === normalizedStudentNumber))
             if (index >= 0) {
               // Student already in roster — keep their marked status, don't update
               return prev
@@ -909,6 +954,7 @@ export default function Home() {
               if (markData.alreadyMarked) {
                 setSystemOffline(false)
                 markedStudentIdsRef.current.add(studentId)
+                if (normalizedStudentNumber) markedStudentNumbersRef.current.add(normalizedStudentNumber)
                 const recStatus = markData.record?.status === 'late' ? 'late' : 'present'
                 const nowIso = markData.record?.checked_in_at || new Date().toISOString()
                 const { firstName, lastName } = splitDisplayName(face.name || 'Unknown Student')
@@ -922,7 +968,7 @@ export default function Home() {
                   confidence: face.confidence ?? null,
                 })
                 setEnrolledStudents(prev => {
-                  const index = prev.findIndex(s => s.id === studentId)
+                  const index = prev.findIndex(s => s.id === studentId || (normalizedStudentNumber && String(s.studentNumber || '').trim().toLowerCase() === normalizedStudentNumber))
                   let next: EnrolledStudent[]
                   if (index >= 0) {
                     next = prev.map((s, i) => (
@@ -956,6 +1002,7 @@ export default function Home() {
               } else if (markData.success) {
                 setSystemOffline(false)
                 markedStudentIdsRef.current.add(studentId)
+                if (normalizedStudentNumber) markedStudentNumbersRef.current.add(normalizedStudentNumber)
                 markingStudentIdsRef.current.delete(studentId)
                 const recStatus = markData.record?.status || 'present'
                 const nowIso = markData.record?.checked_in_at || new Date().toISOString()
@@ -985,6 +1032,7 @@ export default function Home() {
                 queueAttendanceMark({
                   sectionId: selectedSchedule.sectionId,
                   studentId,
+                  studentNumber: face.studentNumber || undefined,
                   faceMatchConfidence: face.confidence ?? undefined,
                   scheduleId: selectedSchedule.id,
                 })
@@ -998,7 +1046,7 @@ export default function Home() {
                 // Only mark student if they are in the enrolled roster for this section
                 // This prevents false marks from students in other sections
                 setEnrolledStudents(prev => {
-                  const index = prev.findIndex(s => s.id === studentId)
+                  const index = prev.findIndex(s => s.id === studentId || (normalizedStudentNumber && String(s.studentNumber || '').trim().toLowerCase() === normalizedStudentNumber))
                   
                   // Student must be in the current section's enrolled list
                   if (index < 0) {
@@ -1008,6 +1056,7 @@ export default function Home() {
                   }
 
                   markedStudentIdsRef.current.add(studentId)
+                  if (normalizedStudentNumber) markedStudentNumbersRef.current.add(normalizedStudentNumber)
                   const nowIso = new Date().toISOString()
                   const { firstName, lastName } = splitDisplayName(face.name || 'Unknown Student')
                   upsertLocalMark(selectedSchedule.sectionId, {
@@ -1161,6 +1210,7 @@ export default function Home() {
     hasMarkedAbsentRef.current = false
     isMatchingRef.current = false
     markedStudentIdsRef.current = new Set()
+    markedStudentNumbersRef.current = new Set()
     markingStudentIdsRef.current = new Set()
 
     let hasLoadedEncodings = false
@@ -1451,6 +1501,7 @@ export default function Home() {
     scanCooldownUntilRef.current = Date.now() + 4000
     hasMarkedAbsentRef.current = false
     markedStudentIdsRef.current = new Set()
+    markedStudentNumbersRef.current = new Set()
     markingStudentIdsRef.current = new Set()
     // Switch back to extract mode for professor scan
     setCameraMode('extract')
