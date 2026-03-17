@@ -88,6 +88,24 @@ export async function GET(request: NextRequest) {
 
     console.log('✅ Found', sections?.length || 0, 'sections')
 
+    // Fetch class-session assignments to derive course/professor per section.
+    let sessionAssignments: any[] = []
+    try {
+      const { data: sessions, error: sessionsError } = await supabase
+        .from('class_sessions')
+        .select('section_id, professor_id, subject_code, subject_name')
+
+      if (sessionsError) {
+        throw sessionsError
+      }
+
+      sessionAssignments = sessions || []
+      console.log('✅ Found', sessionAssignments.length, 'class session assignments')
+    } catch (sessionsErr) {
+      console.warn('⚠️ Could not fetch class session assignments for reports:', sessionsErr)
+      sessionAssignments = []
+    }
+
     // Fetch professor details
     const { data: professors, error: professorsError } = await supabase
       .from('users')
@@ -102,21 +120,44 @@ export async function GET(request: NextRequest) {
       professors?.map((p: any) => [p.id, `${p.first_name} ${p.last_name}`]) ?? []
     )
 
+    const assignmentsBySection = new Map<string, any[]>()
+    for (const assignment of sessionAssignments) {
+      const key = String(assignment.section_id)
+      if (!assignmentsBySection.has(key)) {
+        assignmentsBySection.set(key, [])
+      }
+      assignmentsBySection.get(key)!.push(assignment)
+    }
+
     // Build section-wise reports
     const sectionReports = sections?.map((section: any) => {
       const sectionAttendance = allAttendance?.filter(
         (r: any) => r.section_id === section.id || r.section_id === section.id.toString()
       ) || []
 
+      const sectionAssignments = assignmentsBySection.get(String(section.id)) || []
+
       const presentInSection = sectionAttendance.filter(
         (r: any) => r.status === 'present'
       ).length
 
+      // Course display: prefer subject_code, then subject_name, then section course_id fallback.
+      const subjectCode = sectionAssignments.find((a: any) => !!a.subject_code)?.subject_code
+      const subjectName = sectionAssignments.find((a: any) => !!a.subject_name)?.subject_name
+      const courseCode = subjectCode || subjectName || (section.course_id ? `Course-${String(section.course_id).substring(0, 8)}` : 'N/A')
+
+      // Professor display: collect unique assigned professors for this section.
+      const professorNames = Array.from(new Set(
+        sectionAssignments
+          .map((a: any) => professorMap.get(a.professor_id))
+          .filter((name: string | undefined) => !!name)
+      )) as string[]
+
       return {
         id: section.id,
         section_name: section.section_code,
-        course_code: section.course_id ? `Course-${section.course_id.substring(0, 8)}` : 'N/A',
-        professor_name: 'Unassigned',
+        course_code: courseCode,
+        professor_name: professorNames.length > 0 ? professorNames.join(', ') : 'Unassigned',
         total_attendance_records: sectionAttendance.length,
         present_count: presentInSection,
         absent_count: sectionAttendance.filter((r: any) => r.status === 'absent').length,

@@ -73,20 +73,25 @@ export async function GET(request: NextRequest) {
         console.warn(`    Sample student:`, JSON.stringify(normalized[0], null, 2))
       }
 
-      // Persist online result for full offline recognition and name display.
-      await upsertOfflineStudents(
-        normalized.map((s: any) => ({
-          id: s.id,
-          studentNumber: s.student_number,
-          firstName: s.first_name,
-          lastName: s.last_name,
-          sectionId: s.section_id,
-          faceDescriptor: s.face_descriptor,
-          isActive: s.is_active,
-        }))
-      )
+      // Always update offline cache with fresh online data to keep it in sync
+      try {
+        await upsertOfflineStudents(
+          normalized.map((s: any) => ({
+            id: s.id,
+            studentNumber: s.student_number,
+            firstName: s.first_name,
+            lastName: s.last_name,
+            sectionId: s.section_id,
+            faceDescriptor: s.face_descriptor,
+            isActive: s.is_active,
+          }))
+        )
+        console.log(`✅ [section-encodings] Updated offline cache with ${normalized.length} students`)
+      } catch (syncErr) {
+        console.warn('⚠️ Failed to sync online data to offline cache:', syncErr)
+      }
     } catch (error) {
-      console.warn('⚠️ Failed to fetch section encodings from Supabase, using offline cache:', error)
+      console.warn('⚠️ Failed to fetch section encodings from Supabase, falling back to offline cache:', error)
       source = 'offline-cache'
       const cachedStudents = await getOfflineStudentsBySection(sectionId)
       result = cachedStudents
@@ -97,6 +102,8 @@ export async function GET(request: NextRequest) {
           student_number: s.studentNumber,
           embedding: s.faceDescriptor,
         }))
+      
+      console.log(`📦 [section-encodings] Using offline cache: ${result.length} students`)
     }
 
     console.log(`📚 Section ${sectionId}: ${result.length} students with face data`)

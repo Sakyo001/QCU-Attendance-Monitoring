@@ -123,19 +123,11 @@ class OfflineSyncService {
    */
   private async syncClassrooms() {
     try {
-      // Get current user's ID from localStorage or auth context
-      const authUserStr = localStorage.getItem('authUser')
-      if (!authUserStr) {
-        console.log('ℹ️ No user logged in, skipping classroom sync')
-        return true
-      }
-
-      const authUser = JSON.parse(authUserStr)
-      const response = await fetch(`/api/professor/classrooms?professorId=${authUser.id}`)
+      const response = await fetch('/api/admin/schedules')
       const data = await response.json()
 
-      if (response.ok && data.classrooms) {
-        console.log('📦 Synced', data.classrooms.length, 'classrooms to offline cache')
+      if (response.ok && data.classSessions) {
+        console.log('📦 Synced', data.classSessions.length, 'classrooms/schedules to offline cache')
         return true
       }
     } catch (error) {

@@ -16,6 +16,7 @@ import { getOfflineStudentsBySection } from '@/app/api/_utils/offline-kiosk-cach
  */
 function getAttendanceStatus(startTime: string | null, dayOfWeek: string | null): { status: 'present' | 'late'; locked: boolean } {
   if (!startTime || !dayOfWeek) {
+    console.warn('⚠️ Schedule missing startTime or dayOfWeek:', { startTime, dayOfWeek })
     return { status: 'present', locked: false }
   }
 
@@ -24,35 +25,37 @@ function getAttendanceStatus(startTime: string | null, dayOfWeek: string | null)
 
   // If not the right day, default to present
   if (today !== dayOfWeek) {
+    console.log(`⏳ Not today (${today} !== ${dayOfWeek}), marking as present`)
     return { status: 'present', locked: false }
   }
 
   // Parse start_time (e.g., "08:00:00" or "08:00")
-  const [hours, minutes] = startTime.split(':').map(Number)
+  const timeParts = startTime.split(':')
+  const hours = parseInt(timeParts[0], 10)
+  const minutes = parseInt(timeParts[1], 10)
+  
   const classStart = new Date(now)
   classStart.setHours(hours, minutes, 0, 0)
 
   const diffMs = now.getTime() - classStart.getTime()
   const diffMinutes = diffMs / (1000 * 60)
 
-  // Grace Period: 20 minutes after class start (students marked as 'present')
+  console.log(`⏱️ Schedule time: ${startTime}, Current time: ${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}, Diff: ${diffMinutes.toFixed(1)} min`)
+
   const GRACE_PERIOD = 20
-  // Late threshold: After 20 minutes, students marked as 'late'
-  const LATE_THRESHOLD = 20
-  // Lock threshold: After 30 minutes, attendance is locked
   const LOCK_THRESHOLD = 30
 
   if (diffMinutes < 0) {
-    // Before class starts — mark as present (early arrival)
+    console.log('✅ Before class — marking as present')
     return { status: 'present', locked: false }
   } else if (diffMinutes <= GRACE_PERIOD) {
-    // Within 20-minute grace period — mark as present
+    console.log('✅ Within grace period — marking as present')
     return { status: 'present', locked: false }
   } else if (diffMinutes <= LOCK_THRESHOLD) {
-    // After 20 minutes but within lock window — mark as late
+    console.log('⚠️ Late — marking as late')
     return { status: 'late', locked: false }
   } else {
-    // After lock threshold — mark as late, attendance locked
+    console.log('🔒 Locked — no more marking allowed')
     return { status: 'late', locked: true }
   }
 }
@@ -61,9 +64,23 @@ export async function POST(request: NextRequest) {
   try {
     const supabase = getSupabaseAdmin()
     const body = await request.json()
-    const { sectionId, studentId, faceMatchConfidence, scheduleId } = body
+    const {
+      sectionId,
+      studentId,
+      faceMatchConfidence,
+      scheduleId,
+      scheduleStartTime,
+      scheduleDayOfWeek,
+    } = body
 
-    console.log('📝 Mark attendance request:', { sectionId, studentId, faceMatchConfidence, scheduleId })
+    console.log('📝 Mark attendance request:', {
+      sectionId,
+      studentId,
+      faceMatchConfidence,
+      scheduleId,
+      scheduleStartTime,
+      scheduleDayOfWeek,
+    })
 
     if (!sectionId || !studentId) {
       return NextResponse.json({ 
@@ -93,10 +110,19 @@ export async function POST(request: NextRequest) {
       classSession = data
     }
 
-    // Determine status based on class time
+    // Determine status based on class time.
+    // In offline mode Supabase may be unreachable, so fall back to schedule info
+    // sent from the kiosk-selected session.
+    const effectiveStartTime = classSession?.start_time || scheduleStartTime || null
+    const effectiveDayOfWeek = classSession?.day_of_week || scheduleDayOfWeek || null
+    console.log('⏱️ Attendance status source:', {
+      source: classSession ? 'class_sessions' : 'request-fallback',
+      effectiveStartTime,
+      effectiveDayOfWeek,
+    })
     const { status: attendanceStatus, locked } = getAttendanceStatus(
-      classSession?.start_time || null,
-      classSession?.day_of_week || null
+      effectiveStartTime,
+      effectiveDayOfWeek
     )
 
     // If locked, reject the attendance marking

@@ -1,6 +1,6 @@
 import { createServiceRoleClient } from '@/utils/supabase/service-role'
 import { NextRequest, NextResponse } from 'next/server'
-import { getAllOfflineSections, getAllOfflineClassrooms, upsertOfflineSections, upsertOfflineClassrooms } from '@/app/api/_utils/offline-kiosk-cache'
+import { getAllOfflineSections, getAllOfflineClassrooms, upsertOfflineSections, upsertOfflineClassrooms, upsertOfflineSchedules } from '@/app/api/_utils/offline-kiosk-cache'
 
 async function readScheduleId(request: NextRequest): Promise<string | null> {
   const idFromQuery = request.nextUrl.searchParams.get('id')
@@ -78,7 +78,7 @@ export async function GET(request: NextRequest) {
       }
       professorsData = professors || []
 
-      // Save to offline cache
+      // Save to offline cache (both classrooms and schedules arrays for consistency)
       if (sessionsData.length > 0) {
         const offlineClassrooms = (sessionsData as any[]).map((s) => ({
           id: s.id,
@@ -93,7 +93,33 @@ export async function GET(request: NextRequest) {
           sectionCode: s.sections?.section_code || '',
           professorId: s.professor_id,
         }))
+        
+        // Query actual student counts for each session
+        const offlineSchedulesWithCounts = await Promise.all(
+          (sessionsData as any[]).map(async (s) => {
+            const { count } = await supabase
+              .from('student_face_registrations')
+              .select('id', { count: 'exact', head: true })
+              .eq('section_id', s.section_id)
+            
+            return {
+              id: s.id,
+              professorId: s.professor_id,
+              sectionId: s.section_id,
+              sectionCode: s.sections?.section_code || '',
+              room: s.room,
+              dayOfWeek: s.day_of_week,
+              startTime: s.start_time,
+              endTime: s.end_time,
+              totalStudents: count || 0, // Use actual count
+              semester: s.sections?.semester,
+              academicYear: s.sections?.academic_year,
+            }
+          })
+        )
+
         await upsertOfflineClassrooms(offlineClassrooms)
+        await upsertOfflineSchedules(offlineSchedulesWithCounts)
         console.log('📦 Saved', offlineClassrooms.length, 'classrooms to offline cache')
       }
 

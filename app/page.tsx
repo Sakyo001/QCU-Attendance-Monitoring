@@ -268,23 +268,61 @@ export default function Home() {
 
   const computeLocalAttendanceStatus = (schedule: ScheduleInfo): { status: 'present' | 'late'; locked: boolean } => {
     const { startTime, dayOfWeek } = schedule
-    if (!startTime || !dayOfWeek) return { status: 'present', locked: false }
+    if (!startTime || !dayOfWeek) {
+      console.warn('⚠️ Schedule missing startTime or dayOfWeek:', { startTime, dayOfWeek })
+      return { status: 'present', locked: false }
+    }
+
     const now = new Date()
     const today = now.toLocaleDateString('en-US', { weekday: 'long' })
-    if (today !== dayOfWeek) return { status: 'present', locked: false }
+    
+    // More robust day comparison (handle case variations)
+    const dayMatch = today.toLowerCase() === dayOfWeek.toLowerCase()
+    console.log(`📅 Day check: today="${today}" vs schedule="${dayOfWeek}" → match=${dayMatch}`)
+    
+    if (!dayMatch) {
+      // Still offline mode: if offline and day doesn't match, we can't be sure
+      // Log it but continue to time check anyway (in case cached data has wrong day)
+      console.log(`⚠️ Day of week mismatch (${today} !== ${dayOfWeek}), but continuing with time check for offline robustness`)
+    }
 
-    const [hours, minutes] = startTime.split(':').map(Number)
+    // Parse start_time (e.g., "08:00:00" or "08:00" or "8:00")
+    let hours: number, minutes: number
+    try {
+      const timeParts = startTime.split(':')
+      hours = parseInt(timeParts[0], 10)
+      minutes = parseInt(timeParts[1], 10)
+      if (isNaN(hours) || isNaN(minutes)) throw new Error('Invalid time format')
+    } catch (e) {
+      console.error('❌ Failed to parse startTime:', startTime, e)
+      return { status: 'present', locked: false }
+    }
+    
     const classStart = new Date(now)
     classStart.setHours(hours, minutes, 0, 0)
 
-    const diffMinutes = (now.getTime() - classStart.getTime()) / (1000 * 60)
+    const diffMs = now.getTime() - classStart.getTime()
+    const diffMinutes = diffMs / (1000 * 60)
+
+    const currentTimeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`
+    console.log(`⏱️ Class start: ${startTime} | Current time: ${currentTimeStr} | Difference: ${diffMinutes.toFixed(1)} minutes`)
+
     const GRACE_PERIOD = 20
     const LOCK_THRESHOLD = 30
 
-    if (diffMinutes < 0) return { status: 'present', locked: false }
-    if (diffMinutes <= GRACE_PERIOD) return { status: 'present', locked: false }
-    if (diffMinutes <= LOCK_THRESHOLD) return { status: 'late', locked: false }
-    return { status: 'late', locked: true }
+    if (diffMinutes < 0) {
+      console.log(`✅ Before class start (${diffMinutes.toFixed(1)} min before) — marking as present`)
+      return { status: 'present', locked: false }
+    } else if (diffMinutes <= GRACE_PERIOD) {
+      console.log(`✅ Within grace period (${diffMinutes.toFixed(1)}/${GRACE_PERIOD} min) — marking as present`)
+      return { status: 'present', locked: false }
+    } else if (diffMinutes <= LOCK_THRESHOLD) {
+      console.log(`⚠️ Late! (${diffMinutes.toFixed(1)}/${LOCK_THRESHOLD} min) — marking as late`)
+      return { status: 'late', locked: false }
+    } else {
+      console.log(`🔒 Locked! (${diffMinutes.toFixed(1)} > ${LOCK_THRESHOLD} min) — no more marking allowed`)
+      return { status: 'late', locked: true }
+    }
   }
 
   const splitDisplayName = (fullName: string) => {
@@ -837,31 +875,17 @@ export default function Home() {
         if (markedStudentIdsRef.current.has(studentId)) {
           uiResults.push({ box: face.box, name: face.name, status: 'already-marked' })
 
-          // Keep the original marked status. Do NOT recompute on re-scan,
-          // otherwise a previously 'present' student can flip to 'late'.
+          // Check if student is in the current section's enrolled list
           setEnrolledStudents(prev => {
             const index = prev.findIndex(s => s.id === studentId)
-            let next: EnrolledStudent[]
-
             if (index >= 0) {
-              next = prev
+              // Student already in roster — keep their marked status, don't update
+              return prev
             } else {
-              const { firstName, lastName } = splitDisplayName(face.name || 'Unknown Student')
-              next = [
-                {
-                  id: studentId,
-                  studentNumber: face.studentNumber || '',
-                  firstName,
-                  lastName,
-                  status: 'present',
-                  checkedInAt: null,
-                  confidence: face.confidence ?? null,
-                },
-                ...prev,
-              ]
+              // Student not in current section's roster — don't add them
+              // This prevents marking students from other sections due to false face matches
+              return prev
             }
-            setStats(computeStatsFromStudents(next))
-            return next
           })
         } else {
           uiResults.push({ box: face.box, name: face.name, status: 'matched' })
@@ -876,7 +900,9 @@ export default function Home() {
                 sectionId: selectedSchedule.sectionId,
                 studentId,
                 faceMatchConfidence: face.confidence,
-                scheduleId: selectedSchedule.id
+                scheduleId: selectedSchedule.id,
+                scheduleStartTime: selectedSchedule.startTime,
+                scheduleDayOfWeek: selectedSchedule.dayOfWeek,
               })
             }).then(async res => {
               const markData = await res.json()
@@ -945,6 +971,11 @@ export default function Home() {
                 })
                 playSound(recStatus === 'late' ? 'late' : 'success')
                 refreshStudentList()
+              } else {
+                // API returned an error or unexpected response
+                console.warn('⚠️ Failed to mark attendance:', markData.error || 'Unknown error')
+                // Do not mark the student — API rejected them (likely not in this section or other validation)
+                markingStudentIdsRef.current.delete(studentId)
               }
             }).catch(() => {
               // Offline-safe: queue the mark and update UI immediately.
@@ -964,47 +995,41 @@ export default function Home() {
                 setAttendanceLocked(true)
                 setPhase('attendance-locked')
               } else {
-                markedStudentIdsRef.current.add(studentId)
-                const nowIso = new Date().toISOString()
-                const { firstName, lastName } = splitDisplayName(face.name || 'Unknown Student')
-                upsertLocalMark(selectedSchedule.sectionId, {
-                  studentId,
-                  studentNumber: face.studentNumber || '',
-                  firstName,
-                  lastName,
-                  status,
-                  checkedInAt: nowIso,
-                  confidence: face.confidence ?? null,
-                })
+                // Only mark student if they are in the enrolled roster for this section
+                // This prevents false marks from students in other sections
                 setEnrolledStudents(prev => {
                   const index = prev.findIndex(s => s.id === studentId)
-                  let next: EnrolledStudent[]
-
-                  if (index >= 0) {
-                    next = prev.map((s, i) => (
-                      i === index
-                        ? { ...s, status, checkedInAt: nowIso, confidence: face.confidence ?? null }
-                        : s
-                    ))
-                  } else {
-                    next = [
-                      {
-                        id: studentId,
-                        studentNumber: face.studentNumber || '',
-                        firstName,
-                        lastName,
-                        status,
-                        checkedInAt: nowIso,
-                        confidence: face.confidence ?? null,
-                      },
-                      ...prev,
-                    ]
+                  
+                  // Student must be in the current section's enrolled list
+                  if (index < 0) {
+                    console.warn('⚠️ Face matched but student not enrolled in this section:', studentId)
+                    // Do not add them; they're likely from another section
+                    return prev
                   }
 
+                  markedStudentIdsRef.current.add(studentId)
+                  const nowIso = new Date().toISOString()
+                  const { firstName, lastName } = splitDisplayName(face.name || 'Unknown Student')
+                  upsertLocalMark(selectedSchedule.sectionId, {
+                    studentId,
+                    studentNumber: face.studentNumber || '',
+                    firstName,
+                    lastName,
+                    status,
+                    checkedInAt: nowIso,
+                    confidence: face.confidence ?? null,
+                  })
+
+                  const next = prev.map((s, i) => (
+                    i === index
+                      ? { ...s, status, checkedInAt: nowIso, confidence: face.confidence ?? null }
+                      : s
+                  ))
+
                   setStats(computeStatsFromStudents(next))
+                  playSound(status === 'late' ? 'late' : 'success')
                   return next
                 })
-                playSound(status === 'late' ? 'late' : 'success')
               }
               markingStudentIdsRef.current.delete(studentId)
             })
@@ -1037,12 +1062,108 @@ export default function Home() {
 
   // ============ Phase 2: Schedule Select ============
 
+  // Periodically refresh schedules to pick up newly created classrooms
+  useEffect(() => {
+    if (phase !== 'schedule-select' || !professor) return
+
+    const refreshSchedules = async () => {
+      try {
+        const res = await fetch(`/api/kiosk/professor-schedule?professorId=${professor.id}`)
+        const data = await res.json()
+        if (data.success && Array.isArray(data.schedules)) {
+          setSchedules(data.schedules)
+          
+          // Pre-fetch face encodings for all schedules so they're cached before going offline
+          data.schedules.forEach((schedule: ScheduleInfo) => {
+            if (!loadEncodingsCache(schedule.sectionId)) {
+              // Only fetch if not already cached
+              fetch(`/api/attendance/section-encodings?sectionId=${schedule.sectionId}`)
+                .then(res => res.json())
+                .then(data => {
+                  if (data.success && data.students?.length > 0) {
+                    saveEncodingsCache(schedule.sectionId, data.students)
+                    console.log(`📚 Pre-cached ${data.students.length} encodings for section ${schedule.sectionId}`)
+                  }
+                })
+                .catch(err => console.warn(`⚠️ Failed to pre-cache encodings for section ${schedule.sectionId}:`, err))
+            }
+          })
+        }
+      } catch (err) {
+        console.warn('Failed to refresh schedules:', err)
+      }
+    }
+
+    // Refresh immediately, then every 30 seconds to pick up newly created classrooms
+    refreshSchedules()
+    const interval = setInterval(refreshSchedules, 30000)
+    return () => clearInterval(interval)
+  }, [phase, professor])
+
+  // Pre-load all offline cache data to browser on mount to ensure it's available when offline
+  useEffect(() => {
+    const preloadOfflineCache = async () => {
+      try {
+        // Fetch all offline cache data for this professor's classrooms
+        const res = await fetch(`/api/attendance/preload-offline-cache`)
+        if (!res.ok) return
+        
+        const data = await res.json()
+        if (data.success && data.students && Array.isArray(data.students)) {
+          // Group students by section and cache each section's encodings
+          const sections = new Map<string, any[]>()
+          data.students.forEach((student: any) => {
+            if (student.sectionId) {
+              if (!sections.has(student.sectionId)) {
+                sections.set(student.sectionId, [])
+              }
+              if (student.faceDescriptor && Array.isArray(student.faceDescriptor)) {
+                sections.get(student.sectionId)!.push({
+                  id: student.id,
+                  name: `${student.firstName} ${student.lastName}`.trim(),
+                  student_number: student.studentNumber,
+                  embedding: student.faceDescriptor,
+                })
+              }
+            }
+          })
+          
+          // Cache each section's encodings to localStorage
+          sections.forEach((students, sectionId) => {
+            if (students.length > 0 && !loadEncodingsCache(sectionId)) {
+              saveEncodingsCache(sectionId, students)
+              console.log(`📦 Pre-loaded ${students.length} face encodings for section ${sectionId} from offline cache`)
+            }
+          })
+        }
+      } catch (err) {
+        console.warn('⚠️ Failed to pre-load offline cache:', err)
+        // Not critical - will fall back to on-demand loading
+      }
+    }
+
+    // Run on page load
+    preloadOfflineCache()
+  }, [])
+
   const selectSchedule = useCallback(async (schedule: ScheduleInfo) => {
+    console.log('📋 Starting selectSchedule for:', schedule.sectionCode)
+    console.log('📋 Schedule details:', {
+      id: schedule.id,
+      sectionCode: schedule.sectionCode,
+      room: schedule.room,
+      dayOfWeek: schedule.dayOfWeek,
+      startTime: schedule.startTime,
+      endTime: schedule.endTime,
+      totalStudents: schedule.totalStudents,
+    })
     setSelectedSchedule(schedule)
     hasMarkedAbsentRef.current = false
     isMatchingRef.current = false
     markedStudentIdsRef.current = new Set()
     markingStudentIdsRef.current = new Set()
+
+    let hasLoadedEncodings = false
 
     // Load enrolled face encodings into Python server session cache
     try {
@@ -1050,39 +1171,107 @@ export default function Home() {
       const data = await res.json()
       if (data.success && data.students?.length > 0) {
         setSystemOffline(false)
+        // Always update the cache with fresh data from server/offline-cache
         saveEncodingsCache(schedule.sectionId, data.students)
         const preloadedRoster = buildOfflineRosterFromEncodings(data.students)
         const mergedRoster = applyLocalMarksToRoster(schedule.sectionId, preloadedRoster)
         setEnrolledStudents(mergedRoster)
         setStats(computeStatsFromStudents(mergedRoster))
         await loadSessionEncodings(schedule.sectionId, data.students)
-        console.log(`\u{1F4DA} Session loaded: ${data.students.length} students`)
+        console.log(`\u{1F4DA} Session loaded: ${data.students.length} students with face descriptors`)
+        hasLoadedEncodings = true
+      } else {
+        // API returned no students, but we're still online - try cache as fallback
+        console.warn('⚠️ API returned no students for section:', schedule.sectionId)
       }
     } catch (err) {
-      console.error('Failed to load session encodings:', err)
-      if (isLikelyNetworkError(err)) setSystemOffline(true)
+      console.warn('❌ Failed to fetch from API:', err)
+      if (isLikelyNetworkError(err)) {
+        setSystemOffline(true)
+        console.log('📴 Switched to offline mode')
+      }
+    }
 
-      // Offline: load cached encodings so recognition can continue.
+    // Offline or no results: load cached encodings so recognition can continue
+    if (!hasLoadedEncodings) {
+      console.log('🔄 Attempting to load cached encodings for section:', schedule.sectionId)
+      
+      // Try browser localStorage first (fastest, works fully offline)
       const cached = loadEncodingsCache(schedule.sectionId)
       if (cached && cached.length > 0) {
+        console.log(`✅ Found ${cached.length} encodings in browser cache`)
         try {
           const offlineRoster = buildOfflineRosterFromEncodings(cached)
           const mergedRoster = applyLocalMarksToRoster(schedule.sectionId, offlineRoster)
           setEnrolledStudents(mergedRoster)
           setStats(computeStatsFromStudents(mergedRoster))
           await loadSessionEncodings(schedule.sectionId, cached)
-          console.log(`\u{1F4DA} Session loaded from cache: ${cached.length} students`)
-        } catch {}
+          console.log(`\u{1F4DA} Session loaded from browser cache: ${cached.length} students`)
+          hasLoadedEncodings = true
+        } catch (loadErr) {
+          console.warn('⚠️ Failed to load session from browser cache:', loadErr)
+        }
+      } else {
+        console.warn('⚠️ No cached face encodings found in browser storage for section:', schedule.sectionId)
+        console.warn('💡 TIP: Face encodings should be pre-cached on page load. If offline, try going online and reopening the kiosk.')
+        // Still proceed with empty roster - at least the attendance page will load
+        setEnrolledStudents([])
+        setStats({ presentCount: 0, lateCount: 0, absentCount: schedule.totalStudents })
       }
     }
 
     // Best-effort: try to sync any queued marks immediately when starting.
     flushAttendanceQueue().catch(() => {})
 
+    console.log('✅ Transitioning to attendance-active phase')
     setPhase('attendance-active')
   }, [])
 
   // ============ Phase 3: Attendance Scanning ============
+
+  // Periodically refresh face encodings to pick up newly registered students
+  useEffect(() => {
+    if ((phase !== 'attendance-active' && phase !== 'attendance-locked') || !selectedSchedule) return
+
+    const refreshFaceEncodings = async () => {
+      try {
+        console.log('🔄 Refreshing face encodings for section:', selectedSchedule.sectionId)
+        const res = await fetch(`/api/attendance/section-encodings?sectionId=${selectedSchedule.sectionId}`)
+        const data = await res.json()
+        
+        if (data.success && data.students?.length > 0) {
+          setSystemOffline(false)
+          // Update cache with fresh encodings
+          saveEncodingsCache(selectedSchedule.sectionId, data.students)
+          // Reload into Python server session
+          try {
+            await loadSessionEncodings(selectedSchedule.sectionId, data.students)
+            console.log(`✅ Face encodings refreshed: ${data.students.length} students`)
+          } catch (loadErr) {
+            console.warn('⚠️ Failed to load session encodings:', loadErr)
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to refresh face encodings:', err)
+        if (isLikelyNetworkError(err)) {
+          setSystemOffline(true)
+          // Fallback to offline cache
+          const cached = loadEncodingsCache(selectedSchedule.sectionId)
+          if (cached && cached.length > 0) {
+            try {
+              await loadSessionEncodings(selectedSchedule.sectionId, cached)
+              console.log(`✅ Face encodings reloaded from offline cache: ${cached.length} students`)
+            } catch {}
+          }
+        }
+      }
+    }
+
+    // Refresh face encodings every 10 seconds to pick up newly registered students
+    const interval = setInterval(refreshFaceEncodings, 10000)
+    
+    return () => clearInterval(interval)
+  }, [phase, selectedSchedule])
 
   // Fetch enrolled students periodically
   useEffect(() => {
