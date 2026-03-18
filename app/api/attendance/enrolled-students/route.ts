@@ -11,6 +11,7 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     const sectionId = searchParams.get('sectionId')
+    const scheduleId = searchParams.get('scheduleId')
 
     if (!sectionId) {
       return NextResponse.json({ error: 'sectionId required' }, { status: 400 })
@@ -34,10 +35,14 @@ export async function GET(request: NextRequest) {
         throw studentsError
       }
 
-      // Get today's attendance records
+      // Get today's attendance records using schedule-specific session ID
       const todayDate = new Date().toISOString().split('T')[0]
-      const sessionKey = `attendance-${sectionId}-${todayDate}`
+      const sessionKey = scheduleId
+        ? `attendance-${scheduleId}-${todayDate}`
+        : `attendance-${sectionId}-${todayDate}`
       const sessionId = uuidv5(sessionKey, NAMESPACE_NIL)
+
+      console.log('📚 Enrolled-students using session:', { sessionKey, sessionId, scheduleId })
 
       const { data: records, error: recordsError } = await supabase
         .from('attendance_records')

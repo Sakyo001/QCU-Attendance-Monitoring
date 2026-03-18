@@ -10,15 +10,19 @@ export async function POST(request: NextRequest) {
   try {
     const supabase = getSupabaseAdmin()
     const body = await request.json()
-    const { sectionId } = body
+    const { sectionId, scheduleId } = body
 
     if (!sectionId) {
       return NextResponse.json({ error: 'sectionId is required' }, { status: 400 })
     }
 
     const todayDate = new Date().toISOString().split('T')[0]
-    const sessionKey = `attendance-${sectionId}-${todayDate}`
+    const sessionKey = scheduleId
+      ? `attendance-${scheduleId}-${todayDate}`
+      : `attendance-${sectionId}-${todayDate}`
     const sessionId = uuidv5(sessionKey, NAMESPACE_NIL)
+
+    console.log('📝 Mark-absent using session:', { sessionKey, sessionId, scheduleId })
 
     // Get all registered students in this section
     const { data: allStudents, error: studentsError } = await supabase

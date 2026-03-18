@@ -167,6 +167,7 @@ export default function Home() {
     studentNumber?: string
     scheduleId?: string
     faceMatchConfidence?: number
+    status?: 'present' | 'late'
     queuedAt: string
   }
 
@@ -437,6 +438,7 @@ export default function Home() {
             studentNumber: item.studentNumber,
             faceMatchConfidence: item.faceMatchConfidence,
             scheduleId: item.scheduleId,
+            status: item.status,
           }),
         })
 
@@ -1029,16 +1031,16 @@ export default function Home() {
               setSystemOffline(true)
 
               try {
+                const { status, locked } = computeLocalAttendanceStatus(selectedSchedule)
                 queueAttendanceMark({
                   sectionId: selectedSchedule.sectionId,
                   studentId,
                   studentNumber: face.studentNumber || undefined,
                   faceMatchConfidence: face.confidence ?? undefined,
                   scheduleId: selectedSchedule.id,
+                  status: locked ? undefined : status,
                 })
               } catch {}
-
-              const { status, locked } = computeLocalAttendanceStatus(selectedSchedule)
               if (locked) {
                 setAttendanceLocked(true)
                 setPhase('attendance-locked')
@@ -1332,7 +1334,7 @@ export default function Home() {
     const fetchStudents = async () => {
       try {
         const res = await fetch(
-          `/api/attendance/enrolled-students?sectionId=${selectedSchedule.sectionId}`,
+          `/api/attendance/enrolled-students?sectionId=${selectedSchedule.sectionId}&scheduleId=${selectedSchedule.id}`,
           { signal: controller.signal }
         )
         const data = await res.json()
@@ -1430,7 +1432,7 @@ export default function Home() {
   const refreshStudentList = async () => {
     if (!selectedSchedule) return
     try {
-      const res = await fetch(`/api/attendance/enrolled-students?sectionId=${selectedSchedule.sectionId}`)
+      const res = await fetch(`/api/attendance/enrolled-students?sectionId=${selectedSchedule.sectionId}&scheduleId=${selectedSchedule.id}`)
       const data = await res.json()
       if (data.success) {
         setSystemOffline(false)
@@ -1457,7 +1459,7 @@ export default function Home() {
       await fetch('/api/attendance/mark-absent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sectionId: selectedSchedule.sectionId })
+        body: JSON.stringify({ sectionId: selectedSchedule.sectionId, scheduleId: selectedSchedule.id })
       })
       playSound('error')
       // Refresh the student list to show newly absent students

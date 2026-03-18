@@ -72,6 +72,7 @@ export async function POST(request: NextRequest) {
       scheduleId,
       scheduleStartTime,
       scheduleDayOfWeek,
+      status: providedStatus,
     } = body
 
     console.log('📝 Mark attendance request:', {
@@ -82,6 +83,7 @@ export async function POST(request: NextRequest) {
       scheduleId,
       scheduleStartTime,
       scheduleDayOfWeek,
+      providedStatus,
     })
 
     if (!sectionId || !studentId) {
@@ -93,39 +95,73 @@ export async function POST(request: NextRequest) {
     // Get class session info for time-based rules
     let classSession: any = null
     if (scheduleId) {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('class_sessions')
-        .select('start_time, end_time, day_of_week')
+        .select('id, start_time, end_time, day_of_week, section_id')
         .eq('id', scheduleId)
         .single()
+      
+      if (error) {
+        console.error('❌ Failed to fetch scheduleId:', scheduleId, error)
+      }
       classSession = data
+      console.log('📚 Fetched class session by scheduleId:', { 
+        scheduleId, 
+        found: !!classSession,
+        start_time: classSession?.start_time,
+        section_id: classSession?.section_id 
+      })
     } else {
       // Try to find a session for this section today
       const today = new Date().toLocaleDateString('en-US', { weekday: 'long' })
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('class_sessions')
-        .select('start_time, end_time, day_of_week')
+        .select('id, start_time, end_time, day_of_week, section_id')
         .eq('section_id', sectionId)
         .eq('day_of_week', today)
         .limit(1)
         .single()
+      
+      if (error) {
+        console.warn('⚠️ Failed to fetch session for section:', { sectionId, today, error })
+      }
       classSession = data
+      console.log('📚 Fetched class session by section/day fallback:', {
+        sectionId,
+        today,
+        found: !!classSession,
+        sessionId: classSession?.id,
+        start_time: classSession?.start_time
+      })
     }
 
-    // Determine status based on class time.
-    // In offline mode Supabase may be unreachable, so fall back to schedule info
-    // sent from the kiosk-selected session.
-    const effectiveStartTime = classSession?.start_time || scheduleStartTime || null
-    const effectiveDayOfWeek = classSession?.day_of_week || scheduleDayOfWeek || null
-    console.log('⏱️ Attendance status source:', {
-      source: classSession ? 'class_sessions' : 'request-fallback',
-      effectiveStartTime,
-      effectiveDayOfWeek,
-    })
-    const { status: attendanceStatus, locked } = getAttendanceStatus(
-      effectiveStartTime,
-      effectiveDayOfWeek
-    )
+    // Determine status based on class time OR use pre-computed status from offline queue
+    // In offline mode, the status was already computed by the kiosk at queue time
+    // If providedStatus is available, use it (offline queue with pre-computed status)
+    // Otherwise, compute it from the class session info (online mode)
+    let attendanceStatus: 'present' | 'late'
+    let locked = false
+
+    if (providedStatus && (providedStatus === 'present' || providedStatus === 'late')) {
+      // Use status from offline queue (computed by kiosk at queue time)
+      attendanceStatus = providedStatus
+      console.log('📱 Using pre-computed status from offline queue:', { providedStatus })
+    } else {
+      // Compute status from schedule (online mode or fresh request)
+      const effectiveStartTime = classSession?.start_time || scheduleStartTime || null
+      const effectiveDayOfWeek = classSession?.day_of_week || scheduleDayOfWeek || null
+      console.log('⏱️ Attendance status source:', {
+        source: classSession ? 'class_sessions' : 'request-fallback',
+        effectiveStartTime,
+        effectiveDayOfWeek,
+      })
+      const computed = getAttendanceStatus(
+        effectiveStartTime,
+        effectiveDayOfWeek
+      )
+      attendanceStatus = computed.status
+      locked = computed.locked
+    }
 
     // If locked, reject the attendance marking
     if (locked) {
@@ -140,11 +176,14 @@ export async function POST(request: NextRequest) {
     // Get today's date
     const todayDate = new Date().toISOString().split('T')[0]
 
-    // Generate a deterministic session ID based on section + date
-    const sessionKey = `attendance-${sectionId}-${todayDate}`
+    // Generate a deterministic, schedule-specific session ID
+    // Include scheduleId to keep sessions independent for different classes on same section/day
+    const sessionKey = scheduleId 
+      ? `attendance-${scheduleId}-${todayDate}`
+      : `attendance-${sectionId}-${todayDate}`
     const sessionId = uuidv5(sessionKey, NAMESPACE_NIL)
     
-    console.log('📅 Generated session ID for:', sessionKey, '→', sessionId)
+    console.log('📅 Generated schedule-aware session ID:', sessionKey, '→', sessionId)
 
     // First, get the student registration by ID (coming from face match)
     let registration: any = null
