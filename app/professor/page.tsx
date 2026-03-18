@@ -6,6 +6,7 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import { BookOpen, Users, Calendar, LogOut, Clock, MapPin, Play, BarChart3, Upload, FileSpreadsheet, CheckCircle, AlertCircle, X } from 'lucide-react'
 import { createClient } from '@/utils/supabase/client'
 import { ClassAccessModal } from '@/components/class-access-modal'
+import { offlineSyncService } from '@/lib/offline-sync'
 import * as XLSX from 'xlsx'
 
 interface Section {
@@ -183,8 +184,11 @@ export default function ProfessorDashboard() {
         throw new Error(data.error || 'Failed to create classroom')
       }
 
+      // Ensure offline cache sync timestamp updates immediately after create.
+      await offlineSyncService.triggerSync()
+
       // Refresh sections to show newly created classroom
-      fetchSections()
+      await fetchSections()
       setShowCreateModal(false)
     } catch (error: any) {
       console.error('Error creating classroom:', error)
@@ -554,15 +558,17 @@ function CreateClassroomModal({ sections: initialSections, professorId, professo
 
   const daysOfWeek = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
+  const isFormValid = () => {
+    return !!(formData.sectionId && formData.subjectCode && formData.room && formData.maxCapacity && formData.dayOfWeek && formData.startTime && formData.endTime)
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (!isFormValid()) return
+
     setIsSubmitting(true)
 
     try {
-      if (!formData.sectionId || !formData.subjectCode || !formData.room || !formData.maxCapacity || !formData.dayOfWeek || !formData.startTime || !formData.endTime) {
-        throw new Error('All fields are required')
-      }
-
       await onSubmit(formData)
     } catch (error: any) {
       console.error('Error:', error)
@@ -751,8 +757,8 @@ function CreateClassroomModal({ sections: initialSections, professorId, professo
             </button>
             <button
               type="submit"
-              disabled={isSubmitting}
-              className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:bg-emerald-400 transition-colors"
+              disabled={isSubmitting || !isFormValid()}
+              className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
             >
               {isSubmitting ? 'Creating...' : 'Create Classroom'}
             </button>

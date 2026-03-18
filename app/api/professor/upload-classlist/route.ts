@@ -152,10 +152,10 @@ export async function POST(request: NextRequest) {
         // ── 3. Create Students (users + face registrations) ─────────────────
         for (const student of sectionPayload.students) {
           try {
-            // Check if user already exists
+            // Check if user already exists by student_id
             const { data: existingUser } = await supabase
               .from('users')
-              .select('id')
+              .select('id, email')
               .eq('student_id', student.studentNumber)
               .maybeSingle()
 
@@ -164,6 +164,30 @@ export async function POST(request: NextRequest) {
             if (existingUser) {
               userId = existingUser.id
             } else {
+              // Check if email already registered (another student or admin-created)
+              const generatedEmail = student.email || `${student.studentNumber}@student.edu`
+              const { data: userByEmail } = await supabase
+                .from('users')
+                .select('id, student_id, email')
+                .eq('email', generatedEmail)
+                .maybeSingle()
+
+              if (userByEmail) {
+                // Email already exists
+                if (userByEmail.student_id) {
+                  // Belongs to another student
+                  results.errors.push(
+                    `${student.studentNumber} (${student.firstName} ${student.lastName}): Email "${generatedEmail}" is already registered for student ${userByEmail.student_id}`
+                  )
+                } else {
+                  // Admin-registered user without student_id
+                  results.errors.push(
+                    `${student.studentNumber} (${student.firstName} ${student.lastName}): Email "${generatedEmail}" is already registered as admin or faculty`
+                  )
+                }
+                continue
+              }
+
               // Create new user
               const { data: newUser, error: userError } = await supabase
                 .from('users')
@@ -171,7 +195,7 @@ export async function POST(request: NextRequest) {
                   student_id: student.studentNumber,
                   first_name: student.firstName,
                   last_name: student.lastName,
-                  email: student.email || `${student.studentNumber}@student.edu`,
+                  email: generatedEmail,
                   role: 'student',
                   is_active: true,
                 })

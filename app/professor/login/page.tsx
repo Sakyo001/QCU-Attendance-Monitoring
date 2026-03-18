@@ -352,70 +352,112 @@ export default function ProfessorLoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-linear-to-br from-emerald-50 via-white to-emerald-50/50 p-4">
-      <div className="w-full max-w-lg">
-        <div className="bg-white rounded-2xl shadow-xl border border-emerald-200/50 overflow-hidden">
-          {/* Header */}
-          <div className="bg-linear-to-r from-emerald-500 to-emerald-600 px-6 py-8 text-center">
-            <div className="mx-auto w-16 h-16 bg-white rounded-full flex items-center justify-center mb-4">
-              <GraduationCap className="w-8 h-8 text-emerald-600" />
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4 sm:p-8">
+      <div className="w-full max-w-5xl">
+        <div className="bg-white rounded-[2rem] shadow-2xl overflow-hidden flex flex-col lg:flex-row border border-slate-100">
+          
+          {/* Left Panel - Info & Controls */}
+          <div className="w-full lg:w-5/12 bg-linear-to-br from-emerald-600 to-teal-800 p-8 lg:p-12 flex flex-col items-center lg:items-start text-center lg:text-left relative overflow-hidden">
+            {/* Decor */}
+            <div className="absolute top-0 right-0 -mr-16 -mt-16 w-64 h-64 rounded-full bg-white/10 blur-3xl"></div>
+            <div className="absolute bottom-0 left-0 -ml-16 -mb-16 w-48 h-48 rounded-full bg-black/10 blur-2xl"></div>
+
+            <div className="relative z-10 w-full flex-1 flex flex-col">
+              <div className="w-16 h-16 bg-white/20 backdrop-blur-md rounded-2xl flex items-center justify-center mb-8 shadow-inner border border-white/20 lg:mx-0 mx-auto">
+                <GraduationCap className="w-8 h-8 text-white" />
+              </div>
+              <h1 className="text-4xl font-bold text-white mb-4 tracking-tight">Professor Portal</h1>
+              <p className="text-emerald-50 text-lg mb-12 font-light">Secure, fast, and seamless access using facial recognition.</p>
+              
+              <div className="mt-auto pt-8 border-t border-white/20 w-full space-y-6">
+                 <div className="flex items-center gap-3 text-emerald-50/90 mb-4 justify-center lg:justify-start">
+                   <div className={`w-2 h-2 rounded-full animate-pulse ${cameraActive ? 'bg-emerald-400' : 'bg-amber-400'}`}></div>
+                   <span className="text-sm font-semibold uppercase tracking-wider">{cameraActive ? 'System Active' : 'System Standby'}</span>
+                 </div>
+                 
+                 <div className="space-y-4">
+                   <div className="flex items-center gap-4 text-white">
+                      <div className="flex-shrink-0 w-8 h-8 rounded-full bg-white/10 flex items-center justify-center border border-white/10">
+                        <span className="font-semibold text-sm">1</span>
+                      </div>
+                      <p className="text-sm text-emerald-50 font-medium">Position your face clearly in frame</p>
+                   </div>
+                   <div className="flex items-center gap-4 text-white">
+                      <div className="flex-shrink-0 w-8 h-8 rounded-full bg-white/10 flex items-center justify-center border border-white/10">
+                        <span className="font-semibold text-sm">2</span>
+                      </div>
+                      <p className="text-sm text-emerald-50 font-medium">Wait for biometric verification</p>
+                   </div>
+                   <div className="flex items-center gap-4 text-white">
+                      <div className="flex-shrink-0 w-8 h-8 rounded-full bg-white/10 flex items-center justify-center border border-white/10">
+                        <span className="font-semibold text-sm">3</span>
+                      </div>
+                      <p className="text-sm text-emerald-50 font-medium">Automatic secure login</p>
+                   </div>
+                 </div>
+
+                 <div className="pt-8">
+                   <Link href="/" className="inline-flex items-center gap-2 text-sm font-medium text-emerald-50/70 hover:text-white transition-colors group">
+                     <span className="group-hover:-translate-x-1 transition-transform">←</span> Return to Main Menu
+                   </Link>
+                 </div>
+              </div>
             </div>
-            <h1 className="text-3xl font-bold text-white mb-2">Professor Portal</h1>
-            <p className="text-emerald-100">Sign in with facial recognition</p>
           </div>
 
-          {/* Login Area */}
-          <div className="p-6">
-            {/* Error Message */}
+          {/* Right Panel - Camera UI */}
+          <div className="w-full lg:w-7/12 p-8 lg:p-12 bg-white flex flex-col justify-center relative min-h-[500px]">
             {error && (
-              <div className="flex items-center gap-2 p-3 mb-4 bg-red-50 border border-red-200 rounded-lg text-sm text-red-600">
-                <AlertCircle className="w-4 h-4 shrink-0" />
-                <span>{error}</span>
+              <div className="flex items-center gap-3 p-4 mb-6 bg-red-50 border border-red-100 rounded-2xl text-sm text-red-600 shadow-sm">
+                <AlertCircle className="w-5 h-5 shrink-0" />
+                <span className="font-medium">{error}</span>
               </div>
             )}
 
-            {!cameraActive ? (
-              <div className="space-y-4">
-                {/* Face Recognition UI */}
-                <div className="text-center space-y-4">
-                  <div className="flex items-center justify-center gap-2 text-sm text-gray-600">
-                    <Camera className="w-4 h-4" />
-                    <span>Use your face to sign in securely</span>
-                  </div>
-                  
-                  {!serverHealthy && (
-                    <div className="flex items-center gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">
-                      <AlertCircle className="w-4 h-4 shrink-0" />
-                      <span>Face recognition server is unavailable</span>
-                    </div>
-                  )}
-
-                  <button
-                    onClick={startCamera}
-                    disabled={!modelsLoaded || !serverHealthy}
-                    className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-medium py-3 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
-                  >
-                    {!modelsLoaded ? (
-                      <>
-                        <Loader2 className="w-5 h-5 animate-spin" />
-                        <span>Loading face detection models...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Camera className="w-5 h-5" />
-                        <span>Start Face Recognition</span>
-                      </>
-                    )}
-                  </button>
-
-                  <p className="text-xs text-gray-500">
-                    Position your face clearly in front of the camera
-                  </p>
-                </div>
+            {!serverHealthy && !error && (
+              <div className="flex items-center gap-3 p-4 mb-6 bg-amber-50 border border-amber-100 rounded-2xl text-sm text-amber-700 shadow-sm">
+                <AlertCircle className="w-5 h-5 shrink-0" />
+                <span className="font-medium">Face recognition server is unavailable</span>
               </div>
-            ) : (
-              <div className="space-y-4">
-                <div className="relative rounded-xl overflow-hidden bg-black shadow-lg" style={{ height: '350px' }}>
+            )}
+
+            <div className={`w-full aspect-[4/3] max-h-[600px] relative rounded-3xl overflow-hidden shadow-2xl transition-all duration-500 border-4 bg-slate-900 ${
+              cameraActive ? (
+                matchStatus === 'matched' ? 'border-emerald-500 shadow-[0_0_40px_-10px_rgba(16,185,129,0.5)]' :
+                matchStatus === 'not-found' ? 'border-red-500 shadow-[0_0_40px_-10px_rgba(239,68,68,0.5)]' : 'border-slate-800'
+              ) : 'border-slate-100'
+            }`}>
+              {!cameraActive ? (
+                 <div className="absolute inset-0 flex flex-col items-center justify-center p-8 text-center bg-slate-900 border border-slate-800">
+                    <div className="w-24 h-24 rounded-full bg-slate-800 flex items-center justify-center mb-6 shadow-inner border border-slate-700">
+                       <Scan className="w-10 h-10 text-emerald-400" />
+                    </div>
+                    <div className="mb-8">
+                      <h3 className="text-2xl font-bold text-white mb-3">Scanner Inactive</h3>
+                      <p className="text-slate-400 text-sm max-w-sm mx-auto leading-relaxed">
+                        Activate your camera to start the secure facial recognition process. Ensure you are in a well-lit area.
+                      </p>
+                    </div>
+                    <button
+                      onClick={startCamera}
+                      disabled={!modelsLoaded || !serverHealthy}
+                      className="group relative w-full sm:w-auto overflow-hidden bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-bold py-4 px-10 rounded-full transition-all flex items-center justify-center gap-3 shadow-[0_0_40px_-10px_rgba(16,185,129,0.4)] hover:shadow-[0_0_60px_-15px_rgba(16,185,129,0.6)] active:scale-95"
+                    >
+                      {!modelsLoaded ? (
+                        <>
+                          <Loader2 className="w-5 h-5 animate-spin" />
+                          <span>Initializing Systems...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Camera className="w-5 h-5" />
+                          <span>Initialize Scanner</span>
+                        </>
+                      )}
+                    </button>
+                 </div>
+              ) : (
+                 <>
                   <video
                     ref={videoRef}
                     autoPlay
@@ -429,64 +471,66 @@ export default function ProfessorLoginPage() {
                     className="absolute inset-0 w-full h-full object-cover pointer-events-none transform scale-x-[-1]"
                   />
 
-                  {/* Status indicator */}
-                  <div className="absolute top-4 inset-x-0 flex justify-center">
-                    <div className={`text-white text-sm font-medium px-4 py-2 rounded-full backdrop-blur-md flex items-center gap-2 ${
-                      matchStatus === 'matched' ? 'bg-emerald-600' :
-                      matchStatus === 'not-found' ? 'bg-red-600' :
-                      matchStatus === 'scanning' ? 'bg-blue-600' :
-                      faceDetected ? 'bg-gray-700' : 'bg-gray-900/80'
+                  {/* Smart Status Overlay */}
+                  <div className="absolute top-6 inset-x-0 flex justify-center z-10 px-4">
+                    <div className={`text-white text-sm font-semibold px-6 py-3 rounded-full backdrop-blur-xl border flex items-center gap-3 shadow-xl transition-all duration-300 ${
+                      matchStatus === 'matched' ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-50' :
+                      matchStatus === 'not-found' ? 'bg-red-500/20 border-red-500/50 text-red-50' :
+                      matchStatus === 'scanning' ? 'bg-blue-500/20 border-blue-500/50 text-blue-50' :
+                      faceDetected ? 'bg-slate-800/60 border-slate-500/40 text-white' : 'bg-slate-900/80 border-slate-700/60 text-slate-300'
                     }`}>
                         {matchStatus === 'matched' ? (
                         <>
-                          <CheckCircle2 className="w-4 h-4" />
-                          Logging in...
+                          <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                          Authentication Successful
                         </>
                       ) : matchStatus === 'scanning' ? (
                         <>
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                          Verifying face...
+                          <Loader2 className="w-5 h-5 animate-spin text-blue-400" />
+                          Analyzing Biometrics...
                         </>
                       ) : matchStatus === 'not-found' ? (
-                        'Face not recognized - Try again'
+                        'Identity Unverified - Try Again'
                       ) : faceDetected ? (
                         <>
-                          <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
-                          Face detected - Scanning
+                          <span className="flex h-3 w-3 relative">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+                          </span>
+                          Target Acquired
                         </>
                       ) : (
-                        'Position your face in the camera'
+                        'Awaiting Subject...'
                       )}
                     </div>
                   </div>
 
-                  {/* Loading overlay */}
+                  {/* Cinematic Loading Overlay */}
                   {isLoading && (
-                    <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
-                      <div className="text-center text-white">
-                        <Loader2 className="w-12 h-12 animate-spin mx-auto mb-4" />
-                        <p className="font-medium">Logging you in...</p>
+                    <div className="absolute inset-0 bg-slate-900/80 backdrop-blur-md flex items-center justify-center z-20 transition-opacity duration-300">
+                      <div className="text-center p-8 bg-slate-800/50 rounded-3xl border border-slate-700/50 shadow-2xl flex flex-col items-center">
+                        <Loader2 className="w-16 h-16 animate-spin text-emerald-400 mb-6" />
+                        <h3 className="text-2xl font-bold text-white mb-2">Authenticating</h3>
+                        <p className="text-slate-300 font-medium">Establishing secure session...</p>
                       </div>
                     </div>
                   )}
-                </div>
+                 </>
+              )}
+            </div>
 
+            {/* Bottom Controls */}
+            {cameraActive && (
+              <div className="mt-8 flex justify-center animate-in fade-in slide-in-from-bottom-4 duration-500">
                 <button
                   onClick={stopCamera}
-                  className="w-full flex items-center justify-center gap-2 bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
+                  className="flex items-center justify-center gap-2 bg-white border-2 border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-600 font-bold py-3.5 px-8 rounded-full transition-all shadow-sm hover:shadow-md active:scale-95"
                 >
-                  <RefreshCw className="w-4 h-4" />
-                  Stop Camera
+                  <RefreshCw className="w-5 h-5" />
+                  Terminate Session
                 </button>
               </div>
             )}
-
-            {/* Back to Home Link */}
-            <div className="text-center text-sm text-gray-600 mt-6">
-              <Link href="/" className="text-emerald-600 hover:text-emerald-700 hover:underline">
-                ← Back to home
-              </Link>
-            </div>
           </div>
         </div>
       </div>

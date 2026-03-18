@@ -3,7 +3,7 @@
 import { useAuth } from '@/contexts/AuthContext'
 import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import { useEffect, useState, useRef, useCallback } from 'react'
-import { ArrowLeft, Loader2, Camera, RefreshCw, Check, X, ShieldCheck, Clock, Users, Plus, LayoutGrid, List, Monitor, Edit2, Trash2, ScanFace, CircleAlert, CircleCheck } from 'lucide-react'
+import { ArrowLeft, Loader2, Camera, RefreshCw, Check, X, ShieldCheck, Clock, Users, Plus, LayoutGrid, List, Monitor, Edit2, Trash2, ScanFace, CircleAlert, CircleCheck, FileText, User } from 'lucide-react'
 import { checkFaceNetHealth, ServerCameraStream } from '@/lib/facenet-python-api'
 import type { CameraStreamFrame, FaceNetEmbedding } from '@/lib/facenet-python-api'
 import { usePassiveLivenessDetection } from '@/hooks/usePassiveLivenessDetection'
@@ -318,10 +318,6 @@ export default function AttendancePage() {
           <p className="text-xs text-muted-foreground hidden sm:block">Manage attendance for today</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button size="sm" onClick={() => setShowFaceRecognitionModal(true)} className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white">
-            <Camera className="h-4 w-4" />
-            Face Recognition
-          </Button>
           <Button variant="outline" size="sm" onClick={() => setShowStudentRegModal(true)} className="gap-2">
             <Plus className="h-4 w-4" />
             Register Student
@@ -330,67 +326,69 @@ export default function AttendancePage() {
       </header>
 
       {/* Main Content */}
-      <main className="container max-w-6xl py-8 space-y-8 px-6">
+      <main className="w-full py-8 space-y-8 px-6">
         {/* Status Indicators */}
         <div className="grid gap-4 md:grid-cols-2">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-               <CardTitle className="text-sm font-medium">Today's Date</CardTitle>
-               <Clock className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">
-                {new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+          <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm hover:shadow-md transition-shadow">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600">Today's Date</p>
+                <p className="text-3xl font-bold text-gray-900 mt-1">
+                  {new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                </p>
+                <p className="text-xs text-gray-500 mt-2">Daily attendance tracking</p>
               </div>
-               <p className="text-xs text-muted-foreground mt-1">
-                Daily attendance tracking
-              </p>
-            </CardContent>
-          </Card>
+              <div className="bg-blue-100 p-3 rounded-lg">
+                <Clock className="h-6 w-6 text-blue-600" />
+              </div>
+            </div>
+          </div>
 
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-               <CardTitle className="text-sm font-medium">Attendees</CardTitle>
-               <Users className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">
-                {mergedAttendanceData.filter(s => s.status !== 'absent').length} / {mergedAttendanceData.length}
+          <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm hover:shadow-md transition-shadow">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600">Attendees</p>
+                <p className="text-3xl font-bold text-gray-900 mt-1">
+                  {mergedAttendanceData.filter(s => s.status !== 'absent').length} <span className="text-lg text-gray-400">/ {mergedAttendanceData.length}</span>
+                </p>
+                <p className="text-xs text-gray-500 mt-2">Students present or late</p>
               </div>
-               <p className="text-xs text-muted-foreground mt-1">
-                Students present or late
-              </p>
-            </CardContent>
-          </Card>
+              <div className="bg-purple-100 p-3 rounded-lg">
+                <Users className="h-6 w-6 text-purple-600" />
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex items-center gap-2 border-b bg-white rounded-t-lg">
+        <div className="flex items-center gap-1 border-b border-gray-200 bg-white rounded-t-xl">
           <button
             onClick={() => setActiveTab('attendance')}
-            className={`px-4 py-3 font-medium text-sm border-b-2 transition-colors ${
+            className={`flex items-center gap-2 px-6 py-3 font-medium text-sm border-b-2 transition-all duration-200 ${
               activeTab === 'attendance'
-                ? 'border-emerald-600 text-emerald-700 bg-emerald-50/50'
+                ? 'border-black text-gray-900 bg-white'
                 : 'border-transparent text-gray-600 hover:text-gray-900'
             }`}
           >
-            📋 Attendance Log
+            <FileText className="w-4 h-4" />
+            Attendance Log
           </button>
           <button
             onClick={() => setActiveTab('faces')}
-            className={`px-4 py-3 font-medium text-sm border-b-2 transition-colors ${
+            className={`flex items-center gap-2 px-6 py-3 font-medium text-sm border-b-2 transition-all duration-200 ${
               activeTab === 'faces'
-                ? 'border-emerald-600 text-emerald-700 bg-emerald-50/50'
+                ? 'border-black text-gray-900 bg-white'
                 : 'border-transparent text-gray-600 hover:text-gray-900'
             }`}
           >
-            👤 Registered Faces
+            <User className="w-4 h-4" />
+            Registered Faces
           </button>
         </div>
 
         {/* Tab Content */}
         {activeTab === 'faces' && (
-          <div className="bg-white rounded-b-lg border border-t-0 p-6 space-y-4">
+          <div className="bg-white rounded-b-xl border border-t-0 border-gray-200 p-6 space-y-4 shadow-sm">
             <div className="px-1">
               <h2 className="text-lg font-semibold tracking-tight">Registered Student Faces</h2>
               <p className="text-xs text-muted-foreground mt-1">
@@ -497,7 +495,7 @@ export default function AttendancePage() {
 
         {/* Attendance List */}
         {activeTab === 'attendance' && (
-          <div className="bg-white rounded-b-lg border border-t-0 p-6 space-y-4">
+          <div className="bg-white rounded-b-xl border border-t-0 border-gray-200 p-6 space-y-4 shadow-sm">
             <div className="flex items-center justify-between px-1">
                <div>
                  <h2 className="text-lg font-semibold tracking-tight">Attendance Log</h2>
@@ -757,7 +755,6 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
   const [autoCapture, setAutoCapture] = useState(true)
 
   const serverCanvasRef = useRef<HTMLCanvasElement>(null)
-  const overlayCanvasRef = useRef<HTMLCanvasElement>(null)
   const serverStreamRef = useRef<ServerCameraStream | null>(null)
   const serverImgRef = useRef<HTMLImageElement | null>(null)
   const lastFrameRef = useRef<string | null>(null)
@@ -851,127 +848,6 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
     const timer = setTimeout(validateStudentId, 500)
     return () => clearTimeout(timer)
   }, [formData.studentId])
-
-  // Canvas drawing effect for bounding box
-  useEffect(() => {
-    if (!showCamera || !overlayCanvasRef.current || !serverCanvasRef.current) return
-
-    const canvas = overlayCanvasRef.current
-    const source = serverCanvasRef.current
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-
-    let animationId: number
-
-    const drawFrame = () => {
-      canvas.width = source.width || 640
-      canvas.height = source.height || 480
-      ctx.clearRect(0, 0, canvas.width, canvas.height)
-
-      if (boundingBox) {
-        const { x, y, width, height } = boundingBox
-        
-        // Determine color based on recognition status
-        const isNewStudent = recognizedName === 'New Student'
-        const isAlreadyRegistered = recognizedName && recognizedName !== 'New Student' && recognitionConfidence !== null
-        
-        const boxColor = isNewStudent ? '#10b981' : // Green for new student
-                         isAlreadyRegistered ? '#f59e0b' : // Amber for already registered
-                         '#3b82f6' // Blue while detecting
-        
-        // Draw glow effect
-        ctx.shadowColor = boxColor
-        ctx.shadowBlur = 20
-        ctx.strokeStyle = boxColor
-        ctx.lineWidth = 4
-        ctx.strokeRect(x, y, width, height)
-        ctx.shadowBlur = 0
-        
-        // Draw corner markers
-        const cornerLength = 35
-        ctx.lineWidth = 5
-        ctx.lineCap = 'round'
-        
-        // Top-left
-        ctx.beginPath()
-        ctx.moveTo(x, y + cornerLength)
-        ctx.lineTo(x, y)
-        ctx.lineTo(x + cornerLength, y)
-        ctx.stroke()
-        
-        // Top-right
-        ctx.beginPath()
-        ctx.moveTo(x + width - cornerLength, y)
-        ctx.lineTo(x + width, y)
-        ctx.lineTo(x + width, y + cornerLength)
-        ctx.stroke()
-        
-        // Bottom-left
-        ctx.beginPath()
-        ctx.moveTo(x, y + height - cornerLength)
-        ctx.lineTo(x, y + height)
-        ctx.lineTo(x + cornerLength, y + height)
-        ctx.stroke()
-        
-        // Bottom-right
-        ctx.beginPath()
-        ctx.moveTo(x + width - cornerLength, y + height)
-        ctx.lineTo(x + width, y + height)
-        ctx.lineTo(x + width, y + height - cornerLength)
-        ctx.stroke()
-        
-        // Draw label with recognition status
-        if (recognizedName) {
-          const isWarning = isAlreadyRegistered
-          const labelText = isAlreadyRegistered 
-            ? `${recognizedName} (${Math.round(recognitionConfidence! * 100)}%) - Already Registered`
-            : isNewStudent 
-              ? 'New Student - Ready to Register'
-              : recognizedName
-          
-          ctx.font = 'bold 16px system-ui, sans-serif'
-          const textWidth = ctx.measureText(labelText).width
-          const padding = 12
-          const labelHeight = 32
-          
-          // Background with rounded corners
-          const bgColor = isNewStudent ? 'rgba(16, 185, 129, 0.95)' : 
-                          isWarning ? 'rgba(245, 158, 11, 0.95)' : 
-                          'rgba(59, 130, 246, 0.95)'
-          
-          ctx.fillStyle = bgColor
-          ctx.beginPath()
-          const labelX = x
-          const labelY = y - labelHeight - 8
-          const labelWidth = textWidth + padding * 2
-          const radius = 6
-          ctx.roundRect(labelX, labelY, labelWidth, labelHeight, radius)
-          ctx.fill()
-          
-          // Save context state before flipping text
-          ctx.save()
-          
-          // Flip horizontally to counteract the CSS scale-x-[-1] on canvas
-          ctx.scale(-1, 1)
-          
-          // Text (adjust x-coordinate for flipped coordinate system)
-          ctx.fillStyle = 'white'
-          ctx.fillText(labelText, -(labelX + padding + textWidth), labelY + 22)
-          
-          // Restore context state
-          ctx.restore()
-        }
-      }
-
-      animationId = requestAnimationFrame(drawFrame)
-    }
-
-    drawFrame()
-
-    return () => {
-      if (animationId) cancelAnimationFrame(animationId)
-    }
-  }, [showCamera, boundingBox, recognizedName, recognitionConfidence])
 
   useEffect(() => {
     // Server camera replaces local MediaPipe — just check health
@@ -1440,100 +1316,89 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
               )}
 
               {showCamera && (
-                <div className="flex flex-col items-center gap-3">
-                  <div className="relative w-full max-w-md mx-auto aspect-square rounded-2xl overflow-hidden bg-black shadow-2xl ring-2 ring-violet-500/30">
+                <div className="flex flex-col gap-4">
+                  <div className="relative w-full aspect-video md:aspect-[4/3] bg-black rounded-2xl overflow-hidden shadow-inner ring-1 ring-gray-900/5 flex items-center justify-center">
                     <canvas
                       ref={serverCanvasRef}
-                      className="absolute inset-0 w-full h-full object-cover"
-                    />
-                    <canvas
-                      ref={overlayCanvasRef}
-                      className="absolute inset-0 w-full h-full pointer-events-none"
+                      className="w-full h-full object-cover"
                     />
 
-                    {/* Top status bar */}
-                    <div className="absolute top-3 inset-x-3 flex justify-center pointer-events-none">
-                      {faceDetected ? (
-                        <div className={`flex items-center gap-2 backdrop-blur-md text-white text-sm font-medium px-4 py-2 rounded-full shadow-lg ${
-                          recognizedName === 'New Student' ? 'bg-emerald-600/90' :
-                          recognizedName && recognizedName !== 'New Student' ? 'bg-amber-500/90' :
-                          'bg-blue-600/90'
-                        }`}>
-                          <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
-                          {recognizedName === 'New Student' ? 'New Student Detected' :
-                           recognizedName ? 'Already Registered' :
-                           'Face Detected'}
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-2 bg-black/70 backdrop-blur-md text-white text-sm px-4 py-2 rounded-full shadow-lg">
-                          <ScanFace className="w-4 h-4 opacity-70" />
-                          Position face in frame
-                        </div>
-                      )}
+                    {/* Camera Guide Overlay */}
+                    <div className="absolute inset-0 pointer-events-none p-6 flex items-center justify-center">
+                       <div className={`w-48 h-64 border-2 rounded-full border-dashed transition-all duration-300 ${
+                         faceDetected && recognizedName === 'New Student' ? 'border-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.5)]' :
+                         faceDetected && recognizedName ? 'border-amber-400 shadow-[0_0_15px_rgba(245,158,11,0.5)]' :
+                         faceDetected ? 'border-blue-400 shadow-[0_0_15px_rgba(59,130,246,0.5)]' :
+                         'border-white/30 animate-pulse'
+                       }`} />
                     </div>
 
-                    {/* No face badge */}
                     {!faceDetected && (
-                      <div className="absolute top-14 inset-x-0 flex justify-center pointer-events-none">
-                        <div className="flex items-center gap-1.5 bg-red-600/90 backdrop-blur-md text-white text-xs font-medium px-3 py-1.5 rounded-full">
-                          <CircleAlert className="w-3.5 h-3.5" />
-                          No face detected
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm transition-all duration-300">
+                        <div className="text-center text-white flex flex-col items-center">
+                          <ScanFace className="w-10 h-10 animate-bounce mb-3 opacity-80" />
+                          <p className="text-sm font-medium">Position face in frame</p>
                         </div>
                       </div>
                     )}
 
                     {/* Already registered warning */}
                     {recognizedName && recognizedName !== 'New Student' && recognitionConfidence !== null && (
-                      <div className="absolute top-14 inset-x-0 flex justify-center pointer-events-none">
-                        <div className="flex items-center gap-1.5 bg-amber-500/90 backdrop-blur-md text-white text-xs font-medium px-3 py-1.5 rounded-full">
-                          <CircleAlert className="w-3.5 h-3.5" />
-                          Already registered
+                      <div className="absolute top-4 inset-x-0 flex justify-center pointer-events-none z-10">
+                        <div className="bg-amber-500/90 backdrop-blur-md text-white text-sm font-medium px-4 py-2 rounded-full flex items-center gap-2 shadow-lg">
+                          <CircleAlert className="w-4 h-4" />
+                          {recognizedName} - Already Registered
                         </div>
                       </div>
                     )}
 
                     {/* Auto-capturing indicator */}
                     {faceDetected && recognizedName === 'New Student' && (
-                      <div className="absolute bottom-16 inset-x-0 flex justify-center pointer-events-none">
-                        <div className="flex items-center gap-2 bg-emerald-600/90 backdrop-blur-md text-white text-sm font-bold px-4 py-2 rounded-full animate-pulse">
-                          <Camera className="w-4 h-4" />
-                          Capturing...
+                      <div className="absolute inset-0 flex items-center justify-center bg-emerald-900/20 transition-all duration-300 pointer-events-none">
+                        <div className="absolute top-4 inset-x-0 flex justify-center">
+                          <div className="bg-emerald-500/90 text-white text-sm font-medium px-4 py-2 rounded-full backdrop-blur-md flex items-center gap-2 shadow-lg animate-pulse">
+                            <Camera className="w-4 h-4" /> 
+                            New Student - Capturing...
+                          </div>
                         </div>
                       </div>
                     )}
-
-                    {/* Cancel button */}
-                    <div className="absolute bottom-3 inset-x-3 flex justify-center">
-                      <button
-                        type="button"
-                        onClick={stopCamera}
-                        className="px-5 py-2.5 bg-red-600/90 backdrop-blur-md text-white text-sm font-medium rounded-xl hover:bg-red-600 transition-colors shadow-lg"
-                      >
-                        Cancel
-                      </button>
-                    </div>
+                  </div>
+                  
+                  <div className="flex justify-center w-full">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={stopCamera}
+                      className="w-full max-w-sm rounded-xl"
+                    >
+                      Cancel Camera
+                    </Button>
                   </div>
                 </div>
               )}
 
               {capturedImage && !showCamera && (
-                <div className="flex flex-col items-center gap-3">
-                  <div className="relative w-full max-w-md mx-auto aspect-square rounded-2xl overflow-hidden border-2 border-emerald-500 bg-gray-100 shadow-lg">
+                <div className="flex flex-col gap-4">
+                  <div className="relative w-full aspect-video md:aspect-[4/3] bg-gray-100 rounded-2xl overflow-hidden ring-2 ring-emerald-500 shadow-md flex items-center justify-center">
                     <img src={capturedImage} alt="Captured" className="w-full h-full object-cover" />
-                    <div className="absolute top-3 left-3 flex items-center gap-1.5 bg-emerald-600 text-white text-xs font-medium px-3 py-1.5 rounded-full shadow-md">
-                      <CircleCheck className="w-3.5 h-3.5" />
-                      Face Captured
+                    <div className="absolute top-4 inset-x-0 flex justify-center pointer-events-none">
+                      <div className="bg-emerald-600/90 backdrop-blur-md text-white text-sm font-medium px-4 py-2 rounded-full shadow-lg flex items-center gap-2">
+                        <CircleCheck className="w-4 h-4" />
+                        Face Captured Successfully
+                      </div>
                     </div>
-                    <div className="absolute bottom-3 right-3">
-                      <button
-                        type="button"
-                        onClick={() => { setCapturedImage(null); startCamera() }}
-                        className="flex items-center gap-2 px-3 py-2 bg-white/90 backdrop-blur-md text-gray-700 rounded-xl hover:bg-white transition-colors text-sm font-medium shadow-md"
-                      >
-                        <RefreshCw className="w-4 h-4" />
-                        Retake
-                      </button>
-                    </div>
+                  </div>
+                  <div className="flex justify-center w-full">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => { setCapturedImage(null); startCamera() }}
+                      className="w-full max-w-sm rounded-xl flex items-center gap-2"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                      Retake Photo
+                    </Button>
                   </div>
                 </div>
               )}
@@ -2460,73 +2325,87 @@ function FaceVerificationModal({ professorId, professorName, onVerificationSucce
   }
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-      <Card className="w-full max-w-md">
-        <CardHeader className="text-center">
-          <div className="flex items-center justify-center mb-4">
-            <ShieldCheck className="w-8 h-8 text-emerald-600" />
-          </div>
-          <CardTitle>Verify Your Identity</CardTitle>
-          <CardDescription>Live face verification required to access the class session</CardDescription>
-        </CardHeader>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+      <div className="w-full max-w-md bg-white rounded-2xl shadow-xl overflow-hidden">
+        <div className="p-8 text-center border-b border-gray-100">
+          <h2 className="text-2xl font-bold text-gray-900 tracking-tight">Verify Your Identity</h2>
+          <p className="mt-2 text-sm text-gray-500">Live face verification required to access the class session</p>
+        </div>
         
-        <CardContent className="space-y-4">
+        <div className="p-8 space-y-6">
           {!showCamera ? (
-            <div className="text-center space-y-4">
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-left">
-                <p className="text-sm font-semibold text-amber-900 mb-2">🔒 Security Notice:</p>
-                <ul className="text-xs text-amber-800 space-y-1 list-disc list-inside">
-                  <li>System will capture 3 different frames</li>
-                  <li>Move your head slightly during capture</li>
-                  <li>Photos and static images will be rejected</li>
-                  <li>All captures must match your registered face</li>
-                </ul>
+            <div className="space-y-6">
+              <div className="bg-gray-50 rounded-xl p-5 border border-gray-100">
+                <div className="flex flex-col gap-3">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className="w-5 h-5 text-gray-700" />
+                    <span className="font-semibold text-gray-900 text-sm">Security Notice</span>
+                  </div>
+                  <ul className="text-sm text-gray-600 space-y-2 ml-7 list-disc">
+                    <li>System will capture 3 different frames</li>
+                    <li>Move your head slightly during capture</li>
+                    <li>Photos and static images will be rejected</li>
+                    <li>All captures must match your registered face</li>
+                  </ul>
+                </div>
               </div>
-              <Button onClick={startCamera} className="w-full gap-2" disabled={!modelsLoaded}>
-                <Camera className="w-4 h-4" />
-                {modelsLoaded ? 'Start Live Verification' : 'Loading Models...'}
+              <Button onClick={startCamera} className="w-full h-12 text-base font-medium rounded-xl gap-2 transition-all bg-black hover:bg-gray-800 text-white" disabled={!modelsLoaded}>
+                {!modelsLoaded ? (
+                  <><Loader2 className="w-5 h-5 animate-spin" /> Loading Models...</>
+                ) : (
+                  <><Camera className="w-5 h-5" /> Start Live Verification</>
+                )}
               </Button>
             </div>
           ) : (
-            <div className="space-y-4">
-              <div className="relative bg-black rounded-lg overflow-hidden" style={{ aspectRatio: '16/9' }}>
+            <div className="space-y-6">
+              <div className="relative bg-black rounded-2xl overflow-hidden shadow-inner ring-1 ring-gray-900/5 aspect-[4/3] flex items-center justify-center">
                 <canvas
                   ref={serverCanvasRef4}
-                  className="w-full h-full object-cover"
+                  className="w-full h-full object-cover scale-x-[-1]"
                 />
                 
+                {/* Camera Guide Overlay */}
+                <div className="absolute inset-0 pointer-events-none p-6 flex items-center justify-center">
+                   <div className="w-48 h-64 border-2 border-white/30 rounded-full border-dashed animate-pulse" />
+                </div>
+                
                 {!faceDetected && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-black/40">
-                    <div className="text-center text-white">
-                      <Loader2 className="w-8 h-8 animate-spin mx-auto mb-2" />
-                      <p className="text-sm">Position your face in frame</p>
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm transition-all duration-300">
+                    <div className="text-center text-white flex flex-col items-center">
+                      <ScanFace className="w-10 h-10 animate-bounce mb-3 opacity-80" />
+                      <p className="text-sm font-medium">Position your face in frame</p>
                     </div>
                   </div>
                 )}
 
                 {verificationStatus === 'scanning' && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-black/40">
-                    <div className="text-center text-white">
-                      <Loader2 className="w-8 h-8 animate-spin mx-auto mb-2" />
-                      <p className="text-sm">Verifying...</p>
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm transition-all duration-300">
+                    <div className="text-center text-white flex flex-col items-center">
+                      <Loader2 className="w-10 h-10 animate-spin mb-3 text-emerald-400" />
+                      <p className="text-sm font-medium">Verifying captures...</p>
                     </div>
                   </div>
                 )}
 
                 {verificationStatus === 'success' && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-green-500/40">
-                    <div className="text-center text-white">
-                      <Check className="w-8 h-8 mx-auto mb-2" />
-                      <p className="text-sm">{verificationMessage}</p>
+                  <div className="absolute inset-0 flex items-center justify-center bg-emerald-500/90 backdrop-blur-sm transition-all duration-300">
+                    <div className="text-center text-white flex flex-col items-center scale-in-center">
+                      <div className="bg-white/20 p-3 rounded-full mb-3">
+                        <Check className="w-10 h-10" />
+                      </div>
+                      <p className="text-base font-bold tracking-tight">{verificationMessage}</p>
                     </div>
                   </div>
                 )}
 
                 {verificationStatus === 'failed' && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-red-500/40">
-                    <div className="text-center text-white">
-                      <X className="w-8 h-8 mx-auto mb-2" />
-                      <p className="text-sm">{verificationMessage}</p>
+                  <div className="absolute inset-0 flex items-center justify-center bg-red-500/90 backdrop-blur-sm transition-all duration-300">
+                    <div className="text-center text-white flex flex-col items-center">
+                      <div className="bg-white/20 p-3 rounded-full mb-3">
+                        <X className="w-10 h-10" />
+                      </div>
+                      <p className="text-base font-bold tracking-tight">{verificationMessage}</p>
                     </div>
                   </div>
                 )}
@@ -2560,7 +2439,7 @@ function FaceVerificationModal({ professorId, professorName, onVerificationSucce
                 <Button 
                   onClick={handleCancel}
                   variant="outline"
-                  className="w-full"
+                  className="w-full h-12 rounded-xl border-gray-200 text-gray-700 hover:bg-gray-50"
                   disabled={isVerifying}
                 >
                   Cancel
@@ -2568,8 +2447,8 @@ function FaceVerificationModal({ professorId, professorName, onVerificationSucce
               </div>
             </div>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   )
 }

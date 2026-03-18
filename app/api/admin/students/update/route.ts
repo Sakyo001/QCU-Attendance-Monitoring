@@ -37,6 +37,24 @@ export async function PUT(request: NextRequest) {
 
     console.log('✅ Student updated in users table')
 
+    // Also update the student_face_registrations table with the new name and is_active status
+    const { error: faceRegError } = await (supabase as any)
+      .from('student_face_registrations')
+      .update({
+        first_name: firstName,
+        last_name: lastName,
+        email: email,
+        is_active: isActive
+      })
+      .eq('student_number', studentNumber)
+
+    if (faceRegError) {
+      console.warn('⚠️ Warning updating face registrations:', faceRegError)
+      // Don't throw - continue even if face registration update fails
+    } else {
+      console.log('✅ Student updated in face registrations table')
+    }
+
     // Also update the auth user if email changed
     try {
       const { error: authError } = await supabase.auth.admin.updateUserById(

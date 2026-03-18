@@ -1266,7 +1266,7 @@ export default function Home() {
         console.warn('💡 TIP: Face encodings should be pre-cached on page load. If offline, try going online and reopening the kiosk.')
         // Still proceed with empty roster - at least the attendance page will load
         setEnrolledStudents([])
-        setStats({ presentCount: 0, lateCount: 0, absentCount: schedule.totalStudents })
+        setStats({ present: 0, late: 0, absent: schedule.totalStudents, pending: 0, total: schedule.totalStudents })
       }
     }
 
@@ -2083,96 +2083,116 @@ export default function Home() {
 
   // --- Phase 3 & 4: Attendance Active / Locked ---
   return (
-    <div className="min-h-screen overflow-y-auto bg-gray-50 text-gray-900 flex flex-col">
+    <div className="min-h-screen overflow-y-auto bg-slate-50 text-slate-900 flex flex-col font-sans">
       {idleOverlay}
       {/* Top Bar */}
-      <div className="flex items-center justify-between px-6 py-3 bg-white border-b border-gray-100 shadow-sm shrink-0">
-        <div className="flex items-center gap-3">
-          <NextImage src="/verifaceqcu.jpg" alt="VeriFace" width={40} height={40} className="rounded-lg" />
+      <div className="flex items-center justify-between px-8 py-4 bg-white/80 backdrop-blur-xl border-b border-slate-200/60 shadow-xs shrink-0 z-20">
+        <div className="flex items-center gap-4">
+          <div className="shadow-md shadow-emerald-100/50 rounded-xl overflow-hidden border border-slate-100">
+            <NextImage src="/verifaceqcu.jpg" alt="VeriFace" width={48} height={48} />
+          </div>
           <div>
-            <h1 className="text-base font-bold tracking-tight text-gray-900">VeriFace Attendance</h1>
+            <h1 className="text-xl font-bold tracking-tight text-slate-800 flex items-center gap-2">
+              VeriFace <span className="text-emerald-500">Attendance</span>
+            </h1>
             {professor && selectedSchedule && (
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] font-semibold px-1.5 py-0.5 bg-emerald-50 text-emerald-600 rounded">
+              <div className="flex items-center gap-2 mt-1">
+                <span className="text-xs font-bold px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-md">
                   {selectedSchedule.sectionCode}
                 </span>
-                <p className="text-xs text-gray-400">
-                  {selectedSchedule.room} · Prof. {professor.firstName} {professor.lastName}
+                <p className="text-sm text-slate-500 font-medium">
+                  {selectedSchedule.room} <span className="text-slate-300 mx-1">•</span> Prof. {professor.firstName} {professor.lastName}
                 </p>
               </div>
             )}
           </div>
         </div>
 
-        <div className="flex items-center gap-5">
+        <div className="flex items-center gap-6 bg-slate-50/80 px-5 py-2.5 rounded-2xl border border-slate-200/60 shadow-inner">
           {/* Lock countdown */}
           {phase === 'attendance-active' && (
-            <div className="flex items-center gap-1.5 px-2.5 py-1 bg-amber-50 border border-amber-200 rounded-lg">
-              <Timer className="w-3.5 h-3.5 text-amber-500" />
-              <span className="text-xs font-mono font-semibold text-amber-600">{lockTimeRemaining}</span>
-              <span className="text-[10px] text-amber-400">until lock</span>
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-white border border-amber-200 rounded-xl shadow-sm text-amber-600">
+              <Timer className="w-4 h-4 text-amber-500 animate-pulse" />
+              <span className="text-sm font-mono font-bold tracking-tight">{lockTimeRemaining}</span>
             </div>
           )}
 
           {phase === 'attendance-locked' && (
-            <div className="flex items-center gap-1.5 px-2.5 py-1 bg-red-50 border border-red-200 rounded-lg">
-              <Lock className="w-3.5 h-3.5 text-red-500" />
-              <span className="text-xs font-semibold text-red-500">LOCKED</span>
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-red-50 border border-red-200 rounded-xl shadow-sm text-red-600">
+              <Lock className="w-4 h-4" />
+              <span className="text-sm font-bold tracking-widest">LOCKED</span>
             </div>
           )}
 
-          <div className="flex items-center gap-1.5">
-            <span className={`w-1.5 h-1.5 rounded-full ${serverHealthy ? 'bg-emerald-500' : 'bg-red-400'}`} />
-            <span className="text-xs text-gray-400">{serverHealthy ? 'Online' : 'Offline'}</span>
-            <span className="text-[10px] text-gray-300">Face</span>
+          <div className="flex items-center gap-2">
+            <span className="relative flex h-2.5 w-2.5">
+              {serverHealthy && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>}
+              <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${serverHealthy ? 'bg-emerald-500' : 'bg-red-500'}`}></span>
+            </span>
+            <div className="flex flex-col leading-none">
+              <span className="text-[11px] font-bold text-slate-600 uppercase tracking-wider">Face Engine</span>
+              <span className={`text-[10px] ${serverHealthy ? 'text-emerald-500 font-semibold' : 'text-red-500 font-semibold'}`}>{serverHealthy ? 'Active' : 'Offline'}</span>
+            </div>
           </div>
 
-          <div className="flex items-center gap-1.5">
-            <span className={`w-1.5 h-1.5 rounded-full ${systemOffline ? 'bg-red-400' : 'bg-emerald-500'}`} />
-            <span className="text-xs text-gray-400">{systemOffline ? 'Offline' : 'Online'}</span>
-            <span className="text-[10px] text-gray-300">System</span>
-            {queuedMarksCount > 0 && (
-              <span className="text-[10px] text-amber-500 font-medium">({queuedMarksCount} queued)</span>
-            )}
+          <div className="w-px h-6 bg-slate-200"></div>
+
+          <div className="flex items-center gap-2">
+            <span className={`w-2.5 h-2.5 rounded-full ${systemOffline ? 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]' : 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]'}`} />
+            <div className="flex flex-col leading-none">
+              <span className="text-[11px] font-bold text-slate-600 uppercase tracking-wider">Database</span>
+              <span className={`text-[10px] flex items-center gap-1 ${systemOffline ? 'text-red-500 font-semibold' : 'text-emerald-500 font-semibold'}`}>
+                {systemOffline ? 'Local Mode' : 'Connected'}
+                {queuedMarksCount > 0 && (
+                  <span className="bg-amber-100 text-amber-700 px-1 rounded text-[9px] font-bold">{queuedMarksCount} pending</span>
+                )}
+              </span>
+            </div>
           </div>
 
-          <button onClick={() => setSoundEnabled(!soundEnabled)} className="text-gray-400 hover:text-gray-600 transition">
-            {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+          <div className="w-px h-6 bg-slate-200"></div>
+
+          <button onClick={() => setSoundEnabled(!soundEnabled)} className="text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 p-2 rounded-full transition-all">
+            {soundEnabled ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
           </button>
 
           {/* Escape to admin/faculty login — does NOT clear kiosk session */}
-          <div className="flex items-center gap-1.5 border-l border-gray-100 pl-4">
+          <div className="flex items-center gap-2 pl-4">
             <button
               onClick={() => router.push('/admin/login')}
-              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-gray-400 hover:text-emerald-600 bg-gray-50 hover:bg-emerald-50 border border-gray-200 hover:border-emerald-200 rounded-lg transition-all"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-slate-500 hover:text-emerald-700 bg-white shadow-sm border border-slate-200 hover:border-emerald-200 hover:shadow-md rounded-xl transition-all"
             >
-              <ShieldCheck className="w-3 h-3" />
+              <ShieldCheck className="w-3.5 h-3.5" />
               Admin
             </button>
             <button
               onClick={() => router.push('/professor/login')}
-              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-gray-400 hover:text-emerald-600 bg-gray-50 hover:bg-emerald-50 border border-gray-200 hover:border-emerald-200 rounded-lg transition-all"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-slate-500 hover:text-emerald-700 bg-white shadow-sm border border-slate-200 hover:border-emerald-200 hover:shadow-md rounded-xl transition-all"
             >
               Faculty
             </button>
           </div>
 
-          <div className="text-right">
-            <p className="text-lg font-mono font-semibold tabular-nums text-gray-800" suppressHydrationWarning>
+          <div className="pl-4 text-right bg-white py-1.5 px-4 rounded-xl border border-slate-200 shadow-sm min-w-[140px]">
+            <p className="text-xl font-mono font-bold tracking-tight text-slate-800" suppressHydrationWarning>
               {currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
             </p>
-            <p className="text-[10px] text-gray-400 leading-none" suppressHydrationWarning>
-              {currentTime.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
+            <p className="text-[10px] uppercase tracking-widest font-semibold text-slate-400 leading-none mt-1" suppressHydrationWarning>
+              {currentTime.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
             </p>
           </div>
         </div>
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 min-h-0 flex">
+      <div className="flex-1 min-h-0 flex bg-slate-50/50">
 
         {/* Left: Camera Feed */}
-        <div className="flex-1 overflow-hidden flex flex-col items-center justify-center p-8">
+        <div className="flex-1 overflow-hidden flex flex-col items-center justify-center p-8 relative">
+          {/* Decorative background elements */}
+          <div className="absolute top-0 right-0 w-96 h-96 bg-emerald-50 rounded-full blur-3xl opacity-50 -z-10 transform translate-x-1/2 -translate-y-1/2"></div>
+          <div className="absolute bottom-0 left-0 w-[500px] h-[500px] bg-blue-50 rounded-full blur-3xl opacity-50 -z-10 transform -translate-x-1/2 translate-y-1/2"></div>
+
           {/* Locked Banner */}
           {phase === 'attendance-locked' && (
             <div className="mb-5 px-5 py-3 bg-red-50 border border-red-200 rounded-xl flex items-center gap-3">
@@ -2185,18 +2205,32 @@ export default function Home() {
           )}
 
           {/* Camera */}
-          <div className={`relative rounded-2xl overflow-hidden border-2 shadow-lg transition-all duration-500 mx-auto ${
-            phase === 'attendance-locked' ? 'border-red-300 opacity-60' : getStatusColor()
-          }`}
-               style={{ width: '560px', height: '420px' }}>
-            <canvas
-              ref={serverCameraCanvasRef}
-              className="w-full h-full object-cover"
-            />
-            <canvas
-              ref={attendanceCanvasRef}
-              className="absolute inset-0 w-full h-full pointer-events-none"
-            />
+          <div className="relative mt-2">
+            {/* Glowing effect behind camera */}
+            <div className={`absolute -inset-1 bg-linear-to-r blur-xl opacity-40 transition-all duration-1000 ${
+              phase === 'attendance-locked' ? 'from-red-400 to-red-600' :
+              scanStatus === 'matched' ? 'from-emerald-400 to-teal-500' :
+              scanStatus === 'no-match' ? 'from-red-400 to-rose-600' :
+              scanStatus === 'already-marked' ? 'from-blue-400 to-cyan-500' :
+              'from-slate-300 to-slate-400'
+            }`}></div>
+            
+            <div className={`relative rounded-3xl overflow-hidden shadow-2xl transition-all duration-500 border-4 bg-slate-900 mx-auto ${
+              phase === 'attendance-locked' ? 'border-red-400 opacity-80' : 
+              scanStatus === 'matched' ? 'border-emerald-500 shadow-[0_0_40px_-10px_rgba(16,185,129,0.5)]' :
+              scanStatus === 'no-match' ? 'border-red-500 shadow-[0_0_40px_-10px_rgba(239,68,68,0.5)]' :
+              scanStatus === 'already-marked' ? 'border-blue-500 shadow-[0_0_40px_-10px_rgba(59,130,246,0.5)]' :
+              'border-slate-200'
+            }`}
+                 style={{ width: '640px', height: '480px' }}>
+              <canvas
+                ref={serverCameraCanvasRef}
+                className="w-full h-full object-cover transform scale-x-[-1]"
+              />
+              <canvas
+                ref={attendanceCanvasRef}
+                className="absolute inset-0 w-full h-full pointer-events-none transform scale-x-[-1]"
+              />
 
             {/* Face count */}
             {detectedFaces.length > 0 && phase === 'attendance-active' && (
@@ -2228,48 +2262,57 @@ export default function Home() {
             )}
 
             {phase === 'attendance-locked' && (
-              <div className="absolute inset-0 flex items-center justify-center bg-black/40">
-                <div className="bg-white/95 rounded-2xl px-8 py-6 text-center shadow-xl">
-                  <Lock className="w-10 h-10 text-red-400 mx-auto mb-2" />
-                  <span className="text-sm font-bold text-gray-900">SESSION CLOSED</span>
+              <div className="absolute inset-0 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm">
+                <div className="bg-white rounded-3xl px-10 py-8 text-center shadow-2xl border border-slate-100 transform rotate-[-2deg] scale-110">
+                  <Lock className="w-16 h-16 text-red-500 mx-auto mb-4" />
+                  <span className="text-2xl font-black text-slate-800 tracking-tight uppercase">SESSION CLOSED</span>
                 </div>
               </div>
             )}
           </div>
+          </div>
 
           {/* Status Message */}
-          <div className="mt-5 min-h-10 flex items-center justify-center">
+          <div className="mt-8 min-h-[60px] flex items-center justify-center w-full max-w-2xl bg-white/50 backdrop-blur-sm rounded-2xl border border-slate-200/50 shadow-sm p-4">
             {statusMessage ? (
-              <p className={`text-sm font-medium text-center max-w-xl ${
-                scanStatus === 'matched' ? 'text-emerald-600' :
+              <p className={`text-lg font-bold text-center max-w-xl transition-all duration-300 ${
+                scanStatus === 'matched' ? 'text-emerald-600 drop-shadow-sm' :
                 scanStatus === 'no-match' ? 'text-red-500' :
-                scanStatus === 'already-marked' ? 'text-blue-500' :
+                scanStatus === 'already-marked' ? 'text-blue-600' :
                 scanStatus === 'locked' ? 'text-amber-500' :
-                'text-gray-400'
+                'text-slate-500'
               }`}>
                 {statusMessage}
               </p>
             ) : phase === 'attendance-active' ? (
-              <p className="text-gray-400 text-sm">Step in front of the camera to mark attendance</p>
+              <div className="flex items-center gap-3 text-slate-500 font-medium">
+                <Scan className="w-5 h-5 text-emerald-500 animate-pulse" />
+                <p>Ensure your face is clearly visible to the scanner</p>
+              </div>
             ) : null}
           </div>
 
           {/* Class Time Info */}
           {selectedSchedule && (
-            <div className="mt-3 flex items-center gap-3 text-xs text-gray-400">
-              <span className="flex items-center gap-1">
-                <Timer className="w-3 h-3" />
+            <div className="mt-6 flex flex-wrap justify-center items-center gap-4 text-xs">
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 rounded-lg shadow-sm text-slate-600 font-medium">
+                <Timer className="w-4 h-4 text-emerald-500" />
                 {formatTime(selectedSchedule.startTime)} — {formatTime(selectedSchedule.endTime)}
-              </span>
-              <span className="text-gray-300">|</span>
-              <span>Present: 0-20 min · Late: 20-30 min · Lock: 30 min</span>
+              </div>
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-100/80 border border-slate-200/60 rounded-lg text-slate-500 font-medium">
+                <span className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-emerald-400"></div> 0-20m</span>
+                <span className="text-slate-300">|</span>
+                <span className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-amber-400"></div> 20-30m</span>
+                <span className="text-slate-300">|</span>
+                <span className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-red-400"></div> {'>'}30m</span>
+              </div>
             </div>
           )}
 
           {phase === 'attendance-locked' && (
             <button
               onClick={resetToScan}
-              className="mt-5 px-5 py-2.5 bg-gray-900 hover:bg-gray-800 text-white text-sm rounded-xl transition-colors font-medium"
+              className="mt-6 px-6 py-3 bg-slate-900 hover:bg-slate-800 text-white text-sm rounded-xl transition-all shadow-lg hover:shadow-xl font-bold flex items-center gap-2"
             >
               Start New Session
             </button>
@@ -2277,38 +2320,50 @@ export default function Home() {
         </div>
 
         {/* Right: Student List & Stats */}
-        <div className="w-96 border-l border-gray-100 bg-white flex flex-col">
+        <div className="w-[420px] border-l border-slate-200 bg-white/80 backdrop-blur-xl flex flex-col shadow-[inset_1px_0_0_rgba(255,255,255,1)]">
           {/* Stats */}
-          <div className="p-5 border-b border-gray-100">
-            <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-3">Attendance Summary</h2>
-            <div className="grid grid-cols-4 gap-2">
-              <div className="rounded-lg p-2.5 text-center bg-emerald-50 border border-emerald-100">
-                <p className="text-xl font-bold text-emerald-600">{stats.present}</p>
-                <p className="text-[10px] text-emerald-500 mt-0.5">Present</p>
-              </div>
-              <div className="rounded-lg p-2.5 text-center bg-amber-50 border border-amber-100">
-                <p className="text-xl font-bold text-amber-600">{stats.late}</p>
-                <p className="text-[10px] text-amber-500 mt-0.5">Late</p>
-              </div>
-              <div className="rounded-lg p-2.5 text-center bg-red-50 border border-red-100">
-                <p className="text-xl font-bold text-red-500">{stats.absent}</p>
-                <p className="text-[10px] text-red-400 mt-0.5">Absent</p>
-              </div>
-              <div className="rounded-lg p-2.5 text-center bg-gray-50 border border-gray-100">
-                <p className="text-xl font-bold text-gray-500">{stats.pending}</p>
-                <p className="text-[10px] text-gray-400 mt-0.5">Pending</p>
+          <div className="p-6 border-b border-slate-100 bg-white/50">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Attendance Summary</h2>
+              <div className="px-2.5 py-1 bg-slate-100 rounded-full text-[10px] font-semibold text-slate-500">
+                {stats.present + stats.late} / {stats.total} Present
               </div>
             </div>
-            <div className="mt-3 h-1.5 bg-gray-100 rounded-full overflow-hidden flex">
+            
+            <div className="grid grid-cols-4 gap-3">
+              <div className="rounded-xl p-3 text-center bg-linear-to-b from-emerald-50 to-emerald-100/50 border border-emerald-100 shadow-sm transition-transform hover:scale-105">
+                <p className="text-2xl font-black text-emerald-600 tracking-tight">{stats.present}</p>
+                <p className="text-[11px] font-semibold text-emerald-500 mt-1 uppercase tracking-wide">Present</p>
+              </div>
+              <div className="rounded-xl p-3 text-center bg-linear-to-b from-amber-50 to-amber-100/50 border border-amber-100 shadow-sm transition-transform hover:scale-105">
+                <p className="text-2xl font-black text-amber-600 tracking-tight">{stats.late}</p>
+                <p className="text-[11px] font-semibold text-amber-500 mt-1 uppercase tracking-wide">Late</p>
+              </div>
+              <div className="rounded-xl p-3 text-center bg-linear-to-b from-red-50 to-red-100/50 border border-red-100 shadow-sm transition-transform hover:scale-105">
+                <p className="text-2xl font-black text-red-500 tracking-tight">{stats.absent}</p>
+                <p className="text-[11px] font-semibold text-red-400 mt-1 uppercase tracking-wide">Absent</p>
+              </div>
+              <div className="rounded-xl p-3 text-center bg-linear-to-b from-slate-50 to-slate-100/50 border border-slate-200 shadow-sm transition-transform hover:scale-105">
+                <p className="text-2xl font-black text-slate-500 tracking-tight">{stats.pending}</p>
+                <p className="text-[11px] font-semibold text-slate-400 mt-1 uppercase tracking-wide">Pending</p>
+              </div>
+            </div>
+            
+            <div className="mt-5 h-2.5 bg-slate-100 rounded-full overflow-hidden flex shadow-inner">
               {stats.total > 0 && (
                 <>
-                  <div className="bg-emerald-500 transition-all" style={{ width: `${(stats.present / stats.total) * 100}%` }} />
-                  <div className="bg-amber-400 transition-all" style={{ width: `${(stats.late / stats.total) * 100}%` }} />
-                  <div className="bg-red-400 transition-all" style={{ width: `${(stats.absent / stats.total) * 100}%` }} />
+                  <div className="bg-emerald-500 transition-all duration-1000 ease-out relative" style={{ width: `${(stats.present / stats.total) * 100}%` }}>
+                    <div className="absolute inset-0 bg-white/20"></div>
+                  </div>
+                  <div className="bg-amber-400 transition-all duration-1000 ease-out relative" style={{ width: `${(stats.late / stats.total) * 100}%` }}>
+                    <div className="absolute inset-0 bg-white/20"></div>
+                  </div>
+                  <div className="bg-red-500 transition-all duration-1000 ease-out relative" style={{ width: `${(stats.absent / stats.total) * 100}%` }}>
+                    <div className="absolute inset-0 bg-white/20"></div>
+                  </div>
                 </>
               )}
             </div>
-            <p className="text-[10px] text-gray-400 mt-1.5 text-right">{stats.present + stats.late} / {stats.total} checked in</p>
           </div>
 
           {/* Student List with Pagination */}
@@ -2319,84 +2374,89 @@ export default function Home() {
             return (
               <div className="flex flex-col flex-1 min-h-0">
                 {/* List header + pagination controls */}
-                <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100 shrink-0">
-                  <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">
-                    Students ({enrolledStudents.length})
+                <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/50 shrink-0">
+                  <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                    <Users className="w-4 h-4" /> Enrolled Roster ({enrolledStudents.length})
                   </h2>
                   {totalPages > 1 && (
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-2 bg-white px-2 py-1 rounded-lg border border-slate-200 shadow-sm">
                       <button
                         onClick={() => setStudentPage(p => Math.max(0, p - 1))}
                         disabled={studentPage === 0}
-                        className="p-1 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed transition"
+                        className="p-1 rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
                       >
-                        <ChevronLeft className="w-3.5 h-3.5" />
+                        <ChevronLeft className="w-4 h-4" />
                       </button>
-                      <span className="text-xs text-gray-400 tabular-nums min-w-12 text-center">
+                      <span className="text-xs font-medium text-slate-600 tabular-nums min-w-[3rem] text-center">
                         {studentPage + 1} / {totalPages}
                       </span>
                       <button
                         onClick={() => setStudentPage(p => Math.min(totalPages - 1, p + 1))}
                         disabled={studentPage >= totalPages - 1}
-                        className="p-1 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed transition"
+                        className="p-1 rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
                       >
-                        <ChevronRight className="w-3.5 h-3.5" />
+                        <ChevronRight className="w-4 h-4" />
                       </button>
                     </div>
                   )}
                 </div>
 
                 {/* Scrollable rows */}
-                <div className="flex-1 overflow-y-auto p-4">
+                <div className="flex-1 overflow-y-auto p-4 space-y-2 relative">
+                  {/* Subtle inner shadow top */}
+                  <div className="absolute top-0 left-0 right-0 h-4 bg-linear-to-b from-slate-50/80 to-transparent pointer-events-none z-10"></div>
+                  
                   {enrolledStudents.length === 0 ? (
-                    <div className="text-center py-10 text-gray-300">
-                      <p className="text-xs">No students enrolled</p>
+                    <div className="flex flex-col items-center justify-center h-full text-slate-400 opacity-60">
+                      <Users className="w-12 h-12 mb-3" />
+                      <p className="text-sm font-medium">No students enrolled</p>
                     </div>
                   ) : (
-                    <div className="space-y-1">
+                    <div className="space-y-2 pb-4">
                       {pagedStudents.map(student => (
                         <div
                           key={student.id}
-                          className={`flex items-center gap-2.5 px-3 py-2 rounded-lg border transition-all ${
+                          className={`flex items-center gap-3 px-4 py-3 rounded-xl border transition-all duration-300 hover:-translate-y-0.5 hover:shadow-md ${
                             student.status === 'present'
-                              ? 'bg-emerald-50/50 border-emerald-100'
+                              ? 'bg-linear-to-r from-emerald-50 to-white border-emerald-200 shadow-sm shadow-emerald-100/50'
                               : student.status === 'late'
-                              ? 'bg-amber-50/50 border-amber-100'
+                              ? 'bg-linear-to-r from-amber-50 to-white border-amber-200 shadow-sm shadow-amber-100/50'
                               : student.status === 'absent'
-                              ? 'bg-red-50/50 border-red-100'
-                              : 'bg-gray-50/50 border-gray-100'
+                              ? 'bg-linear-to-r from-red-50 to-white border-red-200 shadow-sm shadow-red-100/50'
+                              : 'bg-white border-slate-200 shadow-sm'
                           }`}
                         >
-                          <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${
-                            student.status === 'present' ? 'bg-emerald-100 text-emerald-600' :
-                            student.status === 'late' ? 'bg-amber-100 text-amber-600' :
-                            student.status === 'absent' ? 'bg-red-100 text-red-500' :
-                            'bg-gray-100 text-gray-400'
+                          <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 border-2 ${
+                            student.status === 'present' ? 'bg-emerald-100 border-emerald-200 text-emerald-600' :
+                            student.status === 'late' ? 'bg-amber-100 border-amber-200 text-amber-600' :
+                            student.status === 'absent' ? 'bg-red-100 border-red-200 text-red-500' :
+                            'bg-slate-50 border-slate-100 text-slate-300'
                           }`}>
-                            {student.status === 'present' ? <CheckCircle className="w-3.5 h-3.5" /> :
-                             student.status === 'late' ? <Clock className="w-3.5 h-3.5" /> :
-                             student.status === 'absent' ? <XCircle className="w-3.5 h-3.5" /> :
-                             <span className="w-1.5 h-1.5 rounded-full bg-gray-300" />}
+                            {student.status === 'present' ? <CheckCircle className="w-5 h-5" /> :
+                             student.status === 'late' ? <Clock className="w-5 h-5" /> :
+                             student.status === 'absent' ? <XCircle className="w-5 h-5" /> :
+                             <span className="w-2 h-2 rounded-full bg-slate-300" />}
                           </div>
                           <div className="flex-1 min-w-0">
-                            <p className={`text-xs font-medium truncate ${
-                              student.status === 'pending' ? 'text-gray-400' : 'text-gray-800'
+                            <p className={`text-sm font-bold truncate ${
+                              student.status === 'pending' ? 'text-slate-500' : 'text-slate-800'
                             }`}>
                               {student.lastName}, {student.firstName}
                             </p>
-                            <p className="text-[10px] text-gray-400">{student.studentNumber}</p>
+                            <p className="text-[11px] font-medium text-slate-400 font-mono tracking-tight mt-0.5">{student.studentNumber}</p>
                           </div>
-                          <div className="text-right shrink-0">
-                            <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
-                              student.status === 'present' ? 'bg-emerald-100 text-emerald-600' :
-                              student.status === 'late' ? 'bg-amber-100 text-amber-600' :
-                              student.status === 'absent' ? 'bg-red-100 text-red-500' :
-                              'bg-gray-100 text-gray-400'
+                          <div className="text-right shrink-0 flex flex-col items-end">
+                            <span className={`text-[10px] uppercase font-black tracking-widest px-2 py-1 rounded-md ${
+                              student.status === 'present' ? 'bg-emerald-100 text-emerald-700' :
+                              student.status === 'late' ? 'bg-amber-100 text-amber-700' :
+                              student.status === 'absent' ? 'bg-red-100 text-red-700' :
+                              'bg-slate-100 text-slate-500'
                             }`}>
-                              {student.status.toUpperCase()}
+                              {student.status}
                             </span>
                             {student.checkedInAt && (
-                              <p className="text-[10px] text-gray-400 mt-0.5">
+                              <p className="text-[10px] font-semibold text-slate-400 mt-1.5 flex items-center gap-1">
+                                <Clock className="w-3 h-3" />
                                 {new Date(student.checkedInAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
                               </p>
                             )}

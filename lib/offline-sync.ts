@@ -18,6 +18,7 @@ export interface SyncStatus {
 
 class OfflineSyncService {
   private syncInProgress = false
+  private pendingSyncRequested = false
   private lastSyncTime: Record<string, number> = {}
   private syncIntervalMs = 5 * 60 * 1000 // 5 minutes
   private statusCallbacks: Array<(status: SyncStatus) => void> = []
@@ -49,6 +50,36 @@ class OfflineSyncService {
       this.notifyStatusChange()
     })
 
+    // Sync when user returns to the app/tab.
+    window.addEventListener('focus', () => {
+      if (navigator.onLine) {
+        console.log('🎯 Window focused - syncing offline cache')
+        this.syncAllData()
+      }
+    })
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && navigator.onLine) {
+        console.log('👀 Tab visible - syncing offline cache')
+        this.syncAllData()
+      }
+    })
+
+    // Allow any client code to request immediate sync after mutations.
+    window.addEventListener('offline-sync:trigger' as any, () => {
+      if (navigator.onLine) {
+        console.log('⚡ Mutation-triggered sync requested')
+        this.syncAllData()
+      }
+    })
+
+    // Keep cache fresh in background.
+    window.setInterval(() => {
+      if (navigator.onLine) {
+        this.syncAllData()
+      }
+    }, this.syncIntervalMs)
+
     // Initial online status check
     if (navigator.onLine) {
       this.syncAllData()
@@ -60,7 +91,9 @@ class OfflineSyncService {
    */
   async syncAllData() {
     if (this.syncInProgress) {
-      console.log('⏳ Sync already in progress')
+      // Queue one follow-up sync so mutation-triggered updates are not lost.
+      this.pendingSyncRequested = true
+      console.log('⏳ Sync already in progress; queued follow-up sync')
       return
     }
 
@@ -68,12 +101,18 @@ class OfflineSyncService {
     this.notifyStatusChange()
 
     try {
-      await Promise.all([
+      const [professorsSynced, sectionsSynced, classroomsSynced, schedulesSynced] = await Promise.all([
         this.syncProfessors(),
         this.syncSections(),
         this.syncClassrooms(),
         this.syncSchedules(),
       ])
+
+      const now = Date.now()
+      if (professorsSynced) this.lastSyncTime['professors'] = now
+      if (sectionsSynced) this.lastSyncTime['sections'] = now
+      if (classroomsSynced) this.lastSyncTime['classrooms'] = now
+      if (schedulesSynced) this.lastSyncTime['schedules'] = now
 
       this.lastSyncTime['all'] = Date.now()
       console.log('✅ All data synced to offline cache')
@@ -82,6 +121,13 @@ class OfflineSyncService {
     } finally {
       this.syncInProgress = false
       this.notifyStatusChange()
+
+      // If a sync request arrived during processing, run one more pass immediately.
+      if (this.pendingSyncRequested && typeof window !== 'undefined' && navigator.onLine) {
+        this.pendingSyncRequested = false
+        console.log('🔁 Running queued follow-up sync')
+        void this.syncAllData()
+      }
     }
   }
 
