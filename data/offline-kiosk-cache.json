@@ -536,7 +536,7 @@
       "startTime": "18:00:00",
       "endTime": "21:00:00",
       "totalStudents": 13,
-      "updatedAt": "2026-03-18T10:50:18.013Z"
+      "updatedAt": "2026-03-18T13:40:16.948Z"
     },
     {
       "id": "45a07cbd-06bd-463a-9ce1-d13ba21a1860",
@@ -548,7 +548,7 @@
       "startTime": "18:22:00",
       "endTime": "18:50:00",
       "totalStudents": 13,
-      "updatedAt": "2026-03-18T10:50:18.013Z"
+      "updatedAt": "2026-03-18T13:40:16.948Z"
     }
   ],
   "students": [
@@ -6851,7 +6851,7 @@
       "subjectName": "",
       "sectionCode": "SBIT4H",
       "professorId": "b49df151-8df0-419b-95ad-0bc537d6def2",
-      "updatedAt": "2026-03-18T10:50:18.000Z"
+      "updatedAt": "2026-03-18T13:40:16.934Z"
     },
     {
       "id": "45a07cbd-06bd-463a-9ce1-d13ba21a1860",
@@ -6865,7 +6865,7 @@
       "subjectName": "",
       "sectionCode": "SBIT4H",
       "professorId": "e92bd8a9-e96f-46c7-b4a1-553469dc62ca",
-      "updatedAt": "2026-03-18T10:50:18.000Z"
+      "updatedAt": "2026-03-18T13:40:16.934Z"
     }
   ],
   "sections": [
@@ -6875,7 +6875,7 @@
       "semester": "",
       "academicYear": "",
       "maxStudents": 0,
-      "updatedAt": "2026-03-18T10:50:18.030Z"
+      "updatedAt": "2026-03-18T13:40:16.993Z"
     },
     {
       "id": "5a000a02-96a3-44c8-bcf2-a119b8ec7436",
@@ -6883,7 +6883,7 @@
       "semester": "",
       "academicYear": "",
       "maxStudents": 0,
-      "updatedAt": "2026-03-18T10:50:18.030Z"
+      "updatedAt": "2026-03-18T13:40:16.993Z"
     }
   ]
 }
