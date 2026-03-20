@@ -535,8 +535,10 @@
       "dayOfWeek": "Thursday",
       "startTime": "18:00:00",
       "endTime": "21:00:00",
-      "totalStudents": 11,
-      "updatedAt": "2026-03-20T06:12:01.978Z"
+      "totalStudents": 12,
+      "semester": "2nd Semester",
+      "academicYear": "2025-2026",
+      "updatedAt": "2026-03-20T11:14:22.408Z"
     },
     {
       "id": "45a07cbd-06bd-463a-9ce1-d13ba21a1860",
@@ -549,6 +551,62 @@
       "endTime": "18:50:00",
       "totalStudents": 12,
       "updatedAt": "2026-03-20T06:11:25.259Z"
+    },
+    {
+      "id": "31456f7e-e134-47a7-a43c-bdaff38d96e9",
+      "professorId": "1e9997a5-6ad9-4ba2-87a6-5a3136baf029",
+      "sectionId": "5a000a02-96a3-44c8-bcf2-a119b8ec7436",
+      "sectionCode": "SBIT4H",
+      "room": "IL504a",
+      "dayOfWeek": "Thursday",
+      "startTime": "18:00:00",
+      "endTime": "21:00:00",
+      "totalStudents": 12,
+      "semester": "2nd Semester",
+      "academicYear": "2025-2026",
+      "updatedAt": "2026-03-20T11:14:22.408Z"
+    },
+    {
+      "id": "04df066b-1d89-45b4-9882-3f4dcd1fcc35",
+      "professorId": "1e9997a5-6ad9-4ba2-87a6-5a3136baf029",
+      "sectionId": "dc08e291-8d82-4883-afd0-564ce2739fea",
+      "sectionCode": "SBIT-4A",
+      "room": "Lab A",
+      "dayOfWeek": "Monday",
+      "startTime": "08:00:00",
+      "endTime": "09:00:00",
+      "totalStudents": 0,
+      "semester": "1st",
+      "academicYear": "2026-2027",
+      "updatedAt": "2026-03-20T11:13:16.398Z"
+    },
+    {
+      "id": "0d2b5909-da86-4be6-aea8-e17ad1e314f0",
+      "professorId": "1e9997a5-6ad9-4ba2-87a6-5a3136baf029",
+      "sectionId": "dc08e291-8d82-4883-afd0-564ce2739fea",
+      "sectionCode": "SBIT-4A",
+      "room": "Lab 2",
+      "dayOfWeek": "Monday",
+      "startTime": "08:00:00",
+      "endTime": "17:00:00",
+      "totalStudents": 0,
+      "semester": "1st",
+      "academicYear": "2026-2027",
+      "updatedAt": "2026-03-20T11:14:22.408Z"
+    },
+    {
+      "id": "7d132878-238c-4322-8524-a06123096b10",
+      "professorId": "1e9997a5-6ad9-4ba2-87a6-5a3136baf029",
+      "sectionId": "dc08e291-8d82-4883-afd0-564ce2739fea",
+      "sectionCode": "SBIT-4A",
+      "room": "lab 2",
+      "dayOfWeek": "Wednesday",
+      "startTime": "08:00:00",
+      "endTime": "09:00:00",
+      "totalStudents": 0,
+      "semester": "1st",
+      "academicYear": "2026-2027",
+      "updatedAt": "2026-03-20T11:14:22.408Z"
     }
   ],
   "students": [
@@ -6851,7 +6909,7 @@
       "subjectName": "",
       "sectionCode": "SBIT4H",
       "professorId": "b49df151-8df0-419b-95ad-0bc537d6def2",
-      "updatedAt": "2026-03-20T06:12:01.963Z"
+      "updatedAt": "2026-03-20T11:14:22.395Z"
     },
     {
       "id": "45a07cbd-06bd-463a-9ce1-d13ba21a1860",
@@ -6866,6 +6924,62 @@
       "sectionCode": "SBIT4H",
       "professorId": "e92bd8a9-e96f-46c7-b4a1-553469dc62ca",
       "updatedAt": "2026-03-20T06:11:25.242Z"
+    },
+    {
+      "id": "31456f7e-e134-47a7-a43c-bdaff38d96e9",
+      "sectionId": "5a000a02-96a3-44c8-bcf2-a119b8ec7436",
+      "room": "IL504a",
+      "maxCapacity": 13,
+      "dayOfWeek": "Thursday",
+      "startTime": "18:00:00",
+      "endTime": "21:00:00",
+      "subjectCode": "",
+      "subjectName": "",
+      "sectionCode": "SBIT4H",
+      "professorId": "1e9997a5-6ad9-4ba2-87a6-5a3136baf029",
+      "updatedAt": "2026-03-20T11:14:22.395Z"
+    },
+    {
+      "id": "04df066b-1d89-45b4-9882-3f4dcd1fcc35",
+      "sectionId": "dc08e291-8d82-4883-afd0-564ce2739fea",
+      "room": "Lab A",
+      "maxCapacity": 40,
+      "dayOfWeek": "Monday",
+      "startTime": "08:00:00",
+      "endTime": "09:00:00",
+      "subjectCode": "",
+      "subjectName": "",
+      "sectionCode": "SBIT-4A",
+      "professorId": "1e9997a5-6ad9-4ba2-87a6-5a3136baf029",
+      "updatedAt": "2026-03-20T11:13:16.386Z"
+    },
+    {
+      "id": "0d2b5909-da86-4be6-aea8-e17ad1e314f0",
+      "sectionId": "dc08e291-8d82-4883-afd0-564ce2739fea",
+      "room": "Lab 2",
+      "maxCapacity": 40,
+      "dayOfWeek": "Monday",
+      "startTime": "08:00:00",
+      "endTime": "17:00:00",
+      "subjectCode": "",
+      "subjectName": "",
+      "sectionCode": "SBIT-4A",
+      "professorId": "1e9997a5-6ad9-4ba2-87a6-5a3136baf029",
+      "updatedAt": "2026-03-20T11:14:22.395Z"
+    },
+    {
+      "id": "7d132878-238c-4322-8524-a06123096b10",
+      "sectionId": "dc08e291-8d82-4883-afd0-564ce2739fea",
+      "room": "lab 2",
+      "maxCapacity": 40,
+      "dayOfWeek": "Wednesday",
+      "startTime": "08:00:00",
+      "endTime": "09:00:00",
+      "subjectCode": "",
+      "subjectName": "",
+      "sectionCode": "SBIT-4A",
+      "professorId": "1e9997a5-6ad9-4ba2-87a6-5a3136baf029",
+      "updatedAt": "2026-03-20T11:14:22.395Z"
     }
   ],
   "sections": [
@@ -6883,7 +6997,7 @@
       "semester": "",
       "academicYear": "",
       "maxStudents": 0,
-      "updatedAt": "2026-03-20T06:12:02.001Z"
+      "updatedAt": "2026-03-20T11:14:22.425Z"
     },
     {
       "id": "dc08e291-8d82-4883-afd0-564ce2739fea",
@@ -6891,7 +7005,7 @@
       "semester": "",
       "academicYear": "",
       "maxStudents": 0,
-      "updatedAt": "2026-03-20T06:12:02.001Z"
+      "updatedAt": "2026-03-20T11:14:22.425Z"
     }
   ]
 }
