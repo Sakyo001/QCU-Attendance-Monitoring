@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { Plus, Edit, Trash2, ArrowLeft } from 'lucide-react'
 import { createClient } from '@/utils/supabase/client'
+import { confirmDelete } from '@/lib/confirm-delete'
 import Swal from 'sweetalert2'
 
 interface Faculty {
@@ -162,23 +163,6 @@ export default function FacultyPage() {
     }
   }
 
-  const handleDelete = async (member: Faculty) => {
-    const result = await Swal.fire({
-      title: 'Delete Faculty',
-      html: `Are you sure you want to delete <strong>${member.first_name} ${member.last_name}</strong>? This action cannot be undone.`,
-      icon: 'warning',
-      showCancelButton: true,
-      confirmButtonText: 'Delete',
-      confirmButtonColor: '#dc2626',
-      cancelButtonText: 'Cancel',
-      reverseButtons: true
-    })
-
-    if (result.isConfirmed) {
-      await handleDeleteFaculty(member.id)
-    }
-  }
-
   const handleUpdateFaculty = async (
     facultyId: string,
     firstName: string,
@@ -233,15 +217,22 @@ export default function FacultyPage() {
     }
   }
 
-  const handleDeleteFaculty = async (facultyId: string) => {
+  const handleDeleteFaculty = async (member: Faculty) => {
+    const isConfirmed = await confirmDelete({
+      title: 'Delete Faculty',
+      html: `Are you sure you want to delete <strong>${member.first_name} ${member.last_name}</strong>? This action cannot be undone.`,
+    })
+
+    if (!isConfirmed) return
+
     try {
-      console.log('🗑️ Deleting faculty:', facultyId)
+      console.log('🗑️ Deleting faculty:', member.id)
       
       // Call the API endpoint to delete both from users and auth
       const response = await fetch('/api/admin/faculty/delete', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ facultyId })
+        body: JSON.stringify({ facultyId: member.id })
       })
 
       const result = await response.json()
@@ -254,7 +245,7 @@ export default function FacultyPage() {
       console.log('✅ Faculty deleted successfully from both database and auth')
       
       // Immediately update state to remove the deleted faculty
-      setFaculty(prevFaculty => prevFaculty.filter(f => f.id !== facultyId))
+      setFaculty(prevFaculty => prevFaculty.filter(f => f.id !== member.id))
 
       await Swal.fire({
         title: 'Deleted!',
@@ -436,7 +427,7 @@ export default function FacultyPage() {
                             <Edit className="w-4 h-4" />
                           </button>
                           <button 
-                            onClick={() => handleDelete(member)}
+                            onClick={() => handleDeleteFaculty(member)}
                             className="text-red-600 hover:text-red-900 transition-colors"
                             title="Delete faculty"
                           >

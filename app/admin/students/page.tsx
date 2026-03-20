@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { Plus, Edit, Trash2, Mail, ArrowLeft, ChevronDown, ChevronUp, BookOpen, Search, ChevronsDown, ChevronsUp } from 'lucide-react'
 import { createClient } from '@/utils/supabase/client'
+import { confirmDelete } from '@/lib/confirm-delete'
 import Swal from 'sweetalert2'
 
 interface Student {
@@ -259,36 +260,14 @@ export default function StudentsPage() {
     }
   }
 
-  const handleDelete = async (student: Student) => {
-    const result = await Swal.fire({
-      title: 'Delete Student',
-      html: `Are you sure you want to delete <strong>${student.first_name} ${student.last_name}</strong>? This action cannot be undone.`,
-      icon: 'warning',
-      showCancelButton: true,
-      confirmButtonText: 'Delete',
-      confirmButtonColor: '#dc2626',
-      cancelButtonText: 'Cancel',
-      reverseButtons: true
-    })
-
-    if (result.isConfirmed) {
-      await handleDeleteStudent(student.id)
-    }
-  }
-
   const handleDeleteAll = async () => {
-    const result = await Swal.fire({
+    const isConfirmed = await confirmDelete({
       title: 'Delete All Students',
       html: `Are you sure you want to delete <strong>all ${students.length} students</strong>? This action cannot be undone and will also remove them from the authentication system.`,
-      icon: 'warning',
-      showCancelButton: true,
       confirmButtonText: 'Delete All',
-      confirmButtonColor: '#dc2626',
-      cancelButtonText: 'Cancel',
-      reverseButtons: true
     })
 
-    if (result.isConfirmed) {
+    if (isConfirmed) {
       try {
         setLoadingStudents(true)
         
@@ -380,14 +359,21 @@ export default function StudentsPage() {
     }
   }
 
-  const handleDeleteStudent = async (studentId: string) => {
+  const handleDeleteStudent = async (student: Student) => {
+    const isConfirmed = await confirmDelete({
+      title: 'Delete Student',
+      html: `Are you sure you want to delete <strong>${student.first_name} ${student.last_name}</strong>? This action cannot be undone.`,
+    })
+
+    if (!isConfirmed) return
+
     try {
-      console.log('🗑️ Deleting student:', studentId)
+      console.log('🗑️ Deleting student:', student.id)
       
       const response = await fetch('/api/admin/students/delete', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ studentId })
+        body: JSON.stringify({ studentId: student.id })
       })
 
       const result = await response.json()
@@ -399,7 +385,7 @@ export default function StudentsPage() {
 
       console.log('✅ Student deleted successfully from both database and auth')
       
-      setStudents(prevStudents => prevStudents.filter(s => s.id !== studentId))
+      setStudents(prevStudents => prevStudents.filter(s => s.id !== student.id))
 
       await Swal.fire({
         title: 'Deleted!',
@@ -649,7 +635,7 @@ export default function StudentsPage() {
                               <Edit className="w-4 h-4" />
                             </button>
                             <button 
-                              onClick={() => handleDelete(student as Student)}
+                              onClick={() => handleDeleteStudent(student as Student)}
                               className="text-red-600 hover:text-red-900 transition-colors p-1"
                               title="Delete student"
                             >

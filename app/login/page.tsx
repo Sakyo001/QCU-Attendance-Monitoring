@@ -509,15 +509,7 @@ export default function UnifiedLoginPage() {
               </div>
             </div>
 
-            {/* Forgot Password Link */}
-            <div className="flex justify-end">
-              <Link 
-                href="/forgot-password" 
-                className="text-sm text-primary hover:text-primary/80 hover:underline font-medium transition-colors"
-              >
-                Forgot password?
-              </Link>
-            </div>
+          
 
             {/* Submit Button */}
             <button

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { ArrowLeft, Plus, Edit, Trash2, Clock, MapPin } from 'lucide-react'
 import { createClient } from '@/utils/supabase/client'
+import { confirmDelete } from '@/lib/confirm-delete'
 import Swal from 'sweetalert2'
 
 interface ClassSession {
@@ -216,18 +217,12 @@ export default function SchedulesPage() {
   }
 
   const handleDeleteSchedule = async (session: ClassSession) => {
-    const result = await Swal.fire({
+    const isConfirmed = await confirmDelete({
       title: 'Delete Schedule',
       html: `Are you sure you want to delete the schedule for <strong>${session.section_code}</strong> on <strong>${session.day_of_week}</strong> at <strong>${session.start_time}</strong>?`,
-      icon: 'warning',
-      showCancelButton: true,
-      confirmButtonText: 'Delete',
-      confirmButtonColor: '#dc2626',
-      cancelButtonText: 'Cancel',
-      reverseButtons: true
     })
 
-    if (result.isConfirmed) {
+    if (isConfirmed) {
       try {
         const response = await fetch('/api/admin/schedules', {
           method: 'DELETE',

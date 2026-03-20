@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { Plus, Edit, Trash2, Users, ArrowLeft } from 'lucide-react'
 import { createClient } from '@/utils/supabase/client'
+import { confirmDelete } from '@/lib/confirm-delete'
 import Swal from 'sweetalert2'
 
 interface Section {
@@ -185,23 +186,6 @@ export default function SectionsPage() {
     }
   }
 
-  const handleDelete = async (section: Section) => {
-    const result = await Swal.fire({
-      title: 'Delete Section',
-      html: `Are you sure you want to delete section <strong>${section.section_code}</strong>? This action cannot be undone.`,
-      icon: 'warning',
-      showCancelButton: true,
-      confirmButtonText: 'Delete Section',
-      confirmButtonColor: '#dc2626',
-      cancelButtonText: 'Cancel',
-      reverseButtons: true
-    })
-
-    if (result.isConfirmed) {
-      await handleDeleteSection(section.id)
-    }
-  }
-
   const handleUpdateSection = async (
     sectionId: string,
     sectionCode: string,
@@ -242,12 +226,20 @@ export default function SectionsPage() {
     }
   }
 
-  const handleDeleteSection = async (sectionId: string) => {
+  const handleDeleteSection = async (section: Section) => {
+    const isConfirmed = await confirmDelete({
+      title: 'Delete Section',
+      html: `Are you sure you want to delete section <strong>${section.section_code}</strong>? This action cannot be undone.`,
+      confirmButtonText: 'Delete Section',
+    })
+
+    if (!isConfirmed) return
+
     try {
       const { error } = await supabase
         .from('sections')
         .delete()
-        .eq('id', sectionId as any)
+        .eq('id', section.id as any)
 
       if (error) throw error
 
@@ -478,7 +470,7 @@ export default function SectionsPage() {
                             <Edit className="w-4 h-4" />
                           </button>
                           <button 
-                            onClick={() => handleDelete(section)}
+                            onClick={() => handleDeleteSection(section)}
                             className="text-red-600 hover:text-red-900 transition-colors"
                             title="Delete section"
                           >
