@@ -103,7 +103,7 @@ async function readScheduleId(request: NextRequest): Promise<string | null> {
 
 export async function GET(request: NextRequest) {
   try {
-    const supabase = createServiceRoleClient()
+    const supabase: any = createServiceRoleClient()
 
     let sessionsData: any[] = []
     let sectionsData: any[] = []
@@ -288,7 +288,7 @@ export async function GET(request: NextRequest) {
 
 export async function DELETE(request: NextRequest) {
   try {
-    const supabase = createServiceRoleClient()
+    const supabase: any = createServiceRoleClient()
     const id = await readScheduleId(request)
 
     if (!id) {
@@ -327,7 +327,7 @@ export async function DELETE(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const supabase = createServiceRoleClient()
+    const supabase: any = createServiceRoleClient()
     const body: UpsertScheduleBody = await request.json()
 
     const sectionId = body.section_id?.trim()
@@ -421,7 +421,7 @@ export async function POST(request: NextRequest) {
 
 export async function PUT(request: NextRequest) {
   try {
-    const supabase = createServiceRoleClient()
+    const supabase: any = createServiceRoleClient()
     const body: UpsertScheduleBody = await request.json()
 
     const id = body.id?.trim()

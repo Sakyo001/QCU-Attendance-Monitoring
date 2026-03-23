@@ -116,7 +116,7 @@ export async function GET(request: NextRequest) {
       console.warn('Warning fetching professors:', professorsError)
     }
 
-    const professorMap = new Map(
+    const professorMap = new Map<string, string>(
       professors?.map((p: any) => [p.id, `${p.first_name} ${p.last_name}`]) ?? []
     )
 
@@ -149,8 +149,8 @@ export async function GET(request: NextRequest) {
       // Professor display: collect unique assigned professors for this section.
       const professorNames = Array.from(new Set(
         sectionAssignments
-          .map((a: any) => professorMap.get(a.professor_id))
-          .filter((name: string | undefined) => !!name)
+          .map((a: any): string | undefined => professorMap.get(a.professor_id))
+          .filter((name: string | undefined): name is string => Boolean(name))
       )) as string[]
 
       return {

@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js'
 import { Database } from '@/types/database.types'
 
 // Service role client that bypasses RLS - use only on server side!
-export function createServiceRoleClient() {
+export function createServiceRoleClient(): any {
   if (!process.env.NEXT_PUBLIC_SUPABASE_URL) {
     throw new Error('Missing NEXT_PUBLIC_SUPABASE_URL')
   }

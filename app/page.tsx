@@ -1030,18 +1030,23 @@ export default function Home() {
               // Offline-safe: queue the mark and update UI immediately.
               setSystemOffline(true)
 
+              let localStatus: 'present' | 'late' = 'present'
+              let localLocked = false
+
               try {
                 const { status, locked } = computeLocalAttendanceStatus(selectedSchedule)
+                localStatus = status
+                localLocked = locked
                 queueAttendanceMark({
                   sectionId: selectedSchedule.sectionId,
                   studentId,
                   studentNumber: face.studentNumber || undefined,
                   faceMatchConfidence: face.confidence ?? undefined,
                   scheduleId: selectedSchedule.id,
-                  status: locked ? undefined : status,
+                  status: localLocked ? undefined : localStatus,
                 })
               } catch {}
-              if (locked) {
+              if (localLocked) {
                 setAttendanceLocked(true)
                 setPhase('attendance-locked')
               } else {
@@ -1066,19 +1071,19 @@ export default function Home() {
                     studentNumber: face.studentNumber || '',
                     firstName,
                     lastName,
-                    status,
+                    status: localStatus,
                     checkedInAt: nowIso,
                     confidence: face.confidence ?? null,
                   })
 
                   const next = prev.map((s, i) => (
                     i === index
-                      ? { ...s, status, checkedInAt: nowIso, confidence: face.confidence ?? null }
+                      ? { ...s, status: localStatus, checkedInAt: nowIso, confidence: face.confidence ?? null }
                       : s
                   ))
 
                   setStats(computeStatsFromStudents(next))
-                  playSound(status === 'late' ? 'late' : 'success')
+                  playSound(localStatus === 'late' ? 'late' : 'success')
                   return next
                 })
               }

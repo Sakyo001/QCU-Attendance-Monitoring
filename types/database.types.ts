@@ -141,6 +141,56 @@ export interface Database {
           updated_at?: string
         }
       }
+      class_sessions: {
+        Row: {
+          id: string
+          section_id: string
+          professor_id: string
+          room: string
+          max_capacity: number
+          day_of_week: string
+          start_time: string
+          end_time: string
+          subject_code: string | null
+          subject_name: string | null
+          late_threshold_minutes: number
+          lock_after_minutes: number
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          section_id: string
+          professor_id: string
+          room: string
+          max_capacity: number
+          day_of_week: string
+          start_time: string
+          end_time: string
+          subject_code?: string | null
+          subject_name?: string | null
+          late_threshold_minutes?: number
+          lock_after_minutes?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          section_id?: string
+          professor_id?: string
+          room?: string
+          max_capacity?: number
+          day_of_week?: string
+          start_time?: string
+          end_time?: string
+          subject_code?: string | null
+          subject_name?: string | null
+          late_threshold_minutes?: number
+          lock_after_minutes?: number
+          created_at?: string
+          updated_at?: string
+        }
+      }
     }
     Views: {
       [_ in never]: never
