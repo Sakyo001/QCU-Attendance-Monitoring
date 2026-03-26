@@ -11,6 +11,14 @@
 // Override in Vercel/locally via NEXT_PUBLIC_FACENET_API_URL.
 const PRODUCTION_URL = 'https://attendance-monitoring-api-production.up.railway.app'
 const LOCAL_FALLBACK_URL = process.env.NEXT_PUBLIC_LOCAL_API_URL || 'http://localhost:8000'
+const FORCE_LOCAL_FALLBACK = process.env.NEXT_PUBLIC_ENABLE_LOCAL_API_FALLBACK === 'true'
+
+function canUseLocalFallback(): boolean {
+  if (FORCE_LOCAL_FALLBACK) return true
+  if (typeof window === 'undefined') return false
+  const host = window.location.hostname.toLowerCase()
+  return host === 'localhost' || host === '127.0.0.1'
+}
 
 // Runtime-mutable — switches to local fallback automatically when Railway is unreachable
 let FACENET_API_URL = process.env.NEXT_PUBLIC_FACENET_API_URL || PRODUCTION_URL
@@ -23,6 +31,10 @@ function getWsUrl(): string {
 
 /** Switch to the local server. Called automatically on connection failure. */
 function activateFallback(): void {
+  if (!canUseLocalFallback()) {
+    console.warn('⚠️ Local fallback disabled on hosted deployment')
+    return
+  }
   if (!_fallbackActive && LOCAL_FALLBACK_URL !== FACENET_API_URL) {
     _fallbackActive = true
     FACENET_API_URL = LOCAL_FALLBACK_URL
@@ -68,7 +80,7 @@ async function fetchWithRetry(
       }
     } catch (networkError) {
       // Network-level failure (server unreachable) — try local fallback once
-      if (!_fallbackActive && LOCAL_FALLBACK_URL !== FACENET_API_URL) {
+      if (canUseLocalFallback() && !_fallbackActive && LOCAL_FALLBACK_URL !== FACENET_API_URL) {
         activateFallback()
         const fallbackUrl = url.replace(/^https?:\/\/[^/]+/, LOCAL_FALLBACK_URL)
         console.log(`🔄 Retrying with local fallback: ${fallbackUrl}`)
@@ -107,7 +119,7 @@ export async function waitForModelReady(
       }
     } catch {
       // server not yet reachable — try local fallback if not already active
-      if (!_fallbackActive) {
+      if (!_fallbackActive && canUseLocalFallback()) {
         activateFallback()
       }
     }
@@ -391,6 +403,9 @@ export async function checkFaceNetHealth(): Promise<boolean> {
     return true
   } catch (error) {
     console.warn('⚠️ FaceNet health check failed:', error)
+    if (!canUseLocalFallback()) {
+      return false
+    }
     // Activate local fallback so subsequent calls use localhost
     activateFallback()
     // Retry once against the local fallback
@@ -634,7 +649,7 @@ export class RealtimeRecognizer {
       console.error('   - Server running on different port')
       console.error('   - CORS or firewall blocking connection')
       // If Railway WS is unreachable, activate local fallback so reconnect uses localhost
-      if (!_fallbackActive) {
+      if (!_fallbackActive && canUseLocalFallback()) {
         activateFallback()
       }
     }
@@ -848,7 +863,7 @@ export class ServerCameraStream {
 
     this.ws.onerror = () => {
       // Activate fallback only if not already on local
-      if (!_fallbackActive) {
+      if (!_fallbackActive && canUseLocalFallback()) {
         console.warn('⚠️ Server camera WS error — switching to local fallback')
         activateFallback()
       } else {
@@ -1159,7 +1174,7 @@ export class ClientCameraStream {
 
     this.ws.onerror = () => {
       // If Railway WS is unreachable, activate local fallback so reconnect uses localhost
-      if (!_fallbackActive) {
+      if (!_fallbackActive && canUseLocalFallback()) {
         console.warn('⚠️ Client camera WS error — switching to local fallback')
         activateFallback()
       }
