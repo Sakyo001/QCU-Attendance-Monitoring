@@ -745,12 +745,14 @@ export type CameraStreamMode = 'recognize' | 'extract' | 'view'
  */
 export class ServerCameraStream {
   private ws: WebSocket | null = null
+  private clientFallback: ClientCameraStream | null = null
   private onFrame: ((data: CameraStreamFrame) => void) | null = null
   private onError: ((error: string) => void) | null = null
   private stopped = false
   private mode: CameraStreamMode = 'recognize'
   private jpegQuality = 60
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  private fallbackActive = false
 
   /**
    * Start the server camera stream.
@@ -766,7 +768,18 @@ export class ServerCameraStream {
     onError?: (error: string) => void,
     jpegQuality: number = 60
   ): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
+
+    if (this.clientFallback) {
+      this.clientFallback.stop()
+      this.clientFallback = null
+    }
+
     this.stopped = false
+    this.fallbackActive = false
     this.mode = mode
     this.onFrame = onFrame
     this.onError = onError ?? null
@@ -819,12 +832,14 @@ export class ServerCameraStream {
       } else {
         console.error('❌ Server camera WebSocket error (server may not be running)')
       }
-      // Don't surface the error immediately — let onclose trigger reconnect first
+      // In hosted deployments there is typically no physical server camera.
+      // Switch to browser camera stream so scanning still works.
+      this.activateClientFallback('server-camera websocket unavailable')
     }
 
     this.ws.onclose = (event) => {
       console.log(`📹 Server camera disconnected (code: ${event.code})`)
-      if (!this.stopped && this.onFrame) {
+      if (!this.stopped && this.onFrame && !this.fallbackActive) {
         // If this was a Railway→localhost fallback transition, reconnect immediately
         const delay = _fallbackActive ? 500 : 2000
         console.log(`📹 Reconnecting in ${delay}ms...`)
@@ -833,13 +848,54 @@ export class ServerCameraStream {
             this.start(this.mode, this.onFrame!, this.onError ?? undefined, this.jpegQuality)
           }
         }, delay)
+
+        // If reconnect does not happen quickly, move to browser-camera fallback.
+        setTimeout(() => {
+          if (!this.stopped && !this.fallbackActive && (!this.ws || this.ws.readyState !== WebSocket.OPEN)) {
+            this.activateClientFallback('server-camera stream closed')
+          }
+        }, delay + 1200)
       }
     }
+  }
+
+  private activateClientFallback(reason: string): void {
+    if (this.stopped || this.fallbackActive || !this.onFrame) return
+
+    this.fallbackActive = true
+
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
+
+    if (this.ws) {
+      this.ws.onclose = null
+      try {
+        if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
+          this.ws.close()
+        }
+      } catch {
+        // ignore close errors
+      }
+      this.ws = null
+    }
+
+    console.warn(`⚠️ Falling back to browser camera stream (${reason})`)
+    this.onError?.('Server camera unavailable. Switched to browser camera fallback.')
+
+    const fallback = new ClientCameraStream()
+    this.clientFallback = fallback
+    fallback.start(this.mode, this.onFrame, this.onError ?? undefined, this.jpegQuality)
   }
 
   /** Switch the processing mode without reconnecting. */
   setMode(mode: CameraStreamMode): void {
     this.mode = mode
+    if (this.clientFallback) {
+      this.clientFallback.setMode(mode)
+      return
+    }
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ mode }))
     }
@@ -848,10 +904,17 @@ export class ServerCameraStream {
   /** Stop the camera stream. */
   stop(): void {
     this.stopped = true
+    this.fallbackActive = false
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
     }
+
+    if (this.clientFallback) {
+      this.clientFallback.stop()
+      this.clientFallback = null
+    }
+
     if (this.ws) {
       this.ws.onclose = null
       if (this.ws.readyState === WebSocket.OPEN) {
@@ -868,6 +931,7 @@ export class ServerCameraStream {
 
   /** Whether the stream is currently connected. */
   get connected(): boolean {
+    if (this.clientFallback) return this.clientFallback.connected
     return this.ws?.readyState === WebSocket.OPEN
   }
 }
