@@ -128,6 +128,8 @@ export default function Home() {
   const idleVideoRef = useRef<HTMLVideoElement>(null)
   const [idleAnnouncementIdx, setIdleAnnouncementIdx] = useState(0)
   const [idleTriviaIdx, setIdleTriviaIdx] = useState(0)
+  const [idleAnnouncements, setIdleAnnouncements] = useState(IDLE_ANNOUNCEMENTS)
+  const [idleTriviaItems, setIdleTriviaItems] = useState(IDLE_TRIVIA)
 
   // ============ Effects ============
 
@@ -621,10 +623,43 @@ export default function Home() {
   // Idle carousel timers
   useEffect(() => {
     if (!isIdle) return
-    const t1 = setInterval(() => setIdleAnnouncementIdx(p => (p + 1) % IDLE_ANNOUNCEMENTS.length), 6000)
-    const t2 = setInterval(() => setIdleTriviaIdx(p => (p + 1) % IDLE_TRIVIA.length), 8000)
+    if (idleAnnouncements.length === 0 || idleTriviaItems.length === 0) return
+    const t1 = setInterval(() => setIdleAnnouncementIdx(p => (p + 1) % idleAnnouncements.length), 6000)
+    const t2 = setInterval(() => setIdleTriviaIdx(p => (p + 1) % idleTriviaItems.length), 8000)
     return () => { clearInterval(t1); clearInterval(t2) }
-  }, [isIdle])
+  }, [isIdle, idleAnnouncements, idleTriviaItems])
+
+  // Fetch editable idle text for announcements and trivia; fallback to static defaults
+  useEffect(() => {
+    let cancelled = false
+
+    const fetchIdleText = async () => {
+      try {
+        const response = await fetch('/api/idle-text', { cache: 'no-store' })
+        const payload = await response.json()
+        if (!response.ok || cancelled) return
+
+        const announcements = Array.isArray(payload.announcements) ? payload.announcements : []
+        const trivia = Array.isArray(payload.trivia) ? payload.trivia : []
+
+        setIdleAnnouncements(announcements.length > 0 ? announcements : IDLE_ANNOUNCEMENTS)
+        setIdleTriviaItems(trivia.length > 0 ? trivia : IDLE_TRIVIA)
+        setIdleAnnouncementIdx(0)
+        setIdleTriviaIdx(0)
+      } catch {
+        if (!cancelled) {
+          setIdleAnnouncements(IDLE_ANNOUNCEMENTS)
+          setIdleTriviaItems(IDLE_TRIVIA)
+        }
+      }
+    }
+
+    void fetchIdleText()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // Reset activity on any user interaction
   useEffect(() => {
@@ -1765,7 +1800,7 @@ export default function Home() {
   // ============ Render ============
 
   // --- Idle Overlay ---
-  const idleTrivia = IDLE_TRIVIA[idleTriviaIdx]
+  const idleTrivia = idleTriviaItems[idleTriviaIdx] || IDLE_TRIVIA[0]
   const idleOverlay = isIdle ? (
     <div
       className="fixed inset-0 z-50 bg-gray-50 cursor-pointer select-none overflow-hidden flex flex-col"
@@ -1822,7 +1857,7 @@ export default function Home() {
             </div>
             <div className="flex-1 overflow-hidden flex flex-col justify-center">
               <div className="space-y-2 overflow-y-auto pr-1">
-                {IDLE_ANNOUNCEMENTS.map((a, idx) => (
+                {idleAnnouncements.map((a, idx) => (
                   <div
                     key={a.id}
                     className={`p-3 rounded-xl transition-all duration-500 ${
@@ -1846,7 +1881,7 @@ export default function Home() {
               </div>
             </div>
             <div className="flex justify-center gap-1.5 mt-3 shrink-0">
-              {IDLE_ANNOUNCEMENTS.map((_, idx) => (
+              {idleAnnouncements.map((_, idx) => (
                 <div
                   key={idx}
                   className={`h-1.5 rounded-full transition-all duration-300 ${
@@ -1870,7 +1905,7 @@ export default function Home() {
               <p className="text-gray-600 text-sm leading-relaxed">{idleTrivia.answer}</p>
             </div>
             <div className="flex justify-center gap-1.5 mt-3 shrink-0">
-              {IDLE_TRIVIA.map((_, idx) => (
+              {idleTriviaItems.map((_, idx) => (
                 <div
                   key={idx}
                   className={`h-1.5 rounded-full transition-all duration-300 ${

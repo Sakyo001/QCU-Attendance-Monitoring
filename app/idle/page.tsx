@@ -13,6 +13,20 @@ interface Announcement {
   date: string
 }
 
+interface TriviaItem {
+  id: string
+  question: string
+  answer: string
+}
+
+interface IdleMediaItem {
+  id: string
+  title: string
+  media_type: 'image' | 'video'
+  media_url: string
+  display_order: number
+}
+
 const SAMPLE_ANNOUNCEMENTS: Announcement[] = [
   { id: '1', title: 'Final Exams Schedule', message: 'Final examinations will be held from March 15-22, 2026. Please check your respective schedules.', type: 'warning', date: '2026-03-10' },
   { id: '2', title: 'University Foundation Day', message: 'Join us in celebrating our 50th Anniversary on February 14, 2026. Activities start at 8:00 AM.', type: 'event', date: '2026-02-14' },
@@ -21,13 +35,13 @@ const SAMPLE_ANNOUNCEMENTS: Announcement[] = [
   { id: '5', title: 'Sports Fest 2026', message: 'Annual Sports Festival is scheduled for February 20-21. Sign up at the PE office.', type: 'event', date: '2026-02-20' },
 ]
 
-const TRIVIA_ITEMS = [
-  { question: 'Did you know?', answer: 'QCU was established in 1994 through Republic Act 9805 and is one of the leading universities in Quezon City.' },
-  { question: 'Fun Fact', answer: 'The average human face has 43 muscles. Our face recognition system maps 478 unique landmarks to identify you!' },
-  { question: 'Tech Trivia', answer: 'FaceNet, developed by Google, can achieve 99.63% accuracy on the Labeled Faces in the Wild benchmark.' },
-  { question: 'Campus Tip', answer: 'The university library offers free access to online journals and research databases for all enrolled students.' },
-  { question: 'Did you know?', answer: 'Attendance tracking started with paper rolls in the 1800s. Today, AI-powered face recognition does it in under a second!' },
-  { question: 'Study Hack', answer: 'The Pomodoro Technique - 25 minutes of focused study followed by a 5-minute break - can boost productivity by up to 25%.' },
+const TRIVIA_ITEMS: TriviaItem[] = [
+  { id: '1', question: 'Did you know?', answer: 'QCU was established in 1994 through Republic Act 9805 and is one of the leading universities in Quezon City.' },
+  { id: '2', question: 'Fun Fact', answer: 'The average human face has 43 muscles. Our face recognition system maps 478 unique landmarks to identify you!' },
+  { id: '3', question: 'Tech Trivia', answer: 'FaceNet, developed by Google, can achieve 99.63% accuracy on the Labeled Faces in the Wild benchmark.' },
+  { id: '4', question: 'Campus Tip', answer: 'The university library offers free access to online journals and research databases for all enrolled students.' },
+  { id: '5', question: 'Did you know?', answer: 'Attendance tracking started with paper rolls in the 1800s. Today, AI-powered face recognition does it in under a second!' },
+  { id: '6', question: 'Study Hack', answer: 'The Pomodoro Technique - 25 minutes of focused study followed by a 5-minute break - can boost productivity by up to 25%.' },
 ]
 
 function IdleDisplayInner() {
@@ -39,6 +53,10 @@ function IdleDisplayInner() {
   const [currentTime, setCurrentTime] = useState(new Date())
   const [announcementIdx, setAnnouncementIdx] = useState(0)
   const [triviaIdx, setTriviaIdx] = useState(0)
+  const [announcements, setAnnouncements] = useState<Announcement[]>(SAMPLE_ANNOUNCEMENTS)
+  const [triviaItems, setTriviaItems] = useState<TriviaItem[]>(TRIVIA_ITEMS)
+  const [idleMedia, setIdleMedia] = useState<IdleMediaItem[]>([])
+  const [mediaIdx, setMediaIdx] = useState(0)
   const videoRef = useRef<HTMLVideoElement>(null)
 
   useEffect(() => {
@@ -47,20 +65,93 @@ function IdleDisplayInner() {
   }, [])
 
   useEffect(() => {
-    const t = setInterval(() => setAnnouncementIdx(p => (p + 1) % SAMPLE_ANNOUNCEMENTS.length), 6000)
+    if (announcements.length === 0) return
+    const t = setInterval(() => setAnnouncementIdx(p => (p + 1) % announcements.length), 6000)
     return () => clearInterval(t)
+  }, [announcements])
+
+  useEffect(() => {
+    if (triviaItems.length === 0) return
+    const t = setInterval(() => setTriviaIdx(p => (p + 1) % triviaItems.length), 8000)
+    return () => clearInterval(t)
+  }, [triviaItems])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function fetchIdleText() {
+      try {
+        const response = await fetch('/api/idle-text', { cache: 'no-store' })
+        const payload = await response.json()
+        if (!response.ok || cancelled) return
+
+        const fetchedAnnouncements = Array.isArray(payload.announcements) ? payload.announcements : []
+        const fetchedTrivia = Array.isArray(payload.trivia) ? payload.trivia : []
+
+        setAnnouncements(fetchedAnnouncements.length > 0 ? fetchedAnnouncements : SAMPLE_ANNOUNCEMENTS)
+        setTriviaItems(fetchedTrivia.length > 0 ? fetchedTrivia : TRIVIA_ITEMS)
+        setAnnouncementIdx(0)
+        setTriviaIdx(0)
+      } catch {
+        if (!cancelled) {
+          setAnnouncements(SAMPLE_ANNOUNCEMENTS)
+          setTriviaItems(TRIVIA_ITEMS)
+        }
+      }
+    }
+
+    void fetchIdleText()
+
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   useEffect(() => {
-    const t = setInterval(() => setTriviaIdx(p => (p + 1) % TRIVIA_ITEMS.length), 8000)
-    return () => clearInterval(t)
+    let cancelled = false
+
+    async function fetchIdleMedia() {
+      try {
+        const response = await fetch('/api/idle-media', { cache: 'no-store' })
+        const payload = await response.json()
+
+        if (!response.ok || cancelled) return
+
+        const items = Array.isArray(payload.items) ? payload.items : []
+        setIdleMedia(items)
+      } catch {
+        if (!cancelled) setIdleMedia([])
+      }
+    }
+
+    void fetchIdleMedia()
+
+    return () => {
+      cancelled = true
+    }
   }, [])
+
+  useEffect(() => {
+    if (idleMedia.length <= 1) {
+      setMediaIdx(0)
+      return
+    }
+
+    const timer = setInterval(() => {
+      setMediaIdx((prev) => (prev + 1) % idleMedia.length)
+    }, 10000)
+
+    return () => clearInterval(timer)
+  }, [idleMedia])
 
   const handleWakeUp = useCallback(() => {
     router.push(`/?sectionId=${sectionId}&scheduleId=${scheduleId}`)
   }, [router, sectionId, scheduleId])
 
-  const trivia = TRIVIA_ITEMS[triviaIdx]
+  const trivia = triviaItems[triviaIdx] || TRIVIA_ITEMS[0]
+  const currentMedia = idleMedia[mediaIdx]
+  const mediaSrc = currentMedia?.media_url || '/idlevideo.mp4'
+  const isImageMedia = currentMedia?.media_type === 'image'
 
   return (
     <div
@@ -91,17 +182,28 @@ function IdleDisplayInner() {
 
         {/* LEFT - Video (spans both rows) */}
         <div className="row-span-2 rounded-2xl border border-gray-200 overflow-hidden bg-gray-900 relative shadow-sm">
-          <video
-            ref={videoRef}
-            src="/idlevideo.mp4"
-            autoPlay
-            muted
-            loop
-            playsInline
-            className="w-full h-full object-cover"
-          />
+          {isImageMedia ? (
+            <img
+              src={mediaSrc}
+              alt={currentMedia?.title || 'Idle media'}
+              className="w-full h-full object-cover"
+            />
+          ) : (
+            <video
+              key={mediaSrc}
+              ref={videoRef}
+              src={mediaSrc}
+              autoPlay
+              muted
+              loop
+              playsInline
+              className="w-full h-full object-cover"
+            />
+          )}
           <div className="absolute bottom-4 left-4 bg-black/40 backdrop-blur-sm rounded-lg px-3 py-1.5">
-            <p className="text-white/80 text-xs font-medium tracking-wider uppercase">Now Playing</p>
+            <p className="text-white/80 text-xs font-medium tracking-wider uppercase">
+              {currentMedia?.title || 'Now Playing'}
+            </p>
           </div>
         </div>
 
@@ -116,7 +218,7 @@ function IdleDisplayInner() {
 
           <div className="flex-1 overflow-hidden flex flex-col justify-center">
             <div className="space-y-2 overflow-y-auto pr-1">
-              {SAMPLE_ANNOUNCEMENTS.map((a, idx) => (
+              {announcements.map((a, idx) => (
                 <div
                   key={a.id}
                   className={`p-3 rounded-xl transition-all duration-500 ${
@@ -141,7 +243,7 @@ function IdleDisplayInner() {
           </div>
 
           <div className="flex justify-center gap-1.5 mt-3 shrink-0">
-            {SAMPLE_ANNOUNCEMENTS.map((_, idx) => (
+            {announcements.map((_, idx) => (
               <div
                 key={idx}
                 className={`h-1.5 rounded-full transition-all duration-300 ${
@@ -167,7 +269,7 @@ function IdleDisplayInner() {
           </div>
 
           <div className="flex justify-center gap-1.5 mt-3 shrink-0">
-            {TRIVIA_ITEMS.map((_, idx) => (
+            {triviaItems.map((_, idx) => (
               <div
                 key={idx}
                 className={`h-1.5 rounded-full transition-all duration-300 ${
