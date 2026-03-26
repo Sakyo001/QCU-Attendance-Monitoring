@@ -12,12 +12,25 @@
 const PRODUCTION_URL = 'https://attendance-monitoring-api-production.up.railway.app'
 const LOCAL_FALLBACK_URL = process.env.NEXT_PUBLIC_LOCAL_API_URL || 'http://localhost:8000'
 const FORCE_LOCAL_FALLBACK = process.env.NEXT_PUBLIC_ENABLE_LOCAL_API_FALLBACK === 'true'
+const FORCE_PROXY_HTTP = process.env.NEXT_PUBLIC_FORCE_FACENET_PROXY_HTTP === 'true'
+const FACENET_DISABLED = process.env.NEXT_PUBLIC_DISABLE_FACENET === 'true'
 
 function canUseLocalFallback(): boolean {
   if (FORCE_LOCAL_FALLBACK) return true
   if (typeof window === 'undefined') return false
   const host = window.location.hostname.toLowerCase()
   return host === 'localhost' || host === '127.0.0.1'
+}
+
+function shouldProxyHttpCalls(): boolean {
+  if (FORCE_PROXY_HTTP) return true
+  if (typeof window === 'undefined') return false
+  const host = window.location.hostname.toLowerCase()
+  return host !== 'localhost' && host !== '127.0.0.1'
+}
+
+function getHttpBaseUrl(): string {
+  return shouldProxyHttpCalls() ? '/api/facenet-proxy' : FACENET_API_URL
 }
 
 // Runtime-mutable — switches to local fallback automatically when Railway is unreachable
@@ -105,10 +118,14 @@ export async function waitForModelReady(
   timeoutMs = 120_000,
   intervalMs = 3_000
 ): Promise<boolean> {
+  if (FACENET_DISABLED) {
+    return false
+  }
+
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(`${FACENET_API_URL}/health`)
+      const res = await fetch(`${getHttpBaseUrl()}/health`)
       if (res.ok) {
         const data = await res.json()
         if (data.ready === true) {
@@ -185,7 +202,7 @@ export async function extractFaceNetEmbedding(
   base64Image: string
 ): Promise<FaceNetEmbedding> {
   try {
-    const response = await fetchWithRetry(`${FACENET_API_URL}/extract-embedding`, {
+    const response = await fetchWithRetry(`${getHttpBaseUrl()}/extract-embedding`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -263,7 +280,7 @@ export async function verifyFaceNetEmbedding(
   storedEmbedding: number[]
 ): Promise<FaceNetVerification> {
   try {
-    const response = await fetchWithRetry(`${FACENET_API_URL}/verify`, {
+    const response = await fetchWithRetry(`${getHttpBaseUrl()}/verify`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -301,7 +318,7 @@ export async function compareFaceNetEmbeddings(
   embedding2: number[]
 ): Promise<{ similarity: number; match: boolean; confidence: number }> {
   try {
-    const response = await fetchWithRetry(`${FACENET_API_URL}/compare-embeddings`, {
+    const response = await fetchWithRetry(`${getHttpBaseUrl()}/compare-embeddings`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -332,7 +349,7 @@ export async function extractMultipleFaceEmbeddings(
   base64Image: string
 ): Promise<MultiFaceResult> {
   try {
-    const response = await fetchWithRetry(`${FACENET_API_URL}/extract-multiple-embeddings`, {
+    const response = await fetchWithRetry(`${getHttpBaseUrl()}/extract-multiple-embeddings`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ image: base64Image }),
@@ -395,8 +412,12 @@ export async function extractMultipleFacesFromVideo(
  * Check if FaceNet server is healthy
  */
 export async function checkFaceNetHealth(): Promise<boolean> {
+  if (FACENET_DISABLED) {
+    return false
+  }
+
   try {
-    const response = await fetch(`${FACENET_API_URL}/health`)
+    const response = await fetch(`${getHttpBaseUrl()}/health`)
     if (!response.ok) return false
     // Return true only when server is up (model may still be loading)
     // Use waitForModelReady() if you need to wait for full readiness
@@ -410,7 +431,7 @@ export async function checkFaceNetHealth(): Promise<boolean> {
     activateFallback()
     // Retry once against the local fallback
     try {
-      const fallbackResponse = await fetch(`${FACENET_API_URL}/health`)
+      const fallbackResponse = await fetch(`${getHttpBaseUrl()}/health`)
       return fallbackResponse.ok
     } catch {
       return false
@@ -464,7 +485,7 @@ export async function loadSessionEncodings(
   students: Array<{ id: string; name: string; student_number?: string; embedding: number[] }>
 ): Promise<boolean> {
   try {
-    const response = await fetchWithRetry(`${FACENET_API_URL}/load-session`, {
+    const response = await fetchWithRetry(`${getHttpBaseUrl()}/load-session`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sectionId, students }),
@@ -483,7 +504,7 @@ export async function loadSessionEncodings(
  */
 export async function clearSessionEncodings(): Promise<void> {
   try {
-    await fetch(`${FACENET_API_URL}/clear-session`, { method: 'POST' })
+    await fetch(`${getHttpBaseUrl()}/clear-session`, { method: 'POST' })
   } catch {
     // ignore
   }
@@ -513,7 +534,7 @@ export async function recognizeFrameFromVideo(
     ctx.drawImage(videoElement, 0, 0, SEND_WIDTH, SEND_HEIGHT)
     const base64 = canvas.toDataURL('image/jpeg', 0.7)
 
-    const response = await fetchWithRetry(`${FACENET_API_URL}/recognize-frame`, {
+    const response = await fetchWithRetry(`${getHttpBaseUrl()}/recognize-frame`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ image: base64 }),
