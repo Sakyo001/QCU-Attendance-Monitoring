@@ -754,6 +754,23 @@ export class ServerCameraStream {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private fallbackActive = false
 
+  private shouldForceClientFallback(): boolean {
+    // Manual override for any deployment.
+    if (process.env.NEXT_PUBLIC_FORCE_CLIENT_CAMERA_FALLBACK === 'true') {
+      return true
+    }
+
+    // On hosted Vercel URLs, there is no physical server camera to capture from.
+    if (typeof window !== 'undefined') {
+      const host = window.location.hostname.toLowerCase()
+      if (host.endsWith('.vercel.app')) {
+        return true
+      }
+    }
+
+    return false
+  }
+
   /**
    * Start the server camera stream.
    *
@@ -784,6 +801,11 @@ export class ServerCameraStream {
     this.onFrame = onFrame
     this.onError = onError ?? null
     this.jpegQuality = Math.max(30, Math.min(95, jpegQuality))
+
+    if (this.shouldForceClientFallback()) {
+      this.activateClientFallback('forced for hosted deployment')
+      return
+    }
 
     const wsUrl = `${getWsUrl()}/ws/camera-stream`
     console.log(`📹 Connecting to server camera: ${wsUrl} (mode=${mode})`)
