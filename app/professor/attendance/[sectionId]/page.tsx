@@ -1317,7 +1317,7 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
 
               {showCamera && (
                 <div className="flex flex-col gap-4">
-                  <div className="relative w-full aspect-video md:aspect-[4/3] bg-black rounded-2xl overflow-hidden shadow-inner ring-1 ring-gray-900/5 flex items-center justify-center">
+                  <div className="relative w-full aspect-video md:aspect-4/3 bg-black rounded-2xl overflow-hidden shadow-inner ring-1 ring-gray-900/5 flex items-center justify-center">
                     <canvas
                       ref={serverCanvasRef}
                       className="w-full h-full object-cover"
@@ -1380,7 +1380,7 @@ function StudentRegistrationModal({ sectionId, onClose, onRegistrationSuccess }:
 
               {capturedImage && !showCamera && (
                 <div className="flex flex-col gap-4">
-                  <div className="relative w-full aspect-video md:aspect-[4/3] bg-gray-100 rounded-2xl overflow-hidden ring-2 ring-emerald-500 shadow-md flex items-center justify-center">
+                  <div className="relative w-full aspect-video md:aspect-4/3 bg-gray-100 rounded-2xl overflow-hidden ring-2 ring-emerald-500 shadow-md flex items-center justify-center">
                     <img src={capturedImage} alt="Captured" className="w-full h-full object-cover" />
                     <div className="absolute top-4 inset-x-0 flex justify-center pointer-events-none">
                       <div className="bg-emerald-600/90 backdrop-blur-md text-white text-sm font-medium px-4 py-2 rounded-full shadow-lg flex items-center gap-2">
@@ -2067,27 +2067,37 @@ interface FaceVerificationModalProps {
 
 function FaceVerificationModal({ professorId, professorName, onVerificationSuccess, onCancel }: FaceVerificationModalProps) {
   const router = useRouter()
-  const [capturedImage, setCapturedImage] = useState<string | null>(null)
   const [isVerifying, setIsVerifying] = useState(false)
   const [showCamera, setShowCamera] = useState(false)
   const [modelsLoaded, setModelsLoaded] = useState(false)
   const [faceDetected, setFaceDetected] = useState(false)
-  const [faceDescriptor, setFaceDescriptor] = useState<Float32Array | null>(null)
   const [verificationMessage, setVerificationMessage] = useState('')
   const [verificationStatus, setVerificationStatus] = useState<'idle' | 'scanning' | 'success' | 'failed'>('idle')
-  const [capturedDescriptors, setCapturedDescriptors] = useState<Float32Array[]>([])
-  const [requireMultipleCaptures, setRequireMultipleCaptures] = useState(true)
-  const REQUIRED_CAPTURES = 3 // Require 3 different captures to ensure liveness
+  const VERIFY_THROTTLE_MS = 320
+  const VERIFY_TIMEOUT_MS = 2200
+  const STREAM_JPEG_QUALITY = 42
+  const CAMERA_WARMUP_MS = 1200
+  const REQUIRED_STABLE_FRAMES = 3
+  const MIN_FACE_AREA_RATIO = 0.035
   
-  const { livenessScore, livenessMetrics, updateLivenessScore, resetLiveness } = usePassiveLivenessDetection()
+  const { resetLiveness } = usePassiveLivenessDetection()
   const serverCanvasRef4 = useRef<HTMLCanvasElement>(null)
   const serverStreamRef4 = useRef<ServerCameraStream | null>(null)
   const serverImgRef4 = useRef<HTMLImageElement | null>(null)
   const pendingFrameRef4 = useRef<CameraStreamFrame | null>(null)
   const rafRef4 = useRef<number>(0)
-  const capturedDescriptorsRef = useRef<Float32Array[]>([])
+  const verifyInFlightRef = useRef<boolean>(false)
   const verificationCooldownRef = useRef<boolean>(false)
   const lastVerificationAttemptRef = useRef<number>(0)
+  const cameraReadyAtRef = useRef<number>(0)
+  const stableFaceFramesRef = useRef<number>(0)
+  const hasReceivedFrameRef = useRef<boolean>(false)
+  const cameraActiveRef = useRef<boolean>(false)
+  const verificationStatusRef = useRef<'idle' | 'scanning' | 'success' | 'failed'>('idle')
+
+  useEffect(() => {
+    verificationStatusRef.current = verificationStatus
+  }, [verificationStatus])
 
   useEffect(() => {
     const checkServer = async () => {
@@ -2129,137 +2139,101 @@ function FaceVerificationModal({ professorId, professorName, onVerificationSucce
   }, [drawServerFrame4])
 
   const handleServerFrame4 = useCallback((data: CameraStreamFrame) => {
+    if (!cameraActiveRef.current || verificationStatusRef.current === 'success') return
+
     pendingFrameRef4.current = data
+    if (data.frame) hasReceivedFrameRef.current = true
 
     // Only process results on frames that ran through the pipeline
     if (data.results === null || data.results === undefined) return
 
-    if (isVerifying || verificationCooldownRef.current) return
+    if (isVerifying || verificationCooldownRef.current || verifyInFlightRef.current) return
 
     // extract mode returns a single FaceNetEmbedding object
     const face = data.results as FaceNetEmbedding
     if (!face.detected || face.spoof_detected || !face.embedding) {
+      stableFaceFramesRef.current = 0
       setFaceDetected(false)
       return
     }
 
-    setFaceDetected(true)
-    const descriptor = new Float32Array(face.embedding)
-    setFaceDescriptor(descriptor)
-
-    // Real-time verification
-    fetch('/api/professor/face-registration/verify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        professorId,
-        faceDescriptor: Array.from(descriptor)
-      })
-    }).then(r => r.json()).then(verifyData => {
-      const isMatch = verifyData.success && verifyData.verified
-
-      if (isMatch) {
-        const currentDescriptors = capturedDescriptorsRef.current
-        const isDifferentCapture = currentDescriptors.length === 0 || 
-          currentDescriptors.every(prev => {
-            let diff = 0
-            for (let i = 0; i < 512; i++) {
-              diff += Math.abs(descriptor[i] - prev[i])
-            }
-            return diff > 0.5
-          })
-        
-        if (isDifferentCapture && currentDescriptors.length < REQUIRED_CAPTURES) {
-          const updatedDescriptors = [...currentDescriptors, descriptor]
-          capturedDescriptorsRef.current = updatedDescriptors
-          setCapturedDescriptors(updatedDescriptors)
-          
-          if (updatedDescriptors.length >= REQUIRED_CAPTURES && !isVerifying) {
-            performFaceVerification(updatedDescriptors)
-          }
-        }
-      } else {
-        if (capturedDescriptorsRef.current.length > 0) {
-          setCapturedDescriptors([])
-          capturedDescriptorsRef.current = []
-        }
-        verificationCooldownRef.current = true
-        setVerificationMessage('Face not recognized. Please show your registered face.')
-        setTimeout(() => {
-          verificationCooldownRef.current = false
-          setVerificationMessage('')
-        }, 1500)
+    const box = face.box
+    if (box && data.width && data.height) {
+      const frameArea = Math.max(1, data.width * data.height)
+      const faceArea = Math.max(1, box.width * box.height)
+      if (faceArea / frameArea < MIN_FACE_AREA_RATIO) {
+        stableFaceFramesRef.current = 0
+        setFaceDetected(false)
+        return
       }
-    }).catch(() => {})
-  }, [isVerifying, professorId])
+    }
 
-  const performFaceVerification = async (descriptors: Float32Array[]) => {
+    setFaceDetected(true)
+    stableFaceFramesRef.current += 1
+
+    const descriptor = new Float32Array(face.embedding)
+    const now = Date.now()
+
+    if (!hasReceivedFrameRef.current || now < cameraReadyAtRef.current) return
+    if (stableFaceFramesRef.current < REQUIRED_STABLE_FRAMES) return
+
+    if (now - lastVerificationAttemptRef.current < VERIFY_THROTTLE_MS) {
+      return
+    }
+    lastVerificationAttemptRef.current = now
+
+    performFaceVerification(descriptor)
+  }, [isVerifying])
+
+  const performFaceVerification = async (descriptor: Float32Array) => {
     try {
+      verifyInFlightRef.current = true
       setIsVerifying(true)
       setVerificationStatus('scanning')
-      
-      // Validate we have enough captures
-      if (descriptors.length < REQUIRED_CAPTURES) {
-        console.error('❌ Not enough captures:', descriptors.length, '(expected', REQUIRED_CAPTURES, ')')
+
+      if (!descriptor || descriptor.length !== 512) {
         setVerificationStatus('failed')
-        setVerificationMessage(`Please hold still. Capturing ${descriptors.length}/${REQUIRED_CAPTURES}...`)
+        setVerificationMessage('Face detection failed. Please try again.')
+        verificationCooldownRef.current = true
         setTimeout(() => {
+          verificationCooldownRef.current = false
           setVerificationStatus('idle')
           setVerificationMessage('')
-        }, 1500)
-        setIsVerifying(false)
+        }, 1200)
         return
       }
 
-      // Validate all descriptors are correct length (keras-facenet 512D)
-      for (const descriptor of descriptors) {
-        if (!descriptor || descriptor.length !== 512) {
-          console.error('❌ Invalid face descriptor:', descriptor?.length, '(expected 512)')
-          setVerificationStatus('failed')
-          setVerificationMessage('Face detection failed. Please try again.')
-          setCapturedDescriptors([])
-          capturedDescriptorsRef.current = []
-          setTimeout(() => {
-            setVerificationStatus('idle')
-            setVerificationMessage('')
-          }, 2000)
-          setIsVerifying(false)
-          return
-        }
-      }
-      
-      // CRITICAL: Check that captures are sufficiently different
-      const similarities = []
-      for (let i = 0; i < descriptors.length - 1; i++) {
-        for (let j = i + 1; j < descriptors.length; j++) {
-          let similarity = 0
-          for (let k = 0; k < 512; k++) {
-            similarity += Math.abs(descriptors[i][k] - descriptors[j][k])
-          }
-          similarities.push(similarity)
-        }
-      }
-      const avgDifference = similarities.reduce((a, b) => a + b, 0) / similarities.length
-      
-      console.log('📸 Capture diversity check:', avgDifference.toFixed(4), '(min required: 0.5)')
-      
-      if (avgDifference < 0.5) {
-        console.error('🚨 SECURITY ALERT: Captures are too similar - possible photo attack')
-        setVerificationStatus('failed')
-        setVerificationMessage('Suspicious activity detected. Please move your head naturally during capture.')
-        setCapturedDescriptors([])
-        capturedDescriptorsRef.current = []
-        setTimeout(() => {
-          setVerificationStatus('idle')
-          setVerificationMessage('')
-        }, 3000)
-        setIsVerifying(false)
-        return
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), VERIFY_TIMEOUT_MS)
+      let response: Response
+      try {
+        response = await fetch('/api/professor/face-registration/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          professorId,
+          faceDescriptor: Array.from(descriptor)
+        }),
+        signal: controller.signal,
+        })
+      } finally {
+        clearTimeout(timeoutId)
       }
 
-      // Since all captures were already verified in real-time, we just need to confirm
-      console.log('🎯 All', descriptors.length, 'captures already verified in real-time')
-      console.log(`   - Capture diversity: ${avgDifference.toFixed(4)} ✅`)
+      const verifyData = await response.json()
+      const isMatch = verifyData.success && verifyData.verified
+
+      if (!isMatch) {
+        setVerificationStatus('failed')
+        setVerificationMessage('Face not recognized. Please position your face clearly.')
+        verificationCooldownRef.current = true
+        setTimeout(() => {
+          verificationCooldownRef.current = false
+          setVerificationStatus('idle')
+          setVerificationMessage('')
+        }, 1200)
+        return
+      }
 
       setVerificationStatus('success')
       setVerificationMessage('Live face verified! Accessing class...')
@@ -2269,17 +2243,23 @@ function FaceVerificationModal({ professorId, professorName, onVerificationSucce
       
       setTimeout(() => {
         onVerificationSuccess()
-      }, 1500)
+      }, 800)
     } catch (error) {
       console.error('Verification error:', error)
       setVerificationStatus('failed')
-      setVerificationMessage('Verification error. Please try again.')
-      setCapturedDescriptors([])
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        setVerificationMessage('Connection is slow. Retrying...')
+      } else {
+        setVerificationMessage('Verification error. Please try again.')
+      }
+      verificationCooldownRef.current = true
       setTimeout(() => {
+        verificationCooldownRef.current = false
         setVerificationStatus('idle')
         setVerificationMessage('')
-      }, 2000)
+      }, 1200)
     } finally {
+      verifyInFlightRef.current = false
       setIsVerifying(false)
     }
   }
@@ -2293,9 +2273,16 @@ function FaceVerificationModal({ professorId, professorName, onVerificationSucce
     try {
       const stream = new ServerCameraStream()
       serverStreamRef4.current = stream
+      cameraActiveRef.current = true
+      hasReceivedFrameRef.current = false
+      stableFaceFramesRef.current = 0
+      lastVerificationAttemptRef.current = 0
+      cameraReadyAtRef.current = Date.now() + CAMERA_WARMUP_MS
       stream.start('extract', handleServerFrame4, (err) => {
         console.error('Server camera error:', err)
-      })
+      }, STREAM_JPEG_QUALITY)
+      setVerificationStatus('idle')
+      setVerificationMessage('')
       setShowCamera(true)
     } catch (error) {
       console.error('Camera error:', error)
@@ -2310,8 +2297,11 @@ function FaceVerificationModal({ professorId, professorName, onVerificationSucce
     }
     setShowCamera(false)
     setFaceDetected(false)
-    setCapturedDescriptors([])
-    capturedDescriptorsRef.current = []
+    cameraActiveRef.current = false
+    verifyInFlightRef.current = false
+    hasReceivedFrameRef.current = false
+    stableFaceFramesRef.current = 0
+    cameraReadyAtRef.current = 0
     resetLiveness()
   }
 
@@ -2342,10 +2332,9 @@ function FaceVerificationModal({ professorId, professorName, onVerificationSucce
                     <span className="font-semibold text-gray-900 text-sm">Security Notice</span>
                   </div>
                   <ul className="text-sm text-gray-600 space-y-2 ml-7 list-disc">
-                    <li>System will capture 3 different frames</li>
-                    <li>Move your head slightly during capture</li>
+                    <li>Keep your face centered and visible</li>
                     <li>Photos and static images will be rejected</li>
-                    <li>All captures must match your registered face</li>
+                    <li>Access is granted only if your registered face matches</li>
                   </ul>
                 </div>
               </div>
@@ -2359,7 +2348,7 @@ function FaceVerificationModal({ professorId, professorName, onVerificationSucce
             </div>
           ) : (
             <div className="space-y-6">
-              <div className="relative bg-black rounded-2xl overflow-hidden shadow-inner ring-1 ring-gray-900/5 aspect-[4/3] flex items-center justify-center">
+              <div className="relative bg-black rounded-2xl overflow-hidden shadow-inner ring-1 ring-gray-900/5 aspect-4/3 flex items-center justify-center">
                 <canvas
                   ref={serverCanvasRef4}
                   className="w-full h-full object-cover scale-x-[-1]"
@@ -2383,7 +2372,7 @@ function FaceVerificationModal({ professorId, professorName, onVerificationSucce
                   <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm transition-all duration-300">
                     <div className="text-center text-white flex flex-col items-center">
                       <Loader2 className="w-10 h-10 animate-spin mb-3 text-emerald-400" />
-                      <p className="text-sm font-medium">Verifying captures...</p>
+                      <p className="text-sm font-medium">Verifying your face...</p>
                     </div>
                   </div>
                 )}
@@ -2411,18 +2400,16 @@ function FaceVerificationModal({ professorId, professorName, onVerificationSucce
                 )}
 
                 <div className="absolute top-4 inset-x-0 flex flex-col items-center pointer-events-none gap-2">
-                  {/* Capture Progress */}
-                  {capturedDescriptors.length < REQUIRED_CAPTURES && faceDetected && verificationStatus === 'idle' && (
+                  {faceDetected && verificationStatus === 'idle' && (
                     <div className="bg-blue-600/90 text-white text-sm font-medium px-4 py-2 rounded-full backdrop-blur-md flex items-center gap-2">
-                      <Camera className="w-4 h-4" /> 
-                      Capturing {capturedDescriptors.length}/{REQUIRED_CAPTURES}
+                      <ScanFace className="w-4 h-4" /> 
+                      Face detected
                     </div>
                   )}
-                  
-                  {/* Captures Complete - Verifying */}
-                  {capturedDescriptors.length >= REQUIRED_CAPTURES && verificationStatus === 'scanning' && (
+
+                  {verificationStatus === 'scanning' && (
                     <div className="bg-amber-600/90 text-white text-sm font-medium px-4 py-2 rounded-full backdrop-blur-md flex items-center gap-2">
-                      <Loader2 className="w-4 h-4 animate-spin" /> Verifying Captures...
+                      <Loader2 className="w-4 h-4 animate-spin" /> Verifying...
                     </div>
                   )}
                   

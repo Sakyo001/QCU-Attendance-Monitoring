@@ -5,11 +5,25 @@ export async function POST(request: Request) {
   try {
     const body = await request.json()
     const { firstName, lastName, email, employeeId, role, contactNumber, faceData, faceDescriptor } = body
+    const normalizedFirstName = typeof firstName === 'string' ? firstName.trim() : ''
+    const normalizedLastName = typeof lastName === 'string' ? lastName.trim() : ''
+    const normalizedEmployeeId = typeof employeeId === 'string' ? employeeId.trim() : ''
 
     // Validate required fields
-    if (!firstName || !lastName || !employeeId) {
+    if (!normalizedFirstName || !normalizedLastName || !normalizedEmployeeId) {
       return NextResponse.json(
         { error: 'Missing required fields (firstName, lastName, employeeId)' },
+        { status: 400 }
+      )
+    }
+
+    // Basic format guard for employee ID to avoid invalid values.
+    if (!/^[A-Za-z0-9_-]{3,30}$/.test(normalizedEmployeeId)) {
+      return NextResponse.json(
+        {
+          error: 'Employee ID must be 3-30 characters and use only letters, numbers, underscore, or hyphen.',
+          code: 'INVALID_EMPLOYEE_ID'
+        },
         { status: 400 }
       )
     }
@@ -28,14 +42,39 @@ export async function POST(request: Request) {
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     )
 
+    // Validate duplicate employee ID before attempting insert.
+    const { data: existingEmployee, error: existingEmployeeError } = await supabase
+      .from('users')
+      .select('id')
+      .eq('employee_id', normalizedEmployeeId)
+      .maybeSingle()
+
+    if (existingEmployeeError) {
+      console.error('Employee ID pre-check error:', existingEmployeeError)
+      return NextResponse.json(
+        { error: 'Unable to validate Employee ID right now. Please try again.' },
+        { status: 500 }
+      )
+    }
+
+    if (existingEmployee) {
+      return NextResponse.json(
+        {
+          error: `Employee ID "${normalizedEmployeeId}" is already in use. Please use a different Employee ID.`,
+          code: 'EMPLOYEE_ID_EXISTS'
+        },
+        { status: 409 }
+      )
+    }
+
     // 1. Create user account (no password needed - face login only)
     const { data: userData, error: userError } = await supabase
       .from('users')
       .insert({
-        first_name: firstName,
-        last_name: lastName,
+        first_name: normalizedFirstName,
+        last_name: normalizedLastName,
         email: email || null,
-        employee_id: employeeId,
+        employee_id: normalizedEmployeeId,
         role: role || 'professor',
         is_active: true,
       })
@@ -44,6 +83,18 @@ export async function POST(request: Request) {
 
     if (userError) {
       console.error('User creation error:', userError)
+
+      // Graceful duplicate handling in case of race condition between pre-check and insert.
+      if (userError.code === '23505' && userError.message?.toLowerCase().includes('employee_id')) {
+        return NextResponse.json(
+          {
+            error: `Employee ID "${normalizedEmployeeId}" is already in use. Please use a different Employee ID.`,
+            code: 'EMPLOYEE_ID_EXISTS'
+          },
+          { status: 409 }
+        )
+      }
+
       return NextResponse.json(
         { error: userError.message },
         { status: 400 }

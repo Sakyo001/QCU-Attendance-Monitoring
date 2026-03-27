@@ -15,6 +15,13 @@ interface Section {
   max_students: number
 }
 
+interface FaceBox {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
 export default function AddFacultyPage() {
   const router = useRouter()
   const { user } = useAuth()
@@ -22,7 +29,7 @@ export default function AddFacultyPage() {
 
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState('')
-  const [formErrors, setFormErrors] = useState<{ contactNumber?: string }>({})
+  const [formErrors, setFormErrors] = useState<{ contactNumber?: string; employeeId?: string }>({})
 
   const [formData, setFormData] = useState({
     firstName: '',
@@ -39,7 +46,7 @@ export default function AddFacultyPage() {
   const [faceDetected, setFaceDetected] = useState(false)
   const [capturedImage, setCapturedImage] = useState<string | null>(null)
   const [faceDescriptor, setFaceDescriptor] = useState<Float32Array | null>(null)
-  const [boundingBox, setBoundingBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null)
+  const [boundingBox, setBoundingBox] = useState<FaceBox | null>(null)
   const [captureCountdown, setCaptureCountdown] = useState<number | null>(null)
   const [isCapturing, setIsCapturing] = useState(false)
   const [serverHealthy, setServerHealthy] = useState(true)
@@ -49,10 +56,55 @@ export default function AddFacultyPage() {
   const streamRef = useRef<MediaStream | null>(null)
   const detectionIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const rafRef = useRef<number | null>(null)
+  const detectionInFlightRef = useRef(false)
+  const smoothedBoxRef = useRef<FaceBox | null>(null)
   const savedFaceDescriptorRef = useRef<Float32Array | null>(null)
   const faceStableStartRef = useRef<number | null>(null)
   const consecutiveFaceDetectionsRef = useRef<number>(0)
   const consecutiveServerErrorsRef = useRef<number>(0)
+
+  const toSquareBoundingBox = (box: FaceBox, videoWidth: number, videoHeight: number): FaceBox => {
+    const pad = 0.18
+    const side = Math.max(box.width, box.height) * (1 + pad)
+    const centerX = box.x + box.width / 2
+    const centerY = box.y + box.height / 2
+
+    let x = centerX - side / 2
+    let y = centerY - side / 2
+    let size = side
+
+    if (x < 0) x = 0
+    if (y < 0) y = 0
+    if (x + size > videoWidth) x = Math.max(0, videoWidth - size)
+    if (y + size > videoHeight) y = Math.max(0, videoHeight - size)
+
+    size = Math.min(size, videoWidth, videoHeight)
+
+    return {
+      x,
+      y,
+      width: size,
+      height: size,
+    }
+  }
+
+  const smoothBoundingBox = (nextBox: FaceBox): FaceBox => {
+    const previous = smoothedBoxRef.current
+    if (!previous) {
+      smoothedBoxRef.current = nextBox
+      return nextBox
+    }
+
+    const alpha = 0.35
+    const smoothed = {
+      x: previous.x + (nextBox.x - previous.x) * alpha,
+      y: previous.y + (nextBox.y - previous.y) * alpha,
+      width: previous.width + (nextBox.width - previous.width) * alpha,
+      height: previous.height + (nextBox.height - previous.height) * alpha,
+    }
+    smoothedBoxRef.current = smoothed
+    return smoothed
+  }
 
   useEffect(() => {
     if (!user || user.role !== 'admin') {
@@ -83,10 +135,25 @@ export default function AddFacultyPage() {
     if (!ctx) return
 
     let animationId: number
+    let prevCanvasWidth = 0
+    let prevCanvasHeight = 0
 
     const drawFrame = () => {
-      canvas.width = video.videoWidth
-      canvas.height = video.videoHeight
+      const vw = video.videoWidth
+      const vh = video.videoHeight
+
+      if (!vw || !vh) {
+        animationId = requestAnimationFrame(drawFrame)
+        return
+      }
+
+      if (vw !== prevCanvasWidth || vh !== prevCanvasHeight) {
+        canvas.width = vw
+        canvas.height = vh
+        prevCanvasWidth = vw
+        prevCanvasHeight = vh
+      }
+
       ctx.clearRect(0, 0, canvas.width, canvas.height)
 
       if (boundingBox) {
@@ -199,14 +266,19 @@ export default function AddFacultyPage() {
   const startFaceDetection = () => {
     if (!videoRef.current || !modelsLoaded) return
 
-    const CAPTURE_DELAY = 1500
+    const CAPTURE_DELAY = 900
 
     detectionIntervalRef.current = setInterval(async () => {
       if (!videoRef.current || isCapturing) return
       if (videoRef.current.readyState !== 4 || videoRef.current.videoWidth === 0) return
+      if (detectionInFlightRef.current) return
 
       try {
-        const result = await extractFaceNetFromVideo(videoRef.current)
+        detectionInFlightRef.current = true
+        const result = await extractFaceNetFromVideo(videoRef.current, {
+          quality: 0.82,
+          maxDimension: 720,
+        })
 
         // Auto-stop if server is consistently unreachable (5 consecutive errors ≈ 2s)
         if (result.error) {
@@ -239,7 +311,12 @@ export default function AddFacultyPage() {
 
           // Use bounding box from server response
           if (result.box) {
-            setBoundingBox(result.box)
+            const squareBox = toSquareBoundingBox(
+              result.box,
+              videoRef.current.videoWidth,
+              videoRef.current.videoHeight
+            )
+            setBoundingBox(smoothBoundingBox(squareBox))
           }
 
           consecutiveFaceDetectionsRef.current += 1
@@ -253,14 +330,17 @@ export default function AddFacultyPage() {
         } else {
           setFaceDetected(false)
           setBoundingBox(null)
+          smoothedBoxRef.current = null
           consecutiveFaceDetectionsRef.current = 0
           faceStableStartRef.current = null
           setCaptureCountdown(null)
         }
       } catch (err) {
         console.warn('Face detection error:', err)
+      } finally {
+        detectionInFlightRef.current = false
       }
-    }, 400)  // ~2.5 fps — comfortable rate for server-side detection
+    }, 180)  // Fast polling with in-flight guard keeps UI responsive without overlap.
   }
 
   const startCamera = async () => {
@@ -305,6 +385,8 @@ export default function AddFacultyPage() {
     setFaceDetected(false)
     setBoundingBox(null)
     setCaptureCountdown(null)
+    smoothedBoxRef.current = null
+    detectionInFlightRef.current = false
 
     faceStableStartRef.current = null
     consecutiveFaceDetectionsRef.current = 0
@@ -363,6 +445,13 @@ export default function AddFacultyPage() {
       return
     }
 
+    if (name === 'employeeId') {
+      const filtered = value.replace(/\s/g, '')
+      setFormData(prev => ({ ...prev, [name]: filtered }))
+      if (formErrors.employeeId) setFormErrors(prev => ({ ...prev, employeeId: undefined }))
+      return
+    }
+
     setFormData(prev => ({ ...prev, [name]: value }))
   }
 
@@ -370,20 +459,38 @@ export default function AddFacultyPage() {
     e.preventDefault()
     setError('')
 
+    const trimmedEmployeeId = formData.employeeId.trim()
+    const trimmedFirstName = formData.firstName.trim()
+    const trimmedLastName = formData.lastName.trim()
+
     if (!capturedImage || !savedFaceDescriptorRef.current) {
       setError('Please capture a face photo for the faculty member')
       return
     }
 
     // Validate contact number if provided
-    const errors: { contactNumber?: string } = {}
+    const errors: { contactNumber?: string; employeeId?: string } = {}
+
+    if (!trimmedFirstName || !trimmedLastName) {
+      setError('First name and last name are required')
+      return
+    }
+
+    if (!trimmedEmployeeId) {
+      errors.employeeId = 'Employee ID is required'
+    } else if (!/^[A-Za-z0-9_-]{3,30}$/.test(trimmedEmployeeId)) {
+      errors.employeeId = 'Employee ID must be 3-30 characters and use only letters, numbers, underscore, or hyphen'
+    }
+
     if (formData.contactNumber && formData.contactNumber.length !== 11) {
       errors.contactNumber = 'Contact number must be exactly 11 digits'
     }
+
     if (Object.keys(errors).length > 0) {
       setFormErrors(errors)
       return
     }
+
     setFormErrors({})
 
     setIsSubmitting(true)
@@ -391,27 +498,58 @@ export default function AddFacultyPage() {
     try {
       const descriptorArray = Array.from(savedFaceDescriptorRef.current)
 
-      const response = await fetch('/api/admin/faculty/add', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          firstName: formData.firstName,
-          lastName: formData.lastName,
-          email: formData.email,
-          employeeId: formData.employeeId,
-          role: formData.role,
-          contactNumber: formData.contactNumber,
-          faceData: capturedImage,
-          faceDescriptor: descriptorArray
-        }),
-      })
+      let response: Response
+      try {
+        response = await fetch('/api/admin/faculty/add', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            firstName: trimmedFirstName,
+            lastName: trimmedLastName,
+            email: formData.email.trim(),
+            employeeId: trimmedEmployeeId,
+            role: formData.role,
+            contactNumber: formData.contactNumber,
+            faceData: capturedImage,
+            faceDescriptor: descriptorArray
+          }),
+        })
+      } catch {
+        setError('Unable to connect to the server. Please check your network and try again.')
+        setIsSubmitting(false)
+        return
+      }
 
-      const data = await response.json()
+      let data: any = {}
+      const contentType = response.headers.get('content-type') || ''
+      if (contentType.includes('application/json')) {
+        data = await response.json()
+      } else {
+        const fallbackText = await response.text()
+        data = { error: fallbackText || 'Unexpected server response.' }
+      }
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to create faculty member')
+        const apiMessage = data?.error || 'Failed to create faculty member'
+        const duplicateEmployeeId =
+          response.status === 409 ||
+          data?.code === 'EMPLOYEE_ID_EXISTS' ||
+          /employee.?id|duplicate key|already in use/i.test(apiMessage)
+
+        if (duplicateEmployeeId) {
+          setFormErrors(prev => ({
+            ...prev,
+            employeeId: 'This Employee ID is already registered. Please enter a different ID.'
+          }))
+          setError('')
+        } else {
+          setError(apiMessage)
+        }
+
+        setIsSubmitting(false)
+        return
       }
 
       console.log('Faculty created successfully:', data.userId)
@@ -682,8 +820,13 @@ export default function AddFacultyPage() {
                   value={formData.employeeId}
                   onChange={handleInputChange}
                   required
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500"
+                  className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500 ${
+                    formErrors.employeeId ? 'border-red-400 bg-red-50' : 'border-gray-300'
+                  }`}
                 />
+                {formErrors.employeeId && (
+                  <p className="text-red-500 text-xs mt-1">{formErrors.employeeId}</p>
+                )}
               </div>
 
               <div>

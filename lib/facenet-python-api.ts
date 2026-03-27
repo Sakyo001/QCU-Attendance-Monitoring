@@ -195,6 +195,13 @@ export interface FaceNetVerification {
   error?: string
 }
 
+interface VideoExtractionOptions {
+  quality?: number
+  maxDimension?: number
+}
+
+const videoCaptureCanvas = typeof document !== 'undefined' ? document.createElement('canvas') : null
+
 /**
  * Extract face embedding from base64 image
  */
@@ -242,13 +249,26 @@ export async function extractFaceNetEmbedding(
  * Extract face embedding from video element
  */
 export async function extractFaceNetFromVideo(
-  videoElement: HTMLVideoElement
+  videoElement: HTMLVideoElement,
+  options?: VideoExtractionOptions
 ): Promise<FaceNetEmbedding> {
   try {
-    // Create canvas and capture current frame
-    const canvas = document.createElement('canvas')
-    canvas.width = videoElement.videoWidth
-    canvas.height = videoElement.videoHeight
+    const canvas = videoCaptureCanvas || document.createElement('canvas')
+    const quality = Math.min(1, Math.max(0.4, options?.quality ?? 0.9))
+    const maxDimension = Math.max(360, options?.maxDimension ?? 960)
+
+    let width = videoElement.videoWidth
+    let height = videoElement.videoHeight
+
+    const largestDimension = Math.max(width, height)
+    if (largestDimension > maxDimension) {
+      const scale = maxDimension / largestDimension
+      width = Math.round(width * scale)
+      height = Math.round(height * scale)
+    }
+
+    canvas.width = width
+    canvas.height = height
     
     const ctx = canvas.getContext('2d')
     if (!ctx) {
@@ -256,10 +276,10 @@ export async function extractFaceNetFromVideo(
     }
     
     // Draw video frame to canvas
-    ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height)
+    ctx.drawImage(videoElement, 0, 0, width, height)
     
     // Convert to base64
-    const base64Image = canvas.toDataURL('image/jpeg', 0.95)
+    const base64Image = canvas.toDataURL('image/jpeg', quality)
     
     // Extract embedding via API
     return await extractFaceNetEmbedding(base64Image)
