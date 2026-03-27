@@ -27,6 +27,15 @@ export default function ProfessorLoginPage() {
   const streamRef = useRef<MediaStream | null>(null)
   const detectionIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const isMatchingRef = useRef<boolean>(false)
+  const extractInFlightRef = useRef<boolean>(false)
+  const loginRequestTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const cameraReadyAtRef = useRef<number>(0)
+  const stableFaceFramesRef = useRef<number>(0)
+
+  const FACE_EXTRACT_INTERVAL_MS = 380
+  const CAMERA_WARMUP_MS = 900
+  const REQUIRED_STABLE_FRAMES = 2
+  const LOGIN_TIMEOUT_MS = 2200
 
   // Load MediaPipe models
   useEffect(() => {
@@ -61,10 +70,25 @@ export default function ProfessorLoginPage() {
     if (!ctx) return
 
     let animationId: number
+    let prevCanvasWidth = 0
+    let prevCanvasHeight = 0
 
     const drawFrame = () => {
-      canvas.width = video.videoWidth
-      canvas.height = video.videoHeight
+      const vw = video.videoWidth
+      const vh = video.videoHeight
+
+      if (!vw || !vh) {
+        animationId = requestAnimationFrame(drawFrame)
+        return
+      }
+
+      if (vw !== prevCanvasWidth || vh !== prevCanvasHeight) {
+        canvas.width = vw
+        canvas.height = vh
+        prevCanvasWidth = vw
+        prevCanvasHeight = vh
+      }
+
       ctx.clearRect(0, 0, canvas.width, canvas.height)
 
       if (boundingBox) {
@@ -185,12 +209,11 @@ export default function ProfessorLoginPage() {
 
     detectionIntervalRef.current = setInterval(async () => {
       if (!videoRef.current || isLoading) return
+      if (videoRef.current.readyState !== 4 || videoRef.current.videoWidth === 0) return
+      if (extractInFlightRef.current) return
 
       try {
-        const [mediapipeResult, pythonResult] = await Promise.all([
-          detectFaceInVideo(videoRef.current!),
-          extractFaceNetFromVideo(videoRef.current!)
-        ])
+        const mediapipeResult = await detectFaceInVideo(videoRef.current!)
 
         // Update bounding box
         if (mediapipeResult.detected && mediapipeResult.boundingBox && videoRef.current) {
@@ -209,11 +232,27 @@ export default function ProfessorLoginPage() {
             width: Math.min(video.videoWidth - pixelX + padding, pixelWidth + padding * 2),
             height: Math.min(video.videoHeight - pixelY + padding, pixelHeight + padding * 2)
           })
+
+          stableFaceFramesRef.current += 1
         } else {
+          stableFaceFramesRef.current = 0
+          setFaceDetected(false)
+          if (matchStatus === 'scanning') setMatchStatus('idle')
           setBoundingBox(null)
+          return
         }
 
-        // Face matching - Real-time without throttle
+        const now = Date.now()
+        if (now < cameraReadyAtRef.current || stableFaceFramesRef.current < REQUIRED_STABLE_FRAMES) {
+          return
+        }
+
+        extractInFlightRef.current = true
+        const pythonResult = await extractFaceNetFromVideo(videoRef.current!, {
+          quality: 0.72,
+          maxDimension: 640,
+        })
+
         if (pythonResult.detected && pythonResult.embedding) {
           setFaceDetected(true)
           
@@ -223,11 +262,20 @@ export default function ProfessorLoginPage() {
             setMatchStatus('scanning')
             
             try {
+              const controller = new AbortController()
+              if (loginRequestTimeoutRef.current) clearTimeout(loginRequestTimeoutRef.current)
+              loginRequestTimeoutRef.current = setTimeout(() => controller.abort(), LOGIN_TIMEOUT_MS)
+
               const response = await fetch('/api/professor/face-login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ faceDescriptor: pythonResult.embedding })
+                body: JSON.stringify({ faceDescriptor: pythonResult.embedding }),
+                signal: controller.signal,
               })
+              if (loginRequestTimeoutRef.current) {
+                clearTimeout(loginRequestTimeoutRef.current)
+                loginRequestTimeoutRef.current = null
+              }
               
               const data = await response.json()
               
@@ -288,7 +336,11 @@ export default function ProfessorLoginPage() {
               }
             } catch (err) {
               console.error('Face match error:', err)
-              setError('Network error: Please check your connection')
+              if (err instanceof DOMException && err.name === 'AbortError') {
+                setError('Slow connection detected. Retrying facial verification...')
+              } else {
+                setError('Network error: Please check your connection')
+              }
               setMatchStatus('idle')
               isMatchingRef.current = false
             }
@@ -301,8 +353,10 @@ export default function ProfessorLoginPage() {
         }
       } catch (error) {
         console.error('Face detection error:', error)
+      } finally {
+        extractInFlightRef.current = false
       }
-    }, 300)
+    }, FACE_EXTRACT_INTERVAL_MS)
   }
 
   const startCamera = async () => {
@@ -318,7 +372,7 @@ export default function ProfessorLoginPage() {
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+        video: { facingMode: 'user', width: { ideal: 960 }, height: { ideal: 540 } },
         audio: false
       })
       
@@ -326,6 +380,9 @@ export default function ProfessorLoginPage() {
       setError('')
       setMatchStatus('idle')
       setMatchedProfessor(null)
+      stableFaceFramesRef.current = 0
+      cameraReadyAtRef.current = Date.now() + CAMERA_WARMUP_MS
+      extractInFlightRef.current = false
       
       requestAnimationFrame(() => {
         setCameraActive(true)
@@ -344,11 +401,17 @@ export default function ProfessorLoginPage() {
       clearInterval(detectionIntervalRef.current)
       detectionIntervalRef.current = null
     }
+    if (loginRequestTimeoutRef.current) {
+      clearTimeout(loginRequestTimeoutRef.current)
+      loginRequestTimeoutRef.current = null
+    }
     setCameraActive(false)
     setFaceDetected(false)
     setMatchStatus('idle')
     setMatchedProfessor(null)
     isMatchingRef.current = false
+    extractInFlightRef.current = false
+    stableFaceFramesRef.current = 0
   }
 
   return (

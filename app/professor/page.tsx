@@ -517,6 +517,17 @@ interface CreateClassroomModalProps {
 }
 
 function CreateClassroomModal({ sections: initialSections, professorId, professorName, onClose, onSubmit }: CreateClassroomModalProps) {
+  const dedupeSections = (items: Section[]): Section[] => {
+    return Array.from(
+      new Map(
+        items.map((section) => [
+          `${section.section_code}|${section.semester}|${section.academic_year}`,
+          section,
+        ])
+      ).values()
+    )
+  }
+
   const [formData, setFormData] = useState({
     sectionId: '',
     subjectCode: '',
@@ -528,7 +539,7 @@ function CreateClassroomModal({ sections: initialSections, professorId, professo
     endTime: '',
   })
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [sections, setSections] = useState<Section[]>(initialSections)
+  const [sections, setSections] = useState<Section[]>(dedupeSections(initialSections))
   const [loadingSections, setLoadingSections] = useState(false)
 
   useEffect(() => {
@@ -543,14 +554,14 @@ function CreateClassroomModal({ sections: initialSections, professorId, professo
 
       if (!res.ok) {
         console.error('Error fetching sections:', payload?.error || payload)
-        setSections(initialSections)
+        setSections(dedupeSections(initialSections))
         return
       }
 
-      setSections((payload?.sections as any) || [])
+      setSections(dedupeSections(((payload?.sections as Section[]) || [])))
     } catch (err) {
       console.error('Exception fetching sections:', err)
-      setSections(initialSections)
+      setSections(dedupeSections(initialSections))
     } finally {
       setLoadingSections(false)
     }

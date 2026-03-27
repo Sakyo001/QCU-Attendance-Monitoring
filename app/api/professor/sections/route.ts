@@ -24,9 +24,18 @@ export async function GET(request: Request) {
         throw error
       }
 
+      const dedupedSections = Array.from(
+        new Map(
+          (sections || []).map((s: any) => [
+            `${s.section_code}|${s.semester}|${s.academic_year}`,
+            s,
+          ])
+        ).values()
+      )
+
       // Save to offline cache
-      if (sections && sections.length > 0) {
-        const offlineSections = (sections as any[]).map((s) => ({
+      if (dedupedSections.length > 0) {
+        const offlineSections = dedupedSections.map((s: any) => ({
           id: s.id,
           sectionCode: s.section_code,
           semester: s.semester,
@@ -37,7 +46,7 @@ export async function GET(request: Request) {
         console.log('📦 Saved', offlineSections.length, 'sections to offline cache')
       }
 
-      return NextResponse.json({ success: true, sections: sections || [] })
+      return NextResponse.json({ success: true, sections: dedupedSections })
     } catch (dbError) {
       console.warn('⚠️ Supabase unavailable, using offline section cache:', dbError)
       
