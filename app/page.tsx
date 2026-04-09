@@ -38,10 +38,12 @@ interface EnrolledStudent {
   lastName: string
   status: 'present' | 'late' | 'absent' | 'pending'
   checkedInAt: string | null
+  checkedOutAt?: string | null
   confidence: number | null
 }
 
 type KioskPhase = 'professor-scan' | 'schedule-select' | 'attendance-active' | 'attendance-locked'
+type KioskAccessMode = 'professor' | 'representative'
 
 // ============ Idle screen data ============
 
@@ -69,6 +71,7 @@ export default function Home() {
   
   // --- Phase state ---
   const [phase, setPhase] = useState<KioskPhase>('professor-scan')
+  const [accessMode, setAccessMode] = useState<KioskAccessMode>('professor')
 
   // --- Professor scan state ---
   const [professor, setProfessor] = useState<ProfessorInfo | null>(null)
@@ -89,6 +92,7 @@ export default function Home() {
   const isMatchingRef = useRef<boolean>(false)
   const hasMarkedAbsentRef = useRef<boolean>(false)
   const scanCooldownUntilRef = useRef<number>(0)
+  const bypassModeRef = useRef<boolean>(false)
 
   // --- General state ---
   const [serverHealthy, setServerHealthy] = useState(false)
@@ -109,6 +113,7 @@ export default function Home() {
   // --- Attendance state ---
   const [scanStatus, setScanStatus] = useState<'idle' | 'scanning' | 'matched' | 'no-match' | 'already-marked' | 'locked'>('idle')
   const [statusMessage, setStatusMessage] = useState('')
+  const [attendanceMode, setAttendanceMode] = useState<'time-in' | 'time-out'>('time-in')
   const [enrolledStudents, setEnrolledStudents] = useState<EnrolledStudent[]>([])
   const [studentPage, setStudentPage] = useState(0)
   const [stats, setStats] = useState({ present: 0, late: 0, absent: 0, pending: 0, total: 0 })
@@ -391,6 +396,27 @@ export default function Home() {
     return { present, late, absent, pending, total: students.length }
   }
 
+  const parseScheduleTimeToDate = (timeStr: string, baseDate: Date) => {
+    const parts = String(timeStr || '').split(':')
+    if (parts.length < 2) return null
+
+    const hours = Number(parts[0])
+    const minutes = Number(parts[1])
+    const seconds = parts.length >= 3 ? Number(parts[2]) : 0
+
+    if ([hours, minutes, seconds].some(n => Number.isNaN(n))) return null
+
+    const d = new Date(baseDate)
+    d.setHours(hours, minutes, seconds, 0)
+    return d
+  }
+
+  const hasScheduleEnded = (schedule: ScheduleInfo, now: Date = new Date()) => {
+    const endAt = parseScheduleTimeToDate(schedule.endTime, now)
+    if (!endAt) return false
+    return now.getTime() >= endAt.getTime()
+  }
+
   const queueAttendanceMark = (payload: Omit<AttendanceMarkQueueItem, 'id' | 'queuedAt'>) => {
     const items = loadQueue()
     // Avoid duplicates per day/section/student as best-effort
@@ -502,6 +528,59 @@ export default function Home() {
     }
   }
 
+  const fetchSchedules = useCallback(async (mode: KioskAccessMode, professorId?: string) => {
+    const endpoint = mode === 'representative'
+      ? '/api/kiosk/professor-schedule?mode=representative'
+      : professorId
+        ? `/api/kiosk/professor-schedule?professorId=${professorId}`
+        : null
+
+    if (!endpoint) {
+      return {
+        success: false,
+        schedules: [] as ScheduleInfo[],
+        message: 'Professor schedule unavailable',
+      }
+    }
+
+    try {
+      const response = await fetch(endpoint)
+      const payload: {
+        success?: boolean
+        schedules?: ScheduleInfo[]
+        message?: string
+        error?: string
+        source?: string
+      } = await response.json().catch(() => ({}))
+
+      if (!response.ok) {
+        return {
+          success: false,
+          schedules: [] as ScheduleInfo[],
+          message: payload?.error || payload?.message || 'Unable to load schedules',
+        }
+      }
+
+      const schedules = Array.isArray(payload?.schedules) ? (payload.schedules as ScheduleInfo[]) : []
+
+      // The endpoint explicitly reports when it served offline cache.
+      setSystemOffline(payload?.source === 'offline-cache')
+
+      return {
+        success: Boolean(payload?.success),
+        schedules,
+        message: (payload?.message || '') as string,
+      }
+    } catch (err) {
+      if (isLikelyNetworkError(err)) setSystemOffline(true)
+      return {
+        success: false,
+        schedules: [] as ScheduleInfo[],
+        message: 'Unable to load schedules right now',
+      }
+    }
+  }, [])
+
   // Restore persisted session on mount
   useEffect(() => {
     try {
@@ -509,7 +588,8 @@ export default function Home() {
       if (!raw) return
       const saved = JSON.parse(raw) as {
         phase: KioskPhase
-        professor: ProfessorInfo
+        accessMode?: KioskAccessMode
+        professor?: ProfessorInfo | null
         selectedSchedule: ScheduleInfo
         attendanceLocked: boolean
         savedAt: number
@@ -519,8 +599,11 @@ export default function Home() {
         sessionStorage.removeItem(SESSION_KEY)
         return
       }
-      if (!saved.professor || !saved.selectedSchedule) return
-      setProfessor(saved.professor)
+      if (!saved.selectedSchedule) return
+      const restoredAccessMode: KioskAccessMode = saved.accessMode === 'representative' ? 'representative' : 'professor'
+      setAccessMode(restoredAccessMode)
+      setProfessor(saved.professor || null)
+      bypassModeRef.current = restoredAccessMode === 'representative'
       setSelectedSchedule(saved.selectedSchedule)
       if (saved.attendanceLocked) setAttendanceLocked(true)
       setPhase(saved.phase)
@@ -595,17 +678,18 @@ export default function Home() {
 
   // Persist active session so it survives tab discard / page reloads
   useEffect(() => {
-    if ((phase !== 'attendance-active' && phase !== 'attendance-locked') || !professor || !selectedSchedule) return
+    if ((phase !== 'attendance-active' && phase !== 'attendance-locked') || !selectedSchedule) return
     try {
       sessionStorage.setItem(SESSION_KEY, JSON.stringify({
         phase,
+        accessMode,
         professor,
         selectedSchedule,
         attendanceLocked,
         savedAt: Date.now(),
       }))
     } catch {}
-  }, [SESSION_KEY, phase, professor, selectedSchedule, attendanceLocked])
+  }, [SESSION_KEY, phase, accessMode, professor, selectedSchedule, attendanceLocked])
 
   // Inactivity — show idle overlay after 30 seconds of no activity
   useEffect(() => {
@@ -730,38 +814,6 @@ export default function Home() {
     img.src = `data:image/jpeg;base64,${data.frame}`
   }, [])
 
-  // ============ Server Camera Result Handlers ============
-
-  const handleServerResults = useCallback((data: CameraStreamFrame) => {
-    if (phase === 'professor-scan') {
-      handleProfessorScanResult(data)
-    } else if (phase === 'attendance-active') {
-      handleAttendanceResult(data)
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase])
-
-  // rAF loop — draws the latest queued frame and routes results
-  useEffect(() => {
-    let running = true
-    const tick = () => {
-      if (!running) return
-      const frame = pendingFrameRef.current
-      if (frame) {
-        pendingFrameRef.current = null
-        drawServerFrame(frame)
-        handleServerResults(frame)
-      }
-      rafRef.current = requestAnimationFrame(tick)
-    }
-    rafRef.current = requestAnimationFrame(tick)
-    return () => {
-      running = false
-      cancelAnimationFrame(rafRef.current)
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [drawServerFrame, handleServerResults])
-
   // Server camera stream — connects once, mode changes dynamically
   useEffect(() => {
     if (!serverHealthy) return
@@ -814,10 +866,35 @@ export default function Home() {
     }
   }, [phase, cameraMode])
 
+  const startRepresentativeBypass = useCallback(async () => {
+    // Freeze professor auto-match and switch to manual class selection.
+    bypassModeRef.current = true
+    isMatchingRef.current = true
+    setAccessMode('representative')
+    setProfessor(null)
+    setStatusMessage('Representative mode enabled. Loading available class sessions...')
+    setProfessorScanStatus('idle')
+
+    const scheduleResult = await fetchSchedules('representative')
+
+    setSchedules(scheduleResult.schedules)
+    setSelectedSchedule(null)
+    setPhase('schedule-select')
+    setStatusMessage(
+      scheduleResult.schedules.length > 0
+        ? ''
+        : (scheduleResult.message || 'No classes available for representative mode')
+    )
+    isMatchingRef.current = false
+  }, [fetchSchedules])
+
   // Phase 1: Handle extract results for professor identification
   const handleProfessorScanResult = useCallback(async (data: CameraStreamFrame) => {
     const result = data.results as FaceNetEmbedding | null
     if (!result) return
+
+    // Ignore professor matching while representative mode is active.
+    if (bypassModeRef.current) return
 
     // Respect cooldown
     if (Date.now() < scanCooldownUntilRef.current) return
@@ -865,8 +942,15 @@ export default function Home() {
       })
       const matchData = await res.json()
 
+      if (bypassModeRef.current) {
+        setProfessorScanStatus('idle')
+        isMatchingRef.current = false
+        return
+      }
+
       if (matchData.matched && matchData.professor) {
-        setSystemOffline(false)
+        bypassModeRef.current = false
+        setAccessMode('professor')
         setProfessorScanStatus('matched')
         const prof: ProfessorInfo = {
           id: matchData.professor.id,
@@ -879,19 +963,23 @@ export default function Home() {
         setProfessor(prof)
         playSound('success')
 
-        const schedRes = await fetch(`/api/kiosk/professor-schedule?professorId=${prof.id}`)
-        const schedData = await schedRes.json()
+        const scheduleResult = await fetchSchedules('professor', prof.id)
 
-        if (schedData.success && schedData.schedules.length > 0) {
-          setSystemOffline(false)
-          setSchedules(schedData.schedules)
-          if (schedData.schedules.length === 1) {
-            selectSchedule(schedData.schedules[0])
+        if (bypassModeRef.current) {
+          setProfessorScanStatus('idle')
+          isMatchingRef.current = false
+          return
+        }
+
+        if (scheduleResult.schedules.length > 0) {
+          setSchedules(scheduleResult.schedules)
+          if (scheduleResult.schedules.length === 1) {
+            selectSchedule(scheduleResult.schedules[0])
           } else {
             setPhase('schedule-select')
           }
         } else {
-          setStatusMessage('No classes scheduled for today')
+          setStatusMessage(scheduleResult.message || 'No classes scheduled for today')
           setTimeout(() => { resetToScan() }, 3000)
         }
       } else {
@@ -906,7 +994,7 @@ export default function Home() {
       isMatchingRef.current = false
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [professorScanStatus])
+  }, [professorScanStatus, fetchSchedules])
 
   // Phase 3: Handle recognize results for attendance marking
   const handleAttendanceResult = useCallback((data: CameraStreamFrame) => {
@@ -953,8 +1041,17 @@ export default function Home() {
         }
         const studentId = face.studentId
         const normalizedStudentNumber = String(face.studentNumber || '').trim().toLowerCase()
+        const markAction: 'in' | 'out' = attendanceMode === 'time-out' ? 'out' : 'in'
+        const markRequestKey = `${markAction}:${studentId}`
 
-        if (markedStudentIdsRef.current.has(studentId) || (!!normalizedStudentNumber && markedStudentNumbersRef.current.has(normalizedStudentNumber))) {
+        if (face.spoofDetected && !allowOfflineSpoofFallback) {
+          uiResults.push({ box: face.box, name: face.name || 'Unknown', status: 'no-match' })
+          setScanStatus('no-match')
+          setStatusMessage('Liveness check failed (spoof detected). Please blink/move and rescan.')
+          continue
+        }
+
+        if (attendanceMode === 'time-in' && (markedStudentIdsRef.current.has(studentId) || (!!normalizedStudentNumber && markedStudentNumbersRef.current.has(normalizedStudentNumber)))) {
           uiResults.push({ box: face.box, name: face.name, status: 'already-marked' })
 
           // Check if student is in the current section's enrolled list
@@ -972,8 +1069,8 @@ export default function Home() {
         } else {
           uiResults.push({ box: face.box, name: face.name, status: 'matched' })
 
-          if (!markingStudentIdsRef.current.has(studentId)) {
-            markingStudentIdsRef.current.add(studentId)
+          if (!markingStudentIdsRef.current.has(markRequestKey)) {
+            markingStudentIdsRef.current.add(markRequestKey)
 
             fetch('/api/attendance/mark', {
               method: 'POST',
@@ -985,9 +1082,42 @@ export default function Home() {
                 scheduleId: selectedSchedule.id,
                 scheduleStartTime: selectedSchedule.startTime,
                 scheduleDayOfWeek: selectedSchedule.dayOfWeek,
+                action: markAction,
               })
             }).then(async res => {
               const markData = await res.json()
+              if (attendanceMode === 'time-out') {
+                if (markData.success && (markData.timedOut || markData.alreadyTimedOut)) {
+                  setSystemOffline(false)
+                  setScanStatus(markData.alreadyTimedOut ? 'already-marked' : 'matched')
+                  setStatusMessage(markData.alreadyTimedOut ? `${face.name} already timed out` : `${face.name} timed out`)
+                  playSound('success')
+
+                  setEnrolledStudents(prev => prev.map(s => {
+                    const matches = s.id === studentId || (normalizedStudentNumber && String(s.studentNumber || '').trim().toLowerCase() === normalizedStudentNumber)
+                    if (!matches) return s
+                    return {
+                      ...s,
+                      checkedOutAt: markData.record?.checked_out_at || new Date().toISOString(),
+                    }
+                  }))
+
+                  refreshStudentList()
+                } else if (markData.needsMigration) {
+                  setScanStatus('no-match')
+                  setStatusMessage('Database update needed: run migration 007_add_checked_out_at.sql to enable Time Out storage')
+                } else if (markData.noTimeIn) {
+                  setScanStatus('no-match')
+                  setStatusMessage(`${face.name} time-in is still processing. Keep your face in frame for auto-retry.`)
+                } else {
+                  setScanStatus('no-match')
+                  setStatusMessage(markData.error || 'Failed to time out')
+                }
+
+                markingStudentIdsRef.current.delete(markRequestKey)
+                return
+              }
+
               if (markData.alreadyMarked) {
                 setSystemOffline(false)
                 markedStudentIdsRef.current.add(studentId)
@@ -1030,17 +1160,17 @@ export default function Home() {
                   setStats(computeStatsFromStudents(next))
                   return next
                 })
-                markingStudentIdsRef.current.delete(studentId)
+                markingStudentIdsRef.current.delete(markRequestKey)
               } else if (markData.locked) {
                 setSystemOffline(false)
                 setAttendanceLocked(true)
                 setPhase('attendance-locked')
-                markingStudentIdsRef.current.delete(studentId)
+                markingStudentIdsRef.current.delete(markRequestKey)
               } else if (markData.success) {
                 setSystemOffline(false)
                 markedStudentIdsRef.current.add(studentId)
                 if (normalizedStudentNumber) markedStudentNumbersRef.current.add(normalizedStudentNumber)
-                markingStudentIdsRef.current.delete(studentId)
+                markingStudentIdsRef.current.delete(markRequestKey)
                 const recStatus = markData.record?.status || 'present'
                 const nowIso = markData.record?.checked_in_at || new Date().toISOString()
                 const { firstName, lastName } = splitDisplayName(face.name || 'Unknown Student')
@@ -1059,9 +1189,17 @@ export default function Home() {
                 // API returned an error or unexpected response
                 console.warn('⚠️ Failed to mark attendance:', markData.error || 'Unknown error')
                 // Do not mark the student — API rejected them (likely not in this section or other validation)
-                markingStudentIdsRef.current.delete(studentId)
+                markingStudentIdsRef.current.delete(markRequestKey)
               }
             }).catch(() => {
+              if (attendanceMode === 'time-out') {
+                setSystemOffline(true)
+                setScanStatus('no-match')
+                setStatusMessage('Cannot time out while offline')
+                markingStudentIdsRef.current.delete(markRequestKey)
+                return
+              }
+
               // Offline-safe: queue the mark and update UI immediately.
               setSystemOffline(true)
 
@@ -1122,7 +1260,7 @@ export default function Home() {
                   return next
                 })
               }
-              markingStudentIdsRef.current.delete(studentId)
+              markingStudentIdsRef.current.delete(markRequestKey)
             })
           }
         }
@@ -1149,47 +1287,78 @@ export default function Home() {
       setStatusMessage(`${result.faces.length} face(s) detected \u2014 not recognized`)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedSchedule, attendanceLocked])
+  }, [selectedSchedule, attendanceLocked, attendanceMode])
+
+  // ============ Server Camera Result Handlers ============
+
+  const handleServerResults = useCallback((data: CameraStreamFrame) => {
+    if (phase === 'professor-scan') {
+      handleProfessorScanResult(data)
+    } else if (phase === 'attendance-active') {
+      handleAttendanceResult(data)
+    }
+  }, [phase, handleProfessorScanResult, handleAttendanceResult])
+
+  // rAF loop — draws the latest queued frame and routes results
+  useEffect(() => {
+    let running = true
+    const tick = () => {
+      if (!running) return
+      const frame = pendingFrameRef.current
+      if (frame) {
+        pendingFrameRef.current = null
+        drawServerFrame(frame)
+        handleServerResults(frame)
+      }
+      rafRef.current = requestAnimationFrame(tick)
+    }
+    rafRef.current = requestAnimationFrame(tick)
+    return () => {
+      running = false
+      cancelAnimationFrame(rafRef.current)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drawServerFrame, handleServerResults])
 
   // ============ Phase 2: Schedule Select ============
 
   // Periodically refresh schedules to pick up newly created classrooms
   useEffect(() => {
-    if (phase !== 'schedule-select' || !professor) return
+    if (phase !== 'schedule-select') return
+    if (accessMode === 'professor' && !professor) return
 
     const refreshSchedules = async () => {
-      try {
-        const res = await fetch(`/api/kiosk/professor-schedule?professorId=${professor.id}`)
-        const data = await res.json()
-        if (data.success && Array.isArray(data.schedules)) {
-          setSchedules(data.schedules)
-          
-          // Pre-fetch face encodings for all schedules so they're cached before going offline
-          data.schedules.forEach((schedule: ScheduleInfo) => {
-            if (!loadEncodingsCache(schedule.sectionId)) {
-              // Only fetch if not already cached
-              fetch(`/api/attendance/section-encodings?sectionId=${schedule.sectionId}`)
-                .then(res => res.json())
-                .then(data => {
-                  if (data.success && data.students?.length > 0) {
-                    saveEncodingsCache(schedule.sectionId, data.students)
-                    console.log(`📚 Pre-cached ${data.students.length} encodings for section ${schedule.sectionId}`)
-                  }
-                })
-                .catch(err => console.warn(`⚠️ Failed to pre-cache encodings for section ${schedule.sectionId}:`, err))
-            }
-          })
-        }
-      } catch (err) {
-        console.warn('Failed to refresh schedules:', err)
+      const result = await fetchSchedules(accessMode, professor?.id)
+      setSchedules(result.schedules)
+
+      if (result.schedules.length === 0 && result.message) {
+        setStatusMessage(result.message)
+      } else {
+        setStatusMessage('')
       }
+
+      // Pre-fetch face encodings for all schedules so they're cached before going offline
+      result.schedules.forEach((schedule: ScheduleInfo) => {
+        if (!loadEncodingsCache(schedule.sectionId)) {
+          // Only fetch if not already cached
+          fetch(`/api/attendance/section-encodings?sectionId=${schedule.sectionId}`)
+            .then(res => res.json())
+            .then(data => {
+              if (data.success && data.students?.length > 0) {
+                saveEncodingsCache(schedule.sectionId, data.students)
+                console.log(`📚 Pre-cached ${data.students.length} encodings for section ${schedule.sectionId}`)
+              }
+            })
+            .catch(err => console.warn(`⚠️ Failed to pre-cache encodings for section ${schedule.sectionId}:`, err))
+        }
+      })
     }
 
     // Refresh immediately, then every 30 seconds to pick up newly created classrooms
     refreshSchedules()
     const interval = setInterval(refreshSchedules, 30000)
     return () => clearInterval(interval)
-  }, [phase, professor])
+  }, [phase, accessMode, professor, fetchSchedules])
 
   // Pre-load all offline cache data to browser on mount to ensure it's available when offline
   useEffect(() => {
@@ -1238,6 +1407,20 @@ export default function Home() {
   }, [])
 
   const selectSchedule = useCallback(async (schedule: ScheduleInfo) => {
+    const clickedAt = new Date()
+
+    if (hasScheduleEnded(schedule, clickedAt)) {
+      setStatusMessage(`Cannot select ${schedule.sectionCode}: class already ended.`)
+      setPhase('schedule-select')
+      return
+    }
+
+    const clickedStartTime = `${String(clickedAt.getHours()).padStart(2, '0')}:${String(clickedAt.getMinutes()).padStart(2, '0')}:${String(clickedAt.getSeconds()).padStart(2, '0')}`
+    const effectiveSchedule: ScheduleInfo = {
+      ...schedule,
+      startTime: clickedStartTime,
+    }
+
     console.log('📋 Starting selectSchedule for:', schedule.sectionCode)
     console.log('📋 Schedule details:', {
       id: schedule.id,
@@ -1248,7 +1431,9 @@ export default function Home() {
       endTime: schedule.endTime,
       totalStudents: schedule.totalStudents,
     })
-    setSelectedSchedule(schedule)
+    console.log('⏱️ Effective attendance start time set to click-time:', clickedStartTime)
+    setSelectedSchedule(effectiveSchedule)
+    setAttendanceMode('time-in')
     hasMarkedAbsentRef.current = false
     isMatchingRef.current = false
     markedStudentIdsRef.current = new Set()
@@ -1517,6 +1702,60 @@ export default function Home() {
     }
   }
 
+  const manualLockAttendance = () => {
+    if (phase !== 'attendance-active' || attendanceLocked) return
+
+    setAttendanceLocked(true)
+    setPhase('attendance-locked')
+    setLockTimeRemaining('MANUAL')
+    setFaceMatchResults([])
+    setDetectedFaces([])
+    setScanStatus('locked')
+    setStatusMessage('Class manually dismissed. Attendance locked.')
+
+    if (!hasMarkedAbsentRef.current) {
+      hasMarkedAbsentRef.current = true
+      markRemainingAbsent()
+    }
+  }
+
+  const switchToScheduleSelection = () => {
+    if (accessMode === 'professor' && !professor) {
+      resetToScan()
+      return
+    }
+
+    if (phase === 'attendance-active' && !attendanceLocked) {
+      const confirmed = window.confirm('Switch to another class? This will lock the current class and mark remaining students as absent.')
+      if (!confirmed) return
+
+      setAttendanceLocked(true)
+      setLockTimeRemaining('MANUAL')
+      if (!hasMarkedAbsentRef.current) {
+        hasMarkedAbsentRef.current = true
+        markRemainingAbsent()
+      }
+    }
+
+    try { sessionStorage.removeItem(SESSION_KEY) } catch {}
+    clearSessionEncodings()
+    setSelectedSchedule(null)
+    setEnrolledStudents([])
+    setStudentPage(0)
+    setStats({ present: 0, late: 0, absent: 0, pending: 0, total: 0 })
+    setAttendanceLocked(false)
+    setScanStatus('idle')
+    setStatusMessage('Select another class session')
+    setDetectedFaces([])
+    setFaceMatchResults([])
+    setAttendanceMode('time-in')
+    markedStudentIdsRef.current = new Set()
+    markedStudentNumbersRef.current = new Set()
+    markingStudentIdsRef.current = new Set()
+    hasMarkedAbsentRef.current = false
+    setPhase('schedule-select')
+  }
+
   const resetToScan = () => {
     try { sessionStorage.removeItem(SESSION_KEY) } catch {}
     if (selectedSchedule?.sectionId) {
@@ -1524,6 +1763,7 @@ export default function Home() {
     }
     clearSessionEncodings()
 
+    setAccessMode('professor')
     setProfessor(null)
     setSchedules([])
     setSelectedSchedule(null)
@@ -1531,6 +1771,7 @@ export default function Home() {
     setStats({ present: 0, late: 0, absent: 0, pending: 0, total: 0 })
     setAttendanceLocked(false)
     setScanStatus('idle')
+    setAttendanceMode('time-in')
     setProfessorScanStatus('idle')
     setStatusMessage('')
     setFaceDetected(false)
@@ -1539,6 +1780,7 @@ export default function Home() {
     setDetectedFaces([])
     setFaceMatchResults([])
     isMatchingRef.current = false
+    bypassModeRef.current = false
     // 4-second cooldown so the professor isn't instantly re-detected after reset
     scanCooldownUntilRef.current = Date.now() + 4000
     hasMarkedAbsentRef.current = false
@@ -1972,7 +2214,7 @@ export default function Home() {
       <div className="min-h-screen overflow-y-auto bg-gray-50 text-gray-900 flex flex-col">
         {idleOverlay}
         <TopBar>
-          <p className="text-xs text-gray-400">Professor verification required</p>
+          <p className="text-xs text-gray-400">Professor verification or representative bypass</p>
         </TopBar>
 
         {/* Login links - subtle, top right below bar */}
@@ -2057,6 +2299,19 @@ export default function Home() {
                 <span>Recognition server unavailable</span>
               </div>
             )}
+
+            <div className="mt-6">
+              <button
+                onClick={startRepresentativeBypass}
+                disabled={professorScanStatus === 'matched'}
+                className="px-5 py-2.5 rounded-xl border border-blue-200 bg-blue-50 text-blue-700 text-sm font-semibold hover:bg-blue-100 transition disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                Continue Without Professor (Representative)
+              </button>
+              <p className="mt-2 text-xs text-gray-500">
+                Use this if the professor is absent and a class representative needs to start attendance.
+              </p>
+            </div>
           </div>
         </div>
       </div>
@@ -2069,7 +2324,9 @@ export default function Home() {
       <div className="min-h-screen overflow-y-auto bg-gray-50 text-gray-900 flex flex-col">
         {idleOverlay}
         <TopBar>
-          {professor && <p className="text-xs text-emerald-600">Prof. {professor.firstName} {professor.lastName}</p>}
+          {accessMode === 'representative'
+            ? <p className="text-xs text-blue-600">Representative mode (professor bypass)</p>
+            : professor && <p className="text-xs text-emerald-600">Prof. {professor.firstName} {professor.lastName}</p>}
         </TopBar>
 
         <div className="flex-1 flex items-center justify-center p-8">
@@ -2080,12 +2337,26 @@ export default function Home() {
               {schedules.length} class{schedules.length > 1 ? 'es' : ''} available today
             </p>
 
+            {accessMode === 'representative' && (
+              <p className="text-xs text-blue-600 text-center mb-4 font-medium">
+                Professor bypass is active. Select the class session to continue.
+              </p>
+            )}
+
+            {statusMessage && (
+              <p className="text-xs text-amber-600 text-center mb-4 font-medium">{statusMessage}</p>
+            )}
+
             <div className="space-y-3">
-              {schedules.map(schedule => (
+              {schedules.map(schedule => {
+                const scheduleEnded = hasScheduleEnded(schedule)
+
+                return (
                 <button
                   key={schedule.id}
-                  onClick={() => selectSchedule(schedule)}
-                  className="w-full p-5 bg-white border border-gray-200 rounded-xl hover:border-emerald-300 hover:shadow-md transition-all group text-left"
+                  onClick={() => !scheduleEnded && selectSchedule(schedule)}
+                  disabled={scheduleEnded}
+                  className={`w-full p-5 border rounded-xl transition-all group text-left ${scheduleEnded ? 'bg-gray-100 border-gray-200 opacity-70 cursor-not-allowed' : 'bg-white border-gray-200 hover:border-emerald-300 hover:shadow-md'}`}
                 >
                   <div className="flex items-center justify-between">
                     <div>
@@ -2093,6 +2364,11 @@ export default function Home() {
                         <span className="text-base font-bold text-gray-900 group-hover:text-emerald-600 transition-colors">
                           {schedule.sectionCode}
                         </span>
+                        {scheduleEnded && (
+                          <span className="text-[10px] px-1.5 py-0.5 bg-red-100 rounded text-red-600 font-semibold">
+                            Ended
+                          </span>
+                        )}
                         <span className="text-[10px] px-1.5 py-0.5 bg-gray-100 rounded text-gray-500 font-medium">
                           {schedule.room}
                         </span>
@@ -2108,14 +2384,15 @@ export default function Home() {
                     <ChevronRight className="w-5 h-5 text-gray-300 group-hover:text-emerald-500 transition-colors" />
                   </div>
                 </button>
-              ))}
+                )
+              })}
             </div>
 
             <button
               onClick={resetToScan}
               className="mt-6 w-full py-2.5 text-gray-400 hover:text-gray-700 transition-colors text-xs flex items-center justify-center gap-1"
             >
-              <ArrowLeft className="w-3 h-3" /> Back to professor scan
+              <ArrowLeft className="w-3 h-3" /> {accessMode === 'representative' ? 'Exit representative mode' : 'Back to professor scan'}
             </button>
           </div>
         </div>
@@ -2137,13 +2414,24 @@ export default function Home() {
             <h1 className="text-xl font-bold tracking-tight text-slate-800 flex items-center gap-2">
               VeriFace <span className="text-emerald-500">Attendance</span>
             </h1>
-            {professor && selectedSchedule && (
+            {selectedSchedule && (
               <div className="flex items-center gap-2 mt-1">
                 <span className="text-xs font-bold px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-md">
                   {selectedSchedule.sectionCode}
                 </span>
                 <p className="text-sm text-slate-500 font-medium">
-                  {selectedSchedule.room} <span className="text-slate-300 mx-1">•</span> Prof. {professor.firstName} {professor.lastName}
+                  {selectedSchedule.room}
+                  {professor ? (
+                    <>
+                      <span className="text-slate-300 mx-1">•</span>
+                      Prof. {professor.firstName} {professor.lastName}
+                    </>
+                  ) : accessMode === 'representative' ? (
+                    <>
+                      <span className="text-slate-300 mx-1">•</span>
+                      Representative Mode
+                    </>
+                  ) : null}
                 </p>
               </div>
             )}
@@ -2163,6 +2451,50 @@ export default function Home() {
             <div className="flex items-center gap-2 px-3 py-1.5 bg-red-50 border border-red-200 rounded-xl shadow-sm text-red-600">
               <Lock className="w-4 h-4" />
               <span className="text-sm font-bold tracking-widest">LOCKED</span>
+            </div>
+          )}
+
+          {phase === 'attendance-active' && (
+            <div className="flex items-center rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
+              <button
+                onClick={() => {
+                  setAttendanceMode('time-in')
+                  setScanStatus('idle')
+                  setStatusMessage('Time In mode enabled')
+                }}
+                className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${attendanceMode === 'time-in' ? 'bg-emerald-100 text-emerald-700' : 'text-slate-500 hover:bg-slate-100'}`}
+              >
+                Time In
+              </button>
+              <button
+                onClick={() => {
+                  setAttendanceMode('time-out')
+                  setScanStatus('idle')
+                  setStatusMessage('Time Out mode enabled - scan to record check-out')
+                }}
+                className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${attendanceMode === 'time-out' ? 'bg-blue-100 text-blue-700' : 'text-slate-500 hover:bg-slate-100'}`}
+              >
+                Time Out
+              </button>
+            </div>
+          )}
+
+          {(phase === 'attendance-active' || phase === 'attendance-locked') && (
+            <div className="flex items-center gap-2">
+              {phase === 'attendance-active' && (
+                <button
+                  onClick={manualLockAttendance}
+                  className="px-3 py-1.5 text-xs font-bold rounded-xl border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 transition-all"
+                >
+                  Manual Lock
+                </button>
+              )}
+              <button
+                onClick={switchToScheduleSelection}
+                className="px-3 py-1.5 text-xs font-bold rounded-xl border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 transition-all"
+              >
+                Select Another Class
+              </button>
             </div>
           )}
 
@@ -2246,6 +2578,13 @@ export default function Home() {
             </div>
           )}
 
+          {phase === 'attendance-active' && (
+            <div className={`mb-4 px-4 py-2.5 rounded-xl border text-sm font-semibold flex items-center gap-2 ${attendanceMode === 'time-out' ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-emerald-50 border-emerald-200 text-emerald-700'}`}>
+              <Clock className="w-4 h-4" />
+              {attendanceMode === 'time-out' ? 'TIME OUT MODE ACTIVE: scan student to record check-out' : 'TIME IN MODE ACTIVE: scan student to record attendance'}
+            </div>
+          )}
+
           {/* Camera */}
           <div className="relative mt-2">
             {/* Glowing effect behind camera */}
@@ -2284,9 +2623,9 @@ export default function Home() {
 
             {/* Scanning indicator */}
             {scanStatus === 'scanning' && (
-              <div className="absolute top-3 right-3 bg-blue-500/80 text-white text-xs font-medium px-2.5 py-1 rounded-lg backdrop-blur flex items-center gap-1.5">
+              <div className={`absolute top-3 right-3 text-white text-xs font-medium px-2.5 py-1 rounded-lg backdrop-blur flex items-center gap-1.5 ${attendanceMode === 'time-out' ? 'bg-blue-600/90' : 'bg-blue-500/80'}`}>
                 <Loader2 className="w-3 h-3 animate-spin" />
-                Scanning...
+                {attendanceMode === 'time-out' ? 'Recording Time Out...' : 'Scanning...'}
               </div>
             )}
 
@@ -2329,7 +2668,7 @@ export default function Home() {
             ) : phase === 'attendance-active' ? (
               <div className="flex items-center gap-3 text-slate-500 font-medium">
                 <Scan className="w-5 h-5 text-emerald-500 animate-pulse" />
-                <p>Ensure your face is clearly visible to the scanner</p>
+                <p>{attendanceMode === 'time-out' ? 'Time Out mode: scan face to record check-out' : 'Time In mode: ensure your face is clearly visible to the scanner'}</p>
               </div>
             ) : null}
           </div>
@@ -2352,12 +2691,20 @@ export default function Home() {
           )}
 
           {phase === 'attendance-locked' && (
-            <button
-              onClick={resetToScan}
-              className="mt-6 px-6 py-3 bg-slate-900 hover:bg-slate-800 text-white text-sm rounded-xl transition-all shadow-lg hover:shadow-xl font-bold flex items-center gap-2"
-            >
-              Start New Session
-            </button>
+            <div className="mt-6 flex items-center gap-3">
+              <button
+                onClick={switchToScheduleSelection}
+                className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-xl transition-all shadow-lg hover:shadow-xl font-bold"
+              >
+                Select Another Class
+              </button>
+              <button
+                onClick={resetToScan}
+                className="px-6 py-3 bg-slate-900 hover:bg-slate-800 text-white text-sm rounded-xl transition-all shadow-lg hover:shadow-xl font-bold flex items-center gap-2"
+              >
+                Start New Session
+              </button>
+            </div>
           )}
         </div>
 
@@ -2499,7 +2846,13 @@ export default function Home() {
                             {student.checkedInAt && (
                               <p className="text-[10px] font-semibold text-slate-400 mt-1.5 flex items-center gap-1">
                                 <Clock className="w-3 h-3" />
-                                {new Date(student.checkedInAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                                IN {new Date(student.checkedInAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                              </p>
+                            )}
+                            {student.checkedOutAt && (
+                              <p className="text-[10px] font-semibold text-blue-500 mt-1 flex items-center gap-1">
+                                <Clock className="w-3 h-3" />
+                                OUT {new Date(student.checkedOutAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
                               </p>
                             )}
                           </div>

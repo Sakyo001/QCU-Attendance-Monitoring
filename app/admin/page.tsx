@@ -3,7 +3,7 @@
 import { useAuth } from '@/contexts/AuthContext'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState, useRef } from 'react'
-import { Users, GraduationCap, BookOpen, BarChart3, LogOut, TrendingUp, Clock, CheckCircle, XCircle, AlertCircle, Calendar, Film } from 'lucide-react'
+import { Users, GraduationCap, BookOpen, BarChart3, LogOut, TrendingUp, Clock, CheckCircle, XCircle, AlertCircle, Calendar, Film, ShieldAlert } from 'lucide-react'
 
 interface DashboardStats {
   totalStudents: number
@@ -134,6 +134,75 @@ export default function AdminDashboard() {
     },
   ]
 
+  const toPercentage = (value: number) => `${value.toFixed(1)}%`
+
+  const registrationRate = stats.totalStudents > 0
+    ? (stats.registeredStudents / stats.totalStudents) * 100
+    : 0
+
+  const todayLoggingIntensity = stats.totalStudents > 0
+    ? (stats.today.total / stats.totalStudents) * 100
+    : 0
+
+  const punctualityRate = stats.today.present + stats.today.late > 0
+    ? (stats.today.present / (stats.today.present + stats.today.late)) * 100
+    : 0
+
+  const concernRate = stats.today.total > 0
+    ? ((stats.today.absent + stats.today.late) / stats.today.total) * 100
+    : 0
+
+  const trendDelta = stats.today.attendanceRate - stats.overallAttendanceRate
+
+  const attendanceHealth = stats.overallAttendanceRate >= 85
+    ? { label: 'Strong', styles: 'bg-green-100 text-green-800 border-green-200' }
+    : stats.overallAttendanceRate >= 70
+    ? { label: 'Stable', styles: 'bg-yellow-100 text-yellow-800 border-yellow-200' }
+    : { label: 'Needs Attention', styles: 'bg-red-100 text-red-800 border-red-200' }
+
+  const descriptiveInsights = [
+    {
+      title: 'Registration Coverage',
+      value: toPercentage(registrationRate),
+      description: `${stats.registeredStudents} of ${stats.totalStudents} students have active face registration.`,
+      icon: Users,
+      color: 'bg-blue-50 text-blue-700'
+    },
+    {
+      title: "Today's Logging Intensity",
+      value: toPercentage(todayLoggingIntensity),
+      description: `${stats.today.total} attendance logs were captured today relative to enrolled students.`,
+      icon: Clock,
+      color: 'bg-indigo-50 text-indigo-700'
+    },
+    {
+      title: 'Punctuality Rate',
+      value: toPercentage(punctualityRate),
+      description: `${stats.today.present} present and ${stats.today.late} late among students who checked in today.`,
+      icon: CheckCircle,
+      color: 'bg-green-50 text-green-700'
+    },
+    {
+      title: 'Risk Signals',
+      value: toPercentage(concernRate),
+      description: `${stats.today.absent + stats.today.late} records are marked absent or late today.`,
+      icon: XCircle,
+      color: 'bg-rose-50 text-rose-700'
+    }
+  ]
+
+  const todayStatusBreakdown = [
+    { label: 'Present', count: stats.today.present, color: 'bg-green-500' },
+    { label: 'Late', count: stats.today.late, color: 'bg-yellow-500' },
+    { label: 'Absent', count: stats.today.absent, color: 'bg-red-500' }
+  ]
+
+  const descriptiveNarrative = loadingStats
+    ? 'Refreshing descriptive analytics from the latest attendance records...'
+    : stats.today.total === 0
+    ? 'No attendance records are available yet today. Insights will appear as soon as check-ins are recorded.'
+    : `Today's attendance is ${toPercentage(stats.today.attendanceRate)}, ${Math.abs(trendDelta).toFixed(1)} percentage points ${trendDelta >= 0 ? 'above' : 'below'} the long-term average of ${toPercentage(stats.overallAttendanceRate)}.`
+
   const formatTime = (timestamp: string) => {
     const date = new Date(timestamp)
     return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
@@ -167,6 +236,9 @@ export default function AdminDashboard() {
               <h1 className="text-2xl font-bold text-gray-900">Admin Dashboard</h1>
               <p className="text-sm text-gray-600 mt-1">
                 Welcome back, {user.firstName} {user.lastName}
+              </p>
+              <p className="text-xs text-gray-500 mt-1">
+                {loadingStats ? 'Refreshing attendance analytics...' : 'Attendance analytics are up to date.'}
               </p>
             </div>
             <button
@@ -206,7 +278,7 @@ export default function AdminDashboard() {
           <div className="bg-white rounded-lg shadow p-6">
             <div className="flex items-center gap-3 mb-4">
               <Clock className="w-5 h-5 text-blue-600" />
-              <h3 className="text-lg font-semibold text-gray-900">Today's Summary</h3>
+              <h3 className="text-lg font-semibold text-gray-900">Today&apos;s Summary</h3>
             </div>
             <div className="space-y-3">
               <div className="flex items-center justify-between">
@@ -244,6 +316,73 @@ export default function AdminDashboard() {
                 <div className="text-2xl font-bold text-yellow-600">{stats.today.late}</div>
                 <p className="text-xs text-gray-500">Late</p>
               </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Descriptive Analytics */}
+        <div className="bg-white rounded-lg shadow mb-8">
+          <div className="px-6 py-4 border-b border-gray-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900">Descriptive Analytics</h2>
+              <p className="text-sm text-gray-600 mt-1">
+                Interprets attendance behavior using the latest dashboard records.
+              </p>
+            </div>
+            <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold border ${attendanceHealth.styles}`}>
+              Overall Attendance Health: {attendanceHealth.label}
+            </span>
+          </div>
+
+          <div className="p-6 grid grid-cols-1 xl:grid-cols-3 gap-6">
+            <div className="xl:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4">
+              {descriptiveInsights.map((insight) => {
+                const InsightIcon = insight.icon
+                return (
+                  <div key={insight.title} className="border border-gray-200 rounded-lg p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-medium text-gray-600">{insight.title}</p>
+                        <p className="text-2xl font-bold text-gray-900 mt-1">{insight.value}</p>
+                      </div>
+                      <div className={`${insight.color} p-2 rounded-md`}>
+                        <InsightIcon className="w-4 h-4" />
+                      </div>
+                    </div>
+                    <p className="text-sm text-gray-600 mt-3">{insight.description}</p>
+                  </div>
+                )
+              })}
+            </div>
+
+            <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+              <h3 className="text-sm font-semibold text-gray-900 mb-3">Today&apos;s Status Distribution</h3>
+              <div className="space-y-3">
+                {todayStatusBreakdown.map((statusItem) => {
+                  const percentage = stats.today.total > 0
+                    ? (statusItem.count / stats.today.total) * 100
+                    : 0
+
+                  return (
+                    <div key={statusItem.label}>
+                      <div className="flex items-center justify-between text-sm mb-1">
+                        <span className="text-gray-700">{statusItem.label}</span>
+                        <span className="font-semibold text-gray-900">
+                          {statusItem.count} ({percentage.toFixed(1)}%)
+                        </span>
+                      </div>
+                      <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                        <div
+                          className={`${statusItem.color} h-2 rounded-full`}
+                          style={{ width: `${percentage}%` }}
+                        />
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+
+              <p className="mt-4 text-sm text-gray-600 leading-relaxed">{descriptiveNarrative}</p>
             </div>
           </div>
         </div>
@@ -318,6 +457,17 @@ export default function AdminDashboard() {
                 <div className="text-left">
                   <div className="font-medium text-gray-900">Idle Media</div>
                   <div className="text-sm text-gray-600">Manage kiosk media</div>
+                </div>
+              </button>
+
+              <button 
+                onClick={() => router.push('/admin/excessive-absences')}
+                className="flex items-center gap-3 p-4 border border-gray-200 rounded-lg hover:border-violet-500 hover:bg-violet-50 transition-all"
+              >
+                <ShieldAlert className="w-5 h-5 text-violet-600" />
+                <div className="text-left">
+                  <div className="font-medium text-gray-900">Absence Monitor</div>
+                  <div className="text-sm text-gray-600">Warn students with 3+ absences</div>
                 </div>
               </button>
             </div>

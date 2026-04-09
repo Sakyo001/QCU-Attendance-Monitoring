@@ -73,6 +73,7 @@ export async function POST(request: NextRequest) {
       scheduleStartTime,
       scheduleDayOfWeek,
       status: providedStatus,
+      action = 'in',
     } = body
 
     console.log('📝 Mark attendance request:', {
@@ -84,6 +85,7 @@ export async function POST(request: NextRequest) {
       scheduleStartTime,
       scheduleDayOfWeek,
       providedStatus,
+      action,
     })
 
     if (!sectionId || !studentId) {
@@ -148,10 +150,10 @@ export async function POST(request: NextRequest) {
       console.log('📱 Using pre-computed status from offline queue:', { providedStatus })
     } else {
       // Compute status from schedule (online mode or fresh request)
-      const effectiveStartTime = classSession?.start_time || scheduleStartTime || null
+      const effectiveStartTime = scheduleStartTime || classSession?.start_time || null
       const effectiveDayOfWeek = classSession?.day_of_week || scheduleDayOfWeek || null
       console.log('⏱️ Attendance status source:', {
-        source: classSession ? 'class_sessions' : 'request-fallback',
+        source: scheduleStartTime ? 'request-click-time' : (classSession ? 'class_sessions' : 'request-fallback'),
         effectiveStartTime,
         effectiveDayOfWeek,
       })
@@ -163,8 +165,8 @@ export async function POST(request: NextRequest) {
       locked = computed.locked
     }
 
-    // If locked, reject the attendance marking
-    if (locked) {
+    // If locked, reject only time-in actions (time-out is still allowed)
+    if (locked && action !== 'out') {
       console.log('🔒 Attendance locked — 30+ minutes past class start')
       return NextResponse.json({
         success: false,
@@ -324,6 +326,70 @@ export async function POST(request: NextRequest) {
         existing = null
       }
 
+      if (action === 'out') {
+        if (!existing) {
+          return NextResponse.json({
+            success: false,
+            noTimeIn: true,
+            message: 'No time-in record found for this student'
+          })
+        }
+
+        const checkedOutAt = new Date().toISOString()
+        const { data: updated, error: updateError } = await supabase
+          .from('attendance_records')
+          .update({ checked_out_at: checkedOutAt })
+          .eq('id', existing.id)
+          .is('checked_out_at', null)
+          .select('id, status, checked_in_at, checked_out_at')
+          .maybeSingle()
+
+        if (updateError) {
+          console.error('❌ Failed to update checked_out_at:', updateError)
+
+          const migrationMissing = updateError.code === '42703' || String(updateError.message || '').toLowerCase().includes('checked_out_at')
+          if (migrationMissing) {
+            return NextResponse.json({
+              success: false,
+              needsMigration: true,
+              error: 'Time-out feature requires DB migration 007_add_checked_out_at.sql'
+            }, { status: 400 })
+          }
+
+          return NextResponse.json({
+            success: false,
+            error: 'Failed to time out student',
+            details: updateError.message,
+          }, { status: 400 })
+        }
+
+        if (!updated) {
+          return NextResponse.json({
+            success: true,
+            alreadyTimedOut: true,
+            message: 'Student already timed out',
+            record: {
+              status: existing.status || attendanceStatus,
+              checked_in_at: existing.checked_in_at || null,
+              checked_out_at: null,
+            },
+            usingOfflineCache: false
+          })
+        }
+
+        return NextResponse.json({
+          success: true,
+          timedOut: true,
+          message: 'Time-out recorded successfully',
+          record: {
+            status: updated?.status || existing.status || attendanceStatus,
+            checked_in_at: updated?.checked_in_at || existing.checked_in_at || null,
+            checked_out_at: updated?.checked_out_at || checkedOutAt,
+          },
+          usingOfflineCache: false
+        })
+      }
+
       if (existing) {
         console.log('⏸️ Student already marked attendance at:', existing.checked_in_at)
         return NextResponse.json({
@@ -333,6 +399,7 @@ export async function POST(request: NextRequest) {
           record: {
             status: existing.status || attendanceStatus,
             checked_in_at: existing.checked_in_at || null,
+            checked_out_at: null,
           },
           usingOfflineCache: false
         })
@@ -384,6 +451,13 @@ export async function POST(request: NextRequest) {
         }, { status: 400 })
       }
     } else {
+      if (action === 'out') {
+        return NextResponse.json({
+          success: false,
+          error: 'Time-out is unavailable while offline'
+        }, { status: 400 })
+      }
+
       // Offline mode: just accept the mark
       console.log(`📱 [OFFLINE] Attendance marked as '${attendanceStatus}' for:`, {
         studentName: `${registration.first_name} ${registration.last_name}`,

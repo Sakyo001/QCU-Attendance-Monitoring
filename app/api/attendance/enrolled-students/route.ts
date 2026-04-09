@@ -44,13 +44,34 @@ export async function GET(request: NextRequest) {
 
       console.log('📚 Enrolled-students using session:', { sessionKey, sessionId, scheduleId })
 
-      const { data: records, error: recordsError } = await supabase
+      let hasCheckedOutAtColumn = true
+      let records: any[] | null = null
+
+      const { data: recordsWithOut, error: recordsError } = await supabase
         .from('attendance_records')
-        .select('student_number, status, checked_in_at, face_match_confidence')
+        .select('student_number, status, checked_in_at, checked_out_at, face_match_confidence')
         .eq('attendance_session_id', sessionId)
 
       if (recordsError) {
-        console.error('Error fetching records:', recordsError)
+        const missingCheckedOutAt = recordsError.code === '42703' || String(recordsError.message || '').toLowerCase().includes('checked_out_at')
+
+        if (missingCheckedOutAt) {
+          hasCheckedOutAtColumn = false
+          const { data: recordsFallback, error: fallbackError } = await supabase
+            .from('attendance_records')
+            .select('student_number, status, checked_in_at, face_match_confidence')
+            .eq('attendance_session_id', sessionId)
+
+          if (fallbackError) {
+            console.error('Error fetching records (fallback):', fallbackError)
+          } else {
+            records = recordsFallback as any[]
+          }
+        } else {
+          console.error('Error fetching records:', recordsError)
+        }
+      } else {
+        records = recordsWithOut as any[]
       }
 
       // Map records by student number
@@ -78,6 +99,7 @@ export async function GET(request: NextRequest) {
           lastName: s.last_name,
           status: record?.status || 'pending',
           checkedInAt: record?.checked_in_at || null,
+          checkedOutAt: hasCheckedOutAtColumn ? (record?.checked_out_at || null) : null,
           confidence: record?.face_match_confidence || null,
           embedding // Include embedding for FaceNet matching!
         }

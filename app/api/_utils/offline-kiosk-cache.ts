@@ -161,6 +161,20 @@ export async function getOfflineSchedulesForProfessor(
     .sort((a, b) => a.startTime.localeCompare(b.startTime))
 }
 
+export async function getAllOfflineSchedules(): Promise<OfflineSchedule[]> {
+  const cache = await readCache()
+  return cache.schedules
+    .slice()
+    .sort((a, b) => a.dayOfWeek.localeCompare(b.dayOfWeek) || a.startTime.localeCompare(b.startTime))
+}
+
+export async function getOfflineSchedulesByDay(dayOfWeek: string): Promise<OfflineSchedule[]> {
+  const cache = await readCache()
+  return cache.schedules
+    .filter((s) => s.dayOfWeek === dayOfWeek)
+    .sort((a, b) => a.startTime.localeCompare(b.startTime))
+}
+
 export async function upsertOfflineStudents(students: Array<Omit<OfflineStudent, 'updatedAt'>>): Promise<void> {
   if (students.length === 0) return
   const cache = await readCache()

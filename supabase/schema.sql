@@ -17,6 +17,7 @@ CREATE TABLE public.attendance_records (
   student_registration_id uuid NOT NULL,
   student_number text NOT NULL,
   checked_in_at timestamp with time zone NOT NULL DEFAULT now(),
+  checked_out_at timestamp with time zone,
   face_match_confidence numeric,
   status text NOT NULL DEFAULT 'present'::text,
   notes text,

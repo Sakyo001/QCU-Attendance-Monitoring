@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Users, LayoutDashboard, FileText, Settings, LogOut, BookOpen, GraduationCap, Images } from "lucide-react";
+import { Users, LayoutDashboard, FileText, Settings, LogOut, BookOpen, GraduationCap, Images, ShieldAlert } from "lucide-react";
 
 export function AdminSidebar() {
   return (
@@ -28,6 +28,10 @@ export function AdminSidebar() {
         <Link href="/admin/reports" className="flex items-center gap-3 px-4 py-3 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
           <FileText className="w-5 h-5" />
           <span>Reports</span>
+        </Link>
+        <Link href="/admin/excessive-absences" className="flex items-center gap-3 px-4 py-3 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
+          <ShieldAlert className="w-5 h-5" />
+          <span>Absence Monitor</span>
         </Link>
         <Link href="/admin/idle-media" className="flex items-center gap-3 px-4 py-3 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
           <Images className="w-5 h-5" />
